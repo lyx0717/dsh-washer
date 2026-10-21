@@ -280,6 +280,47 @@ test('拿落盘的 token 真的能访问 state（证明这条路是通的）', a
   ctx.dispose();
 });
 
+test('tool/result 的真实结构：callId 藏在 message 里，也能对上号', () => {
+  // 真实事件长这样（从会话日志里拷的）：
+  // { type:'tool/result', data:{ turn, step, message:{ role:'tool',
+  //   source:{ kind:'tool', callId }, toolCallId, content, isError } } }
+  // 早期实现只读 data.callId，取不到就走"弹掉最早那个"的兜底，
+  // 结果工具名全变成 'tool'、耗时也算错。
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('tool/call', { turn: 1, name: 'bash', callId: 'call_ABC' }), NOW + 10);
+  foldEvent(s, ev('tool/result', {
+    turn: 1,
+    step: 1,
+    message: {
+      role: 'tool',
+      source: { kind: 'tool', callId: 'call_ABC' },
+      toolCallId: 'call_ABC',
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    },
+  }), NOW + 60);
+
+  const last = s.nodes[s.nodes.length - 1];
+  assert.equal(last.kind, 'tool-result');
+  assert.equal(last.callId, 'call_ABC', '必须从 message 里取到 callId');
+  assert.equal(last.name, 'bash', '名字要从调用侧回填，不能是 tool');
+  assert.equal(last.callTime, NOW + 10);
+  assert.equal(last.ms === undefined, true, 'ms 不是 core.js 认的字段');
+});
+
+test('tool/result 的 message.isError 要能识别成错误', () => {
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('tool/call', { turn: 1, name: 'bash', callId: 'c1' }), NOW + 1);
+  foldEvent(s, ev('tool/result', {
+    turn: 1,
+    message: { toolCallId: 'c1', isError: true },
+  }), NOW + 2);
+  const last = s.nodes[s.nodes.length - 1];
+  assert.equal(last.isError, true, '错误状态在 message 里，别漏了');
+});
+
 test('apply：卸载后服务关闭，端口释放', async () => {
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });

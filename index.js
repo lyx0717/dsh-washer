@@ -114,7 +114,16 @@ export function foldEvent(state, event, now) {
       return state;
     }
     case 'tool/result': {
-      const callId = data.callId === undefined ? '' : String(data.callId);
+      // 真实事件里 callId 藏在 message 里，不在 data 顶层：
+      //   data = { turn, step, message: { role, source:{ kind, callId }, toolCallId, content, isError } }
+      // 取错的话 callId 匹配不上，会走"弹掉最早那个"的兜底，
+      // 导致工具名对不上号、耗时也算错。
+      const rawCallId = data.callId !== undefined
+        ? data.callId
+        : (data.message && (data.message.toolCallId !== undefined
+            ? data.message.toolCallId
+            : data.message.source && data.message.source.callId));
+      const callId = rawCallId === undefined ? '' : String(rawCallId);
       // 按 callId 消账；callId 缺失时退化成弹掉最早那个，
       // 至少不会永远卡在 rinsing（状态撒谎比不显示更糟）。
       const index = state.runningCalls.findIndex((c) => c.callId === callId);
@@ -136,7 +145,8 @@ export function foldEvent(state, event, now) {
         // core.js 的 recentTools 认这两个字段算耗时，不是 ms
         ...started !== undefined ? { callTime: started.at } : {},
         time: now,
-        isError: data.isError === true || data.error !== undefined,
+        isError: data.isError === true || data.error !== undefined
+          || (data.message && data.message.isError === true),
       });
       return state;
     }
