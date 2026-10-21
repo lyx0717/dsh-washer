@@ -135,7 +135,8 @@
   <div id="setup" class="setup" hidden>
     <p>没拿到连接参数。两种用法：</p>
     <p>① 直接带参数打开：<code>?port=端口&amp;token=令牌</code></p>
-    <p>② 在 DSH 里把 <code>desktopOverlay</code> 打开，日志里会打印地址。</p>
+    <p>② 端点信息在 <code>~/.dsh/dsh-washer-overlay.json</code>（0600，只有你自己能读）：</p>
+    <p><code>cat ~/.dsh/dsh-washer-overlay.json</code> 拿到 port 和 token，拼到上面的地址里。</p>
   </div>
 
   <main id="main" hidden>

@@ -237,6 +237,49 @@ test('apply：事件能把状态推到 washing（B3 不撒谎）', () => {
   ctx.dispose();
 });
 
+test('端点信息落盘：文件权限 0600，卸载后自动删除', async () => {
+  const { readFileSync, statSync, existsSync } = await import('node:fs');
+  const { homedir } = await import('node:os');
+  const { join } = await import('node:path');
+  const file = join(homedir(), '.dsh', 'dsh-washer-overlay.json');
+
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+  assert.ok(port > 0);
+
+  assert.equal(existsSync(file), true, '服务起来后要落地端点文件，否则用户拿不到 token');
+  const mode = statSync(file).mode & 0o777;
+  assert.equal(mode, 0o600, `token 文件必须是 0600，实际 ${mode.toString(8)}`);
+
+  const info = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(info.port, port);
+  assert.equal(typeof info.token, 'string');
+  assert.ok(info.token.length >= 20, 'token 不能太短');
+
+  ctx.dispose();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(existsSync(file), false, '卸载后必须删掉，别留一份过期 token');
+});
+
+test('拿落盘的 token 真的能访问 state（证明这条路是通的）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { homedir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+
+  const { token } = JSON.parse(readFileSync(join(homedir(), '.dsh', 'dsh-washer-overlay.json'), 'utf8'));
+  const ok = await get(port, '/dsh-washer/state', token);
+  assert.equal(ok.status, 200, '拿文件里的 token 必须能过鉴权');
+  const snap = JSON.parse(ok.body);
+  assert.equal(snap.version, 1);
+
+  ctx.dispose();
+});
+
 test('apply：卸载后服务关闭，端口释放', async () => {
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });

@@ -16,7 +16,8 @@
  * `?token=` 或 `Authorization: Bearer`，防止本机其它程序偷看会话状态。
  */
 import { createServer } from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   deriveState,
@@ -217,6 +218,42 @@ function safeEqual(a, b) {
   return timingSafeEqual(left, right);
 }
 
+/**
+ * 端点信息落地位置。
+ *
+ * 为什么需要这个文件：token 是启动时随机的，宿主日志走 Electron 管道不落盘，
+ * 用户拿不到 token 就打不开调试页/桌面窗——安全做到了，可用性没了。
+ * 折中：写到用户 home 下的 0600 文件，只有本机同一用户能读，进程退出即删。
+ *
+ * @returns {string}
+ */
+function endpointFile() {
+  const home = process.env.HOME || process.env.USERPROFILE || '.';
+  return join(home, '.dsh', 'dsh-washer-overlay.json');
+}
+
+/** @type {string | null} */
+let endpointFilePath = null;
+
+function persistEndpoint(port, token) {
+  try {
+    const file = endpointFile();
+    mkdirSync(dirname(file), { recursive: true });
+    // 先写再改权限，避免文件在被 chmod 前的极短窗口里可被他人读
+    writeFileSync(file, JSON.stringify({ port, token, pid: process.pid }), { mode: 0o600 });
+    chmodSync(file, 0o600);
+    endpointFilePath = file;
+  } catch {
+    // 落盘失败不影响服务本身，只是用户得自己从别处拿 token
+  }
+}
+
+function clearEndpointFile() {
+  if (endpointFilePath === null) return;
+  try { rmSync(endpointFilePath, { force: true }); } catch { /* 尽力而为 */ }
+  endpointFilePath = null;
+}
+
 export function apply(ctx, config) {
   const cfg = config && typeof config === 'object' ? config : {};
   // 桌面悬浮窗默认关着——装了不看的人不该莫名多一个后台端口
@@ -401,6 +438,9 @@ export function apply(ctx, config) {
   if (enabled) {
     server.listen(cfg.desktopOverlayPort ?? DEFAULT_PORT, '127.0.0.1', () => {
       port = server.address().port;
+      // token 随机、只在内存里，宿主日志又不落盘 —— 光打印的话用户根本拿不到，
+      // 调试页等于打不开。落地一个 0600 的运行时文件，进程退出时删掉。
+      persistEndpoint(port, token);
       // 把带 token 的调试地址打出来，否则用户拿不到 token，也就打不开调试页。
       // token 只进本机日志，不进任何网络响应。
       ctx.logger?.info?.(`[dsh-washer] overlay: http://127.0.0.1:${port}/dsh-washer/state?token=${token}`);
@@ -451,6 +491,7 @@ export function apply(ctx, config) {
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态
   ctx.effect(() => () => {
     if (pushTimer !== null) clearTimeout(pushTimer);
+    clearEndpointFile();
     for (const socket of clients) {
       try { socket.destroy(); } catch { /* noop */ }
     }
