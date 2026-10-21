@@ -22,7 +22,8 @@
     "locale/*.json",
     "README.md",
     "docs/*.png",
-    "debug/overlay.html"
+    "debug/overlay.html",
+    "docs/overlay-float.png"
   ],
   "dsh": {
     "bundle": {
