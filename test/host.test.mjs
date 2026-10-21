@@ -12,6 +12,14 @@ import { request as httpRequest } from 'node:http';
 
 import { foldEvent, encodeWsText, apply } from '../index.js';
 
+/** 测试专用端点路径：绝不能碰 ~/.dsh 下的真实文件（宿主服务在用它） */
+const TEST_ENDPOINT = process.env.DSH_WASHER_ENDPOINT_FILE
+  || '/tmp/dsh-washer-test-endpoint.json';
+
+function useTestEndpoint() {
+  process.env.DSH_WASHER_ENDPOINT_FILE = TEST_ENDPOINT;
+}
+
 function freshState() {
   return {
     turn: 0,
@@ -241,7 +249,8 @@ test('端点信息落盘：文件权限 0600，卸载后自动删除', async () 
   const { readFileSync, statSync, existsSync } = await import('node:fs');
   const { homedir } = await import('node:os');
   const { join } = await import('node:path');
-  const file = join(homedir(), '.dsh', 'dsh-washer-overlay.json');
+  useTestEndpoint();
+  const file = TEST_ENDPOINT;
 
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
@@ -277,7 +286,8 @@ test('拿落盘的 token 真的能访问 state（证明这条路是通的）', a
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
   const port = await waitForPort(api);
 
-  const { token } = JSON.parse(readFileSync(join(homedir(), '.dsh', 'dsh-washer-overlay.json'), 'utf8'));
+  useTestEndpoint();
+  const { token } = JSON.parse(readFileSync(TEST_ENDPOINT, 'utf8'));
   const ok = await get(port, '/dsh-washer/state', token);
   assert.equal(ok.status, 200, '拿文件里的 token 必须能过鉴权');
   const snap = JSON.parse(ok.body);
@@ -334,7 +344,8 @@ test('两个实例交替卸载：后启动的那个的文件不能被先启动�
   const { existsSync, readFileSync } = await import('node:fs');
   const { homedir } = await import('node:os');
   const { join } = await import('node:path');
-  const file = join(homedir(), '.dsh', 'dsh-washer-overlay.json');
+  useTestEndpoint();
+  const file = TEST_ENDPOINT;
 
   const ctxA = makeCtx();
   const a = apply(ctxA, { desktopOverlay: true, desktopOverlayPort: 0 });

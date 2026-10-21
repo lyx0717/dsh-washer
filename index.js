@@ -238,6 +238,9 @@ function safeEqual(a, b) {
  * @returns {string}
  */
 function endpointFile() {
+  // 支持覆盖，测试用——否则跑单测会创建/删除真实的端点文件，
+  // 把正在运行的宿主服务的端点信息一起踩没了。
+  if (process.env.DSH_WASHER_ENDPOINT_FILE) return process.env.DSH_WASHER_ENDPOINT_FILE;
   const home = process.env.HOME || process.env.USERPROFILE || '.';
   return join(home, '.dsh', 'dsh-washer-overlay.json');
 }
