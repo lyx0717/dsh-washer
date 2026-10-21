@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('washerHost', {
   state: () => ipcRenderer.invoke('washer:state'),
   /** 切换穿透 */
   toggleClickThrough: () => ipcRenderer.send('washer:toggle-click-through'),
+  /** 上报角落按钮矩形，穿透模式下只有这块接收鼠标 */
+  setCornerRect: (rect) => ipcRenderer.send('washer:corner-rect', rect),
+  /** 上报鼠标进入窗口（配合 forward 判断光标是否落在角落） */
+  pointer: () => ipcRenderer.send('washer:pointer'),
   /** 右键菜单 */
   showMenu: () => ipcRenderer.send('washer:show-menu'),
   /** 退出 */

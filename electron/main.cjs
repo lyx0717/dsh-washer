@@ -21,13 +21,15 @@ const ENDPOINT_FILE = process.env.DSH_WASHER_ENDPOINT_FILE
  * 注意 macOS 的「额度」：窗口比卡片大太多时透明部分虽然看得见，
  * 但拖拽区（-webkit-app-region）会连带变大——所以宁可按内容收紧。
  */
-const WIN_WIDTH = 268;
-const WIN_HEIGHT = 96;
+const WIN_WIDTH = 132;
+const WIN_HEIGHT = 196;
 /** 位置记忆；写在这里省一个持久化模块 */
 const POS_FILE = join(homedir(), '.dsh', 'dsh-washer-window.json');
 
 let win = null;
 /** 鼠标穿透状态：true 时点击直接穿到底下的应用 */
+/** 角落按钮的矩形（窗口内 CSS 像素）；穿透模式下只有这块接收鼠标 */
+let cornerRect = null;
 let clickThrough = false;
 
 function readEndpoint() {
@@ -81,13 +83,35 @@ const ESCAPE_ACCELERATOR = 'Alt+CommandOrControl+W';
 function setClickThrough(on) {
   clickThrough = on === true;
   if (win === null || win.isDestroyed()) return;
-  // forwarding 让窗口仍然收到鼠标移动事件，页面的 hover 才能工作，
-  // 但点击会穿过窗口落到下面的应用上。
-  win.setIgnoreMouseEvents(clickThrough, { forward: true });
-  // 穿透时窗口不该再抢焦点，否则点到的地方会被它截胡
-  win.setFocusable(!clickThrough);
   win.webContents.send('washer:click-through', clickThrough);
   updateEscapeShortcut();
+}
+
+/**
+ * 真正的穿透控制。
+ *
+ * 关键点：不能简单地 setIgnoreMouseEvents(true, {forward:true}) 一关了事——
+ * 那样窗口收不到任何鼠标事件，页面上再放什么按钮都点不到，等于单向门。
+ * 正确做法是每次鼠标移动后告诉系统"这块要穿透、那块不要"：
+ * 只有光标落在角落按钮上时才恢复接收事件。
+ *
+ * 页面通过 IPC 把角落的矩形（相对窗口的 CSS 像素）传上来，
+ * 主进程按 1:1 记着（窗口不可缩放，所以不用换算缩放比）。
+ */
+function applyIgnoreRegions() {
+  if (win === null || win.isDestroyed()) return;
+  if (!clickThrough) {
+    win.setIgnoreMouseEvents(false);
+    return;
+  }
+  const c = cornerRect;
+  const { x, y } = screen.getCursorScreenPoint();
+  const [wx, wy] = win.getPosition();
+  const px = x - wx;
+  const py = y - wy;
+  const overCorner = c !== null && px >= c.x && px <= c.x + c.w && py >= c.y && py <= c.y + c.h;
+  // forward:true 让页面仍能收到 mousemove，靠它得知光标有没有滑到角落
+  win.setIgnoreMouseEvents(!overCorner, { forward: true });
 }
 
 /** 只在穿透状态下注册全局快捷键，其余时候不占用系统键位 */
@@ -202,6 +226,16 @@ app.whenReady().then(() => {
   createWindow();
 
   ipcMain.on('washer:set-click-through', (_event, on) => setClickThrough(on));
+  ipcMain.on('washer:corner-rect', (_event, rect) => {
+    if (rect === null) { cornerRect = null; }
+    else if (typeof rect.x === 'number' && typeof rect.y === 'number'
+      && typeof rect.w === 'number' && typeof rect.h === 'number') {
+      cornerRect = rect;
+    }
+    applyIgnoreRegions();
+  });
+  // 页面每次 mousemove 调一次，配合 forward:true 判断光标是否进了角落
+  ipcMain.on('washer:pointer', () => applyIgnoreRegions());
   ipcMain.on('washer:toggle-click-through', () => setClickThrough(!clickThrough));
   ipcMain.handle('washer:state', () => ({
     clickThrough,

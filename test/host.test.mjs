@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
 
-import { foldEvent, encodeWsText, apply } from '../index.js';
+import { foldEvent, encodeWsText, apply, isOwnEndpoint } from '../index.js';
 
 /** 测试专用端点路径：绝不能碰 ~/.dsh 下的真实文件（宿主服务在用它） */
 const TEST_ENDPOINT = process.env.DSH_WASHER_ENDPOINT_FILE
@@ -274,7 +274,17 @@ test('端点信息落盘：文件权限 0600，卸载后自动删除', async () 
 
   ctx.dispose();
   await new Promise((r) => setTimeout(r, 50));
-  assert.equal(existsSync(file), false, '卸载后必须删掉，别留一份过期 token');
+  /*
+   * 卸载后**故意不删**。
+   * 早先的实现在这里 rm，结果插件热重载时旧实例先把文件删了、
+   * 新实例又因为各种原因没写成，端点信息就彻底丢了——实测发生过一次，
+   * 悬浮窗只能显示"未连接"。文件是 0600 的本地端点，留一份不影响安全，
+   * 丢了却没法开悬浮窗，所以宁可留。
+   */
+  assert.equal(existsSync(file), true, '卸载后要留着，否则悬浮窗找不到端口和 token');
+  const leftover = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(typeof leftover.port, 'number');
+  assert.equal(typeof leftover.token, 'string');
 });
 
 test('拿落盘的 token 真的能访问 state（证明这条路是通的）', async () => {
@@ -366,7 +376,9 @@ test('两个实例交替卸载：后启动的那个的文件不能被先启动�
 
   ctxB.dispose();
   await new Promise((r) => setTimeout(r, 50));
-  assert.equal(existsSync(file), false, 'B 卸载后该删');
+  // 同样不删：留着 B 的端点信息，下次启动覆盖写
+  assert.equal(existsSync(file), true, '卸载不再删文件，留给下次启动覆盖');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).port, portB, '留下的还是 B 写的那份');
 });
 
 test('计时真的会走：turnTimings 必须用 core.js 认的结构', () => {
@@ -392,6 +404,21 @@ test('计时真的会走：turnTimings 必须用 core.js 认的结构', () => {
   assert.ok(snap.lastEndedAt >= started);
 
   ctx.dispose();
+});
+
+test('端点文件只由自己的进程删（pid/token/port 三项都要对上）', () => {
+  // 这个文件是悬浮窗和用户找端口/token 的唯一入口。
+  // 早期实现用模块级变量记住路径，插件重载时新旧实例互相踩，
+  // 旧实例卸载时把新实例刚写的文件删了 —— 服务还在跑但端点信息没了。
+  const mine = { pid: 100, token: 'abc', port: 1234 };
+  assert.equal(isOwnEndpoint(mine, 1234, 'abc', 100), true, '三项全对上才允许删');
+
+  assert.equal(isOwnEndpoint(mine, 1234, 'abc', 200), false, '换了进程就別删——这是重载后的新实例');
+  assert.equal(isOwnEndpoint(mine, 1234, 'zzz', 100), false, 'token 不同说明是别的实例');
+  assert.equal(isOwnEndpoint(mine, 9999, 'abc', 100), false, '端口不同说明是别的实例');
+
+  assert.equal(isOwnEndpoint(null, 1234, 'abc', 100), false, '文件不存在或读坏了，没得删');
+  assert.equal(isOwnEndpoint('garbage', 1234, 'abc', 100), false, '解析出乱七八糟的东西也不该删');
 });
 
 test('推送去重不能按整份快照比（updatedAt 每次都变 = 永不命中）', () => {

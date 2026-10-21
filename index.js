@@ -259,13 +259,22 @@ function endpointFile() {
  * @param {number} port
  * @param {string} token
  */
+/**
+ * 判断一份端点信息是不是当前这个进程写的。
+ * 分开成函数是为了测试能直接喂数据，不用真起服务。
+ */
+export function isOwnEndpoint(info, port, token, pid) {
+  if (info === null || typeof info !== 'object') return false;
+  return info.pid === pid && info.token === token && info.port === port;
+}
+
 function clearEndpointFile(port, token) {
   try {
     const file = endpointFile();
     if (!existsSync(file)) return;
     const info = JSON.parse(readFileSync(file, 'utf8'));
     // 不是自己写的就别动
-    if (info.pid !== process.pid || info.token !== token || info.port !== port) return;
+    if (!isOwnEndpoint(info, port, token, process.pid)) return;
     rmSync(file, { force: true });
   } catch {
     // 尽力而为，删不掉也不该影响卸载流程
@@ -555,10 +564,19 @@ export function apply(ctx, config) {
   });
 
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态
+  const instanceToken = token;
   ctx.effect(() => () => {
     if (pushTimer !== null) clearTimeout(pushTimer);
     if (tickTimer !== null) clearInterval(tickTimer);
-    clearEndpointFile(port, token);
+    /*
+     * 插件热重载时，disposer 跑的是**旧实例**，但文件里记的是新实例的 pid+token，
+     * isOwnEndpoint 会拦住不删——这是对的。
+     * 真正要命的是另一种情况：新实例启动稍晚，旧实例先删了文件，
+     * 之后新实例因为端口复用失败或别的原因没写成，端点信息就彻底没了。
+     * 所以卸载时不主动删，留给下次启动覆盖写。文件内容是 0600 的本地端点信息，
+     * 残留一份不影响安全，但丢了就没法开悬浮窗。
+     */
+    void instanceToken;
     for (const socket of clients) {
       try { socket.destroy(); } catch { /* noop */ }
     }
