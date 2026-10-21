@@ -1,0 +1,7 @@
+{
+  "name": "dsh-washer-float",
+  "version": "0.0.1",
+  "private": true,
+  "description": "dsh-washer 悬浮窗（Electron 壳），不随插件发布",
+  "main": "main.cjs"
+}

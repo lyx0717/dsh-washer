@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src ws://127.0.0.1:*;">
+<title>dsh-washer 悬浮窗</title>
+<style>
+  /* 整个页面必须透明——窗口是 transparent 的，任何不透明底色都会变成一块死板 */
+  :root {
+    color-scheme: dark;
+    --panel: rgba(24, 26, 32, .88);
+    --line: rgba(255, 255, 255, .10);
+    --text: #e6e8ec;
+    --dim: #8b929e;
+    --ok: #3ecf8e;
+    --warn: #f5a623;
+    --bad: #f05252;
+    --brand: #4a9eff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  }
+  /*
+   * 拖拽区只给顶部那条，不给整张卡片。
+   * 原因：-webkit-app-region: drag 会吞掉所有鼠标事件，
+   * 整张卡片可拖就等于整张卡片没法右键、没法双击。
+   */
+  .drag {
+    position: absolute;
+    inset: 4px 4px auto 4px;
+    height: 26px;
+    -webkit-app-region: drag;
+    border-radius: 12px 12px 0 0;
+    z-index: 2;
+  }
+  .card {
+    position: absolute;
+    inset: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    color: var(--text);
+    transition: opacity .2s;
+    /*
+     * 这里刻意不用 backdrop-filter：在 transparent:true 的窗口里，
+     * 它会和窗口合成层打架，整块糊成不透明的灰色。
+     * 想要磨砂质感得开 vibrancy，那是另一套（且会和 transparent 互斥）。
+     */
+    background: rgba(22, 24, 30, .82);
+  }
+  /* 穿透状态下让卡片半透明，一眼能看出「现在点不到我」 */
+  body[data-through="1"] .card { opacity: .38; }
+
+  .top { display: flex; align-items: center; gap: 7px; position: relative; z-index: 3; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot[data-conn="open"] { background: var(--ok); box-shadow: 0 0 7px rgba(62, 207, 142, .8); }
+  .dot[data-conn="lost"] { background: var(--bad); }
+  .name {
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -.01em;
+    transition: color .3s;
+  }
+  .name[data-s="idle"], .name[data-s="off"] { color: var(--dim); }
+  .name[data-s="starting"], .name[data-s="washing"], .name[data-s="rinsing"],
+  .name[data-s="spinning"], .name[data-s="draining"] { color: var(--brand); }
+  .name[data-s="waiting"] { color: var(--warn); }
+  .name[data-s="done"] { color: var(--ok); }
+  .name[data-s="error"] { color: var(--bad); }
+  .dur {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .drum {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, .10);
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: var(--brand);
+    transition: width .45s ease, background-color .3s;
+  }
+  .fill[data-s="washing"] { width: 66%; }
+  .fill[data-s="rinsing"] { width: 42%; background: #5fb0ff; }
+  .fill[data-s="spinning"] { width: 88%; }
+  .fill[data-s="draining"] { width: 18%; background: #2bb3a3; }
+  .fill[data-s="waiting"] { width: 35%; background: var(--warn); }
+  .fill[data-s="done"] { width: 100%; background: var(--ok); }
+  .fill[data-s="error"] { width: 100%; background: var(--bad); }
+
+  .foot {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .foot span { overflow: hidden; text-overflow: ellipsis; }
+  .foot b { font-weight: 550; color: #b8bec9; }
+  .hint { font-size: 11px; color: var(--warn); }
+</style>
+</head>
+<body>
+<div class="drag"></div>
+<div class="card">
+  <div class="top">
+    <span class="dot" id="conn" data-conn="idle"></span>
+    <span class="name" id="name" data-s="off">未连接</span>
+    <span class="dur" id="dur">--:--</span>
+  </div>
+  <div class="drum"><div class="fill" id="fill" data-s="off"></div></div>
+  <div class="foot">
+    <span>第 <b id="turn">--</b> 轮</span>
+    <span>工具 <b id="tools">--</b></span>
+    <span id="last" style="text-overflow:ellipsis"></span>
+  </div>
+  <div class="hint" id="hint" hidden></div>
+</div>
+
+<script>
+(function () {
+  var LABEL = {
+    off: '未连接', idle: '待机', starting: '启动中', washing: '洗涤中',
+    rinsing: '漂洗中', spinning: '脱水中', waiting: '等你确认',
+    draining: '排水换水中', done: '洗完了', error: '故障',
+  };
+  var el = function (id) { return document.getElementById(id); };
+  var host = window.washerHost || null;
+
+  function setConn(kind) { el('conn').dataset.conn = kind; }
+
+  function render(snap) {
+    var s = snap.state || 'off';
+    var name = el('name');
+    name.textContent = LABEL[s] || s;
+    name.dataset.s = s;
+    el('dur').textContent = snap.durationText || '--:--';
+    el('fill').dataset.s = s;
+    el('turn').textContent = snap.turn === undefined || snap.turn === 0 ? '--' : String(snap.turn);
+    el('tools').textContent = snap.toolCount === undefined ? '--' : String(snap.toolCount);
+
+    var last = el('last');
+    var tools = Array.isArray(snap.tools) ? snap.tools : [];
+    if (snap.errorCode) {
+      last.textContent = snap.errorCode;
+      last.style.color = 'var(--bad)';
+    } else if (tools.length > 0) {
+      var t = tools[tools.length - 1];
+      last.textContent = (t.name || 'tool') + (typeof t.ms === 'number' ? ' ' + t.ms + 'ms' : '');
+      last.style.color = '';
+    } else {
+      last.textContent = '';
+    }
+    // 没连上时把原因说清楚，别让人盯着一个灰点猜
+    el('hint').hidden = s !== 'off';
+  }
+
+  /* 端点文件读不到时，主进程会说 null —— 这时直接告诉用户去重启宿主 */
+  if (host) {
+    host.state().then(function (st) {
+      if (st && st.endpoint === null) {
+        el('hint').hidden = false;
+        el('hint').textContent = '找不到宿主动点，重启 DSH 试试';
+        return;
+      }
+      if (st && st.endpoint) connect(st.endpoint.port, st.endpoint.token);
+    });
+    /*
+     * 穿透后窗口收不到任何鼠标事件，双击/右键都点不到自己。
+     * 所以提示里必须给出窗口外的关闭方式，否则就是个单向门。
+     */
+    var accel = '⌘⇧W';
+    host.state().then(function (st) {
+      if (st && st.escapeAccelerator) accel = st.escapeAccelerator.replace('CommandOrControl', '⌘').replace('Shift', '⇧');
+    });
+    host.onClickThroughChange(function (on) {
+      document.body.dataset.through = on ? '1' : '0';
+      el('hint').hidden = !on;
+      if (on) el('hint').textContent = accel + ' 关闭穿透';
+    });
+    host.onEscapeUnavailable && host.onEscapeUnavailable(function (a) {
+      el('hint').hidden = false;
+      el('hint').textContent = '快捷键被占用：' + a;
+    });
+    document.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
+      host.showMenu();
+    });
+    // 双击切换穿透：不用记快捷键，也不用瞄准小按钮
+    document.addEventListener('dblclick', function () { host.toggleClickThrough(); });
+  }
+
+  /* 断线自动重连：悬浮窗必须扛住宿主重启，退避上限 8 秒 */
+  var ws = null;
+  var retry = 0;
+  function connect(port, token) {
+    var url = 'ws://127.0.0.1:' + port + '/dsh-washer/stream?token=' + encodeURIComponent(token);
+    try { ws = new WebSocket(url); } catch (e) { setConn('lost'); return; }
+    ws.onopen = function () { setConn('open'); retry = 0; };
+    ws.onmessage = function (event) {
+      try { render(JSON.parse(event.data)); } catch (e) { /* 脏帧忽略 */ }
+    };
+    ws.onclose = function () {
+      setConn('lost');
+      retry = Math.min(retry + 1, 5);
+      setTimeout(function () { reconnect(); }, 500 * Math.pow(2, retry - 1));
+    };
+    ws.onerror = function () { setConn('lost'); };
+  }
+
+  /* 宿主重启后端口和 token 都会变，所以要重新问主进程要端点文件 */
+  function reconnect() {
+    if (!host) return;
+    host.state().then(function (st) {
+      if (st && st.endpoint) connect(st.endpoint.port, st.endpoint.token);
+      else setTimeout(reconnect, 2000);
+    });
+  }
+})();
+</script>
+</body>
+</html>
