@@ -16,6 +16,7 @@
  * `?token=` 或 `Authorization: Bearer`，防止本机其它程序偷看会话状态。
  */
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   deriveState,
@@ -400,7 +401,19 @@ export function apply(ctx, config) {
   if (enabled) {
     server.listen(cfg.desktopOverlayPort ?? DEFAULT_PORT, '127.0.0.1', () => {
       port = server.address().port;
-      ctx.logger?.info?.(`[dsh-washer] overlay service on http://127.0.0.1:${port}/dsh-washer/state`);
+      // 把带 token 的调试地址打出来，否则用户拿不到 token，也就打不开调试页。
+      // token 只进本机日志，不进任何网络响应。
+      ctx.logger?.info?.(`[dsh-washer] overlay: http://127.0.0.1:${port}/dsh-washer/state?token=${token}`);
+      // debug/ 不进 npm 分发（只在仓库里），装了包的人没有这个文件，
+      // 所以只在文件确实存在时才打印，别给人一个打不开的链接。
+      // index.js 就在包根目录，debug/ 是它的同级目录——别写成 ../debug（会跑出包外）
+      const debugPage = new URL('./debug/overlay.html', import.meta.url);
+      if (existsSync(debugPage)) {
+        ctx.logger?.info?.(
+          `[dsh-washer] debug page (浏览器直接打开): `
+          + `file://${debugPage.pathname}?port=${port}&token=${token}`,
+        );
+      }
     });
     server.on('error', (error) => {
       ctx.logger?.warn?.(`[dsh-washer] overlay service failed: ${error.message}`);
