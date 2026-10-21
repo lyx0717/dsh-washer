@@ -512,6 +512,11 @@ export function writeOverlayPrefs(patch) {
   if (patch.size === 'normal' || patch.size === 'tiny') next.size = patch.size;
   if (typeof patch.skin === 'string' && /^[a-z]{3,12}$/.test(patch.skin)) next.skin = patch.skin;
   if (patch.show === true || patch.show === false) next.show = patch.show;
+  /*
+   * 鼠标穿透。以前只能靠双击浮窗切换，但双击和"整机可拖"是互斥的
+   * （Chromium 的拖拽区会吞掉 dblclick），所以把入口挪到设置页。
+   */
+  if (patch.clickThrough === true || patch.clickThrough === false) next.clickThrough = patch.clickThrough;
   try {
     writeFileSync(file, JSON.stringify(next), { mode: 0o600 });
     // writeFileSync 的 mode 只在新建时生效，已存在的老文件权限不会自动收紧

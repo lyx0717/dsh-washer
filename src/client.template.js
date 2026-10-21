@@ -61,6 +61,8 @@ window.__ModuleLoader__.load({
       'ov.normal': '正常',
       'ov.tiny': '极简',
       'set.overlaySizeHint': '「极简」只留指示灯，不显示状态文字，占桌面空间最小。',
+      'set.overlayThrough': '鼠标穿透',
+      'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
       'err.e00.title': '出了点问题',
       'err.e00.hint': '原因不明，可以重试一次',
       'err.e10.title': '账号或服务不可用',
@@ -118,6 +120,8 @@ window.__ModuleLoader__.load({
       'ov.normal': 'Normal',
       'ov.tiny': 'Minimal',
       'set.overlaySizeHint': '"Minimal" keeps only the indicator light with no status text - the smallest footprint.',
+      'set.overlayThrough': 'Click-through',
+      'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press Opt+Cmd+W to turn it off.',
       'err.e00.title': 'Something went wrong',
       'err.e00.hint': 'Unknown cause - try again',
       'err.e10.title': 'Account or service unavailable',
@@ -195,6 +199,11 @@ window.__ModuleLoader__.load({
       // 不该莫名多一个后台进程和端口。
       desktopOverlay: false,
       desktopOverlaySize: 'normal',
+      /*
+       * 鼠标穿透：开启后浮窗不再接收任何鼠标事件，点击直接落到底下的应用。
+       * 以前这是浮窗上双击切换的，现在挪到设置页（理由见 OVERLAY_PREF_KEYS）。
+       */
+      desktopOverlayClickThrough: false,
     };
 
     /* ------------------------------------------------------------------ *
@@ -625,6 +634,12 @@ window.__ModuleLoader__.load({
         if (typeof props.washerSetPref === 'function') props.washerSetPref(key, value);
       };
 
+      /*
+       * 一行 = 左（标题，必要时带说明）+ 右（控件）。
+       * 这是宿主官方设置页的结构（ui-settings-general 的 DeveloperToolsRow）：
+       * 行用 flex + space-between，标签占左边，控件贴右边。
+       * 以前标签是普通 span 直接排在 div 里，没有 flex，所以全挤成一片。
+       */
       const row = (labelKey, control) => h('div', { className: 'dw-set-row' },
         h('span', { className: 'dw-set-label' }, tr(labelKey)),
         h('span', { className: 'dw-set-control' }, control));
@@ -740,6 +755,9 @@ window.__ModuleLoader__.load({
         ], cfg.desktopOverlaySize === undefined ? 'normal' : cfg.desktopOverlaySize,
         (value) => setPref('desktopOverlaySize', value))),
         h('p', { className: 'dw-set-hint' }, tr('set.overlaySizeHint')),
+        row('set.overlayThrough',
+          sw('desktopOverlayClickThrough', cfg.desktopOverlayClickThrough === true, tr('set.overlayThrough'))),
+        h('p', { className: 'dw-set-hint' }, tr('set.overlayThroughHint')),
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));
     }
 
@@ -904,6 +922,13 @@ window.__ModuleLoader__.load({
           desktopOverlay: 'show',
           desktopOverlaySize: 'size',
           /*
+           * 鼠标穿透从浮窗的双击挪到设置页。
+           * 双击进穿透原本是浮窗上唯一的鼠标入口，但用户要求"整个机器都能拖"——
+           * Chromium 的拖拽区（-webkit-app-region: drag）会吞掉 dblclick，
+           * 两者不能共存。于是拖拽优先，穿透改由设置页开关控制。
+           */
+          desktopOverlayClickThrough: 'clickThrough',
+          /*
            * skin 现在同时是主界面皮肤和浮窗造型，所以改它必须推一份给宿主，
            * 否则浮窗要等下次重启才换。反方向由 SSE 回灌（见 applyRemotePrefs）。
            */
@@ -966,7 +991,10 @@ window.__ModuleLoader__.load({
         const applyRemotePrefs = (remote) => {
           if (remote === null || typeof remote !== 'object') return;
           // skin 从浮窗菜单改也要回灌到主界面皮肤，所以反向映射保留 skin → skin
-          const REVERSE = { show: 'desktopOverlay', size: 'desktopOverlaySize', skin: 'skin' };
+          const REVERSE = {
+            show: 'desktopOverlay', size: 'desktopOverlaySize', skin: 'skin',
+            clickThrough: 'desktopOverlayClickThrough',
+          };
           let changed = false;
           for (const field of Object.keys(REVERSE)) {
             if (remote[field] === undefined) continue;
@@ -974,7 +1002,7 @@ window.__ModuleLoader__.load({
             let value = remote[field];
             // 本地字段名和文件字段名眼瞅着一样，但类型不同：
             // 文件里 size 是 'tiny'/'normal'，页面里是 desktopOverlaySize
-            if (key === 'desktopOverlay' && typeof value !== 'boolean') continue;
+            if ((key === 'desktopOverlay' || key === 'desktopOverlayClickThrough') && typeof value !== 'boolean') continue;
             if (prefs[key] === value) continue;
             prefs[key] = value;
             changed = true;

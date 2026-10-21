@@ -1000,8 +1000,8 @@ await test('设置页的开关是 role=switch 且带内联样式（不靠 class 
   const html = render(Settings(propsFrom(world)));
 
   const switches = html.match(/role="switch"/g) || [];
-  // 两个：空闲隐藏 / 桌面悬浮窗（表情和显示成本已按用户要求删除）
-  assert.equal(switches.length, 2, '两个布尔项各一个开关（空闲隐藏/悬浮窗），实际 ' + switches.length);
+  // 三个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透（表情和显示成本已按用户要求删除）
+  assert.equal(switches.length, 3, '三个布尔项各一个开关（空闲隐藏/悬浮窗/鼠标穿透），实际 ' + switches.length);
   assert.ok(/aria-checked="true"/.test(html), '开着的开关 aria-checked=true');
   assert.ok(/aria-checked="false"/.test(html), '关着的开关 aria-checked=false');
 
@@ -1029,6 +1029,8 @@ await test('设置页：每个设置项都能双向同步（初始值读对 + �
     // 表情 / 显示成本两项已按用户要求删除，不在矩阵里
     { name: '空闲隐藏', on: { hideWhenIdle: true }, off: { hideWhenIdle: false }, key: 'hideWhenIdle', value: true, label: '空闲时隐藏' },
     { name: '桌面悬浮窗', on: { desktopOverlay: true }, off: { desktopOverlay: false }, key: 'desktopOverlay', value: true, label: '显示悬浮窗' },
+    // 鼠标穿透：双击切换在"整机可拖"之后做不到了（拖拽区吞 dblclick），入口搬到设置页
+    { name: '鼠标穿透', on: { desktopOverlayClickThrough: true }, off: { desktopOverlayClickThrough: false }, key: 'desktopOverlayClickThrough', value: true, label: '鼠标穿透' },
   ];
   // 开关按 aria-label 定位（中文标签），比按顺序稳
   for (const item of matrix) {
@@ -1124,7 +1126,7 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
   // 设置页能写的 key，全部必须在默认值清单里
   // 只列**设置页上确实存在的**可写项。功能删了就要从这份清单里删掉，
   // 否则这条测试会替一段不存在的 UI 背书。
-  const writable = ['hideWhenIdle', 'skin', 'desktopOverlay', 'desktopOverlaySize'];
+  const writable = ['hideWhenIdle', 'skin', 'desktopOverlay', 'desktopOverlaySize', 'desktopOverlayClickThrough'];
   const defaults = plugin.__defaults;
   assert.ok(defaults !== undefined, '插件要把 DEFAULT_CONFIG 挂在 __defaults 上供客户端与测试共用');
   for (const key of writable) {
@@ -1136,7 +1138,7 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
 
   // 空配置下，每个开关都得渲染成明确的关/开（不能因为值是 undefined 就没有 aria-checked）
   const switches = [...html.matchAll(/<button[^>]*role="switch"[^>]*aria-checked="(true|false)"[^>]*>/g)];
-  assert.equal(switches.length, 2, '两个布尔项（空闲隐藏 / 桌面悬浮窗）各一个开关');
+  assert.equal(switches.length, 3, '三个布尔项（空闲隐藏 / 桌面悬浮窗 / 鼠标穿透）各一个开关');
   for (const m of switches) {
     if (/悬浮窗/.test(m[0])) assert.equal(m[1], 'false', '空配置下悬浮窗开关必须是关');
   }
@@ -1367,6 +1369,33 @@ for (const { name, level, html } of cells) {
 
 console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
+
+await test('设置页每个 class 都真的在 CSS 里有样式（不是裸 div 堆着）', () => {
+  /*
+   * 用户报「设置页样式还是乱，都挤在一起了」。
+   *
+   * 根因不在样式写错，而在**根本没写**：设置页用了 dw-settings / dw-set-row /
+   * dw-set-label 这一整套 class，但 style.css 里一个都没有。只剩开关和胶囊
+   * 按钮的内联样式，容器和行全是裸 div，浏览器按块级元素往下堆。
+   *
+   * 所以这条测试直接查 CSS 文本里有没有对应选择器。以后再新增 class
+   * 忘了写样式，这里立刻红。
+   */
+  const classes = ['dw-settings', 'dw-set-title', 'dw-set-intro', 'dw-set-sub',
+    'dw-set-row', 'dw-set-label', 'dw-set-hint'];
+  for (const name of classes) {
+    assert.ok(CSS_TEXT.includes('.' + name),
+      '设置页用了 .' + name + '，但 style.css 里没有它的样式');
+  }
+
+  // 行必须是左右布局：只写 padding 不写 flex，控件还是会掉到下一行
+  const rowRule = CSS_TEXT.slice(CSS_TEXT.indexOf('.dw-set-row'));
+  const rowBody = rowRule.slice(0, rowRule.indexOf('}'));
+  assert.ok(/display\s*:\s*flex/.test(rowBody), '.dw-set-row 必须 display:flex，否则标签和控件上下堆叠');
+  assert.ok(/justify-content\s*:\s*space-between/.test(rowBody), '.dw-set-row 要两头对齐（标签在左、控件在右）');
+  assert.ok(/align-items\s*:\s*center/.test(rowBody), '.dw-set-row 要垂直居中');
+});
+
 
 /* 组件里有 1s 心跳 setInterval（模拟真机计时），拍完图显式退出，避免 node 挂着不退 */
 

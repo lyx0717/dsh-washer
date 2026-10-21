@@ -59,6 +59,15 @@ let skin = 'precision';
  * 否则每拨一次开关都要 fork 一个 Electron。
  */
 let visible = true;
+/**
+ * 系统是否要求减弱动态效果。
+ *
+ * 页面那边读 prefers-reduced-motion 直接控制 CSS，但窗口尺寸动画在**主进程**
+ * 里插值，主进程拿不到 CSS 媒体查询，只能让渲染进程量一次再同步过来
+ * （preload 暴露 host.setReduceMotion，float.html 启动时上报）。
+ * 默认 false：拿不到就按"要动画"处理，比默认关掉更不容易让人以为卡住。
+ */
+let reduceMotion = false;
 
 /**
  * 读端点文件，并且**确认写它的进程还活着**。
@@ -332,6 +341,22 @@ function createWindow() {
   win.once('ready-to-show', () => {
     // 启动时就该隐着的话别先亮一下再藏（会闪一帧）
     if (visible) win.show();
+    /*
+     * 启动时恢复上次的穿透状态。
+     *
+     * 必须在 show 之后、页面加载完之后调：setIgnoreMouseEvents 依赖
+     * 窗口已经存在并且有内容，太早调会被 show() 内部重置掉。
+     * 不能走 setClickThrough 的完整路径——那条路会写回偏好文件，
+     * 触发 watchFile 再反过来调一次，绕圈。这里直接设状态 + 落一次区域规则。
+     */
+    const p = readFloatPrefs();
+    if (p.clickThrough === true) {
+      clickThrough = true;
+      win.setIgnoreMouseEvents(true, { forward: true });
+      updateEscapeShortcut();
+      win.webContents.send('washer:click-through', true);
+      applyIgnoreRegions();
+    }
   });
 
   // 'moved' 在拖动结束时才稳定触发，正好是磁吸的时机
@@ -376,6 +401,62 @@ function setVisible(next) {
 }
 
 /**
+ * 窗口尺寸/位置过渡。
+ *
+ * 原来直接 setBounds —— 窗口在一帧之内从 132x200 跳到 76x96，
+ * 用户看到的是一次硬切，主观感受就是"卡了一下"。
+ * macOS 的原生窗口动画 API 只支持最大/最小化，改不了尺寸，
+ * 所以这里自己按帧插值：每 16ms 走一步，用缓出曲线。
+ *
+ * 为什么不是 CSS 动画就够了：窗口大小是**系统层**的，页面 CSS 只能
+ * 让内容慢慢缩，窗口本身还是会瞬间跳小，多出来的那块透明区域会闪一下。
+ * 两边必须同频，所以窗口这里也要动。
+ *
+ * 时长和 float.html 里的 --size-dur 保持一致（220ms）。
+ */
+const SIZE_ANIM_MS = 220;
+let boundsTimer = null;
+
+function animateBounds(target) {
+  if (win === null || win.isDestroyed()) return;
+  if (boundsTimer !== null) { clearInterval(boundsTimer); boundsTimer = null; }
+  const from = win.getBounds();
+  const to = target;
+  // 位置和尺寸都没变就别动，省得白跑一圈动画
+  if (from.x === to.x && from.y === to.y && from.width === to.width && from.height === to.height) return;
+
+  /*
+   * prefers-reduced-motion 由渲染进程的判断同步过来（见 washer:reduced-motion）。
+   * 系统开了"减弱动态效果"就直接跳到位，不做插值。
+   */
+  if (reduceMotion) {
+    win.setBounds(to);
+    return;
+  }
+
+  const start = Date.now();
+  // 缓出：和页面 CSS 的 cubic-bezier(.32,.72,0,1) 手感和频率接近
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  boundsTimer = setInterval(() => {
+    if (win === null || win.isDestroyed()) {
+      if (boundsTimer !== null) { clearInterval(boundsTimer); boundsTimer = null; }
+      return;
+    }
+    const t = Math.min(1, (Date.now() - start) / SIZE_ANIM_MS);
+    const k = ease(t);
+    win.setBounds({
+      x: Math.round(from.x + (to.x - from.x) * k),
+      y: Math.round(from.y + (to.y - from.y) * k),
+      width: Math.round(from.width + (to.width - from.width) * k),
+      height: Math.round(from.height + (to.height - from.height) * k),
+    });
+    if (t >= 1) { clearInterval(boundsTimer); boundsTimer = null; }
+  }, 16);
+  // 别让这个定时器拖住进程退出
+  if (boundsTimer !== null && typeof boundsTimer.unref === 'function') boundsTimer.unref();
+}
+
+/**
  * 切换窗口尺寸档位。
  *
  * 只改窗口，不动页面：页面通过 data-size 自己收放内容。
@@ -404,7 +485,7 @@ function setSizeMode(mode) {
   let ny = y;
   if (y + size.height > a.y + a.height) ny = a.y + a.height - size.height;
   if (ny < a.y) ny = a.y;
-  win.setBounds({ x: Math.round(nx), y: Math.round(ny), width: size.width, height: size.height });
+  animateBounds({ x: Math.round(nx), y: Math.round(ny), width: size.width, height: size.height });
 }
 
 /** 换肤：只把 skin 名发给页面，具体颜色由页面 CSS 决定 */
@@ -556,9 +637,16 @@ function watchPrefs() {
        * 缺字段时不能让窗口莫名其妙闪一下。
        */
       const nextShow = typeof p.show === 'boolean' ? p.show : visible;
+      /*
+       * 穿透同理。它原来是浮窗上双击切换的，但用户要求整机可拖，
+       * 而 Chromium 的拖拽区会吞掉 dblclick —— 两个不能共存，于是入口
+       * 挪到设置页：设置页 POST → 宿主写偏好文件 → 这里读到就应用。
+       */
+      const nextThrough = typeof p.clickThrough === 'boolean' ? p.clickThrough : clickThrough;
       if (nextSize !== sizeMode) setSizeMode(nextSize);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
+      if (nextThrough !== clickThrough) setClickThrough(nextThrough);
     });
   } catch { prefWatcher = null; }
 }
@@ -612,6 +700,7 @@ app.whenReady().then(() => {
   });
   // 页面每次 mousemove 调一次，配合 forward:true 判断光标是否进了角落
   ipcMain.on('washer:pointer', () => applyIgnoreRegions());
+  ipcMain.on('washer:reduce-motion', (_event, on) => { reduceMotion = on === true; });
   ipcMain.on('washer:toggle-click-through', () => setClickThrough(!clickThrough));
   ipcMain.handle('washer:state', () => ({
     clickThrough,

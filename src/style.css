@@ -338,3 +338,109 @@
   display: none;
 }
 
+
+
+/* ---------- 设置页 ---------- */
+ *
+ * 这一整段以前根本不存在：设置页只内联了开关和胶囊按钮的样式，
+ * 容器/行/标签全是裸 div，浏览器按默认块级元素往下堆——用户看到的就是
+ * "全都挤在一起"。下面照宿主官方设置页（ui-settings-general 的
+ * DeveloperToolsRow）的规格重写：
+ *
+ *   .row        { display:flex; justify-content:space-between;
+ *                 align-items:center; gap:24px; padding:16px 0;
+ *                 border-bottom:.5px solid border-l2 }
+ *   .title      { font-size:14px; line-height:20px }
+ *   .description{ color:label-secondary; margin-top:4px;
+ *                 font-size:12px; line-height:18px }
+ *
+ * 关键点：行是左右布局（标签在左、控件在右），说明文字挂在标签下面，
+ * 而不是自己独占一行。以前全是一条一条竖着排，所以看着"挤"。
+ */
+
+.dw-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 8px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 面板标题 */
+.dw-set-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.dw-set-intro {
+  margin: 2px 0 8px;
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 分组小标题（"桌面悬浮窗"）：上留白 + 与上面一条分隔线拉开层次 */
+.dw-set-sub {
+  margin: 18px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 一行：左边标题（可带说明），右边控件 */
+.dw-set-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, .08));
+}
+
+.dw-set-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 控件那一栏不许被标签挤扁：胶囊多的时候可以换行，但不能压缩自身 */
+.dw-set-row > .dw-seg {
+  flex: none;
+  justify-content: flex-end;
+}
+
+.dw-set-row > [role='switch'] {
+  flex: none;
+}
+
+/* 说明文字：作为行下方的小字，左边对齐、不和控件抢位置 */
+.dw-set-hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/*
+ * 说明文字紧跟在某一行后面时，视觉上属于那一行——
+ * 把它和上面那行贴紧，然后由**说明自己**承担分隔线，
+ * 这样"行 + 说明"整块看着是一节，而不是行有线下而说明又单独一行。
+ */
+.dw-set-row + .dw-set-hint {
+  margin-top: -10px;
+  padding-bottom: 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, .08));
+}
+
+/* 最后一条说明（重启提示）是整页收尾，不需要再画线 */
+.dw-set-hint:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}

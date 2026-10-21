@@ -43,15 +43,28 @@
     align-items: center;
     justify-content: flex-end;
     gap: 4px;
+    /*
+     * 尺寸档位切换的过渡。
+     *
+     * 原来 .wrap / .machine / .bubble 全都是"属性一改，下一帧就到位"，
+     * 而主进程那边是直接 setBounds 改窗口大小——两头都是硬切，
+     * 用户看到的就是"像卡顿"。这里补上过渡，和主进程的窗口动画同频率，
+     * 内容是"边缩边挪"而不是先缩完再等着窗口变大。
+     */
+    transition: width var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
+                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1));
   }
 
   /* ---- 洗衣机 ---- */
   .machine {
     position: relative;
-    /* 拖动只给机器顶部一条，其余留给交互 */
+    /* 整机都是拖拽区（见 .grab） */
     width: 100%;
     display: flex;
     justify-content: center;
+    /* 极简/正常切换时机器本体跟着缩，不是瞬间跳变 */
+    transition: width var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
+                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1));
   }
   /* 甩干时整台机器会抖，这是它看起来"在工作"的关键 */
   .machine[data-shake="1"] { animation: shake .18s steps(2, end) infinite; }
@@ -67,16 +80,20 @@
   .washer { width: 112px; height: 136px; }
 
   /*
-   * 拖拽区：只有机器顶部这条能拖。
-   * 整机设 drag 会把 dblclick 和右键菜单一起吞掉（HTML 拖拽区和页面事件
-   * 是互斥的），所以只留控制面板那一小条——正好符合"抓着机器顶部搬"的直觉。
+   * 拖拽区：整台机器都能拖。
+   *
+   * 早期只给机器顶部一条 26px 高的带子，因为整机设 drag 会吞掉 dblclick
+   * 和右键菜单。现在双击穿透的入口已经挪到设置页（用户要求整机可拖），
+   * 拖拽区就可以铺满整个机器本体了——抓着机器上任何地方都能搬。
+   *
+   * 右键菜单不受影响：它是 document 级的 contextmenu 监听，
+   * 而且 .wrap 本身是 no-drag。
    */
   .grab {
     /* 绝对定位会排在 SVG 之后、被 SVG 盖住，必须显式提层，
        否则鼠标点到的是 SVG，拖拽区收不到事件——实测就是这样失效的 */
     position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 26px;
+    top: 0; left: 0; right: 0; bottom: 0;
     z-index: 10;
     app-region: drag;
     -webkit-app-region: drag;
@@ -114,7 +131,12 @@
     font-size: 11px;
     line-height: 1.3;
     white-space: nowrap;
-    transition: opacity .2s;
+    /* 气泡进出场：极简态要塌缩，所以 max-height/padding 一起过渡 */
+    transition: opacity var(--size-dur, 220ms) ease,
+                max-height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
+                padding var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
+                margin var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1));
+    max-height: 30px;
   }
   .bubble .st { font-weight: 600; }
   .bubble .st[data-s="idle"], .bubble .st[data-s="off"] { color: var(--dim); }
@@ -160,7 +182,19 @@
   /* 极简态：76x96，只剩机器和角上的指示灯，气泡整个不占位 */
   body[data-size="tiny"] .wrap { width: 76px; height: 96px; }
   body[data-size="tiny"] .washer { width: 64px; height: 78px; }
-  body[data-size="tiny"] .bubble { display: none; }
+  /*
+     极简态气泡不占位。但不能直接 display:none —— 那样没有过渡，
+     气泡会"啪"地消失。改成高度塌缩 + 透明，结束再真正隐藏。
+   */
+  body[data-size="tiny"] .bubble {
+    opacity: 0;
+    max-height: 0;
+    margin: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
   /* 极简态没有气泡，状态只能靠机器自己表达：指示灯就是唯一的状态出口，
      所以放大它并把透视调高，一眼能看出在干什么 */
   body[data-size="tiny"] .px-led { filter: drop-shadow(0 0 4px var(--led, #7c8896)); }
@@ -325,11 +359,13 @@
     machine.dataset.blink = v.blink > 0 ? (v.blink < 0.5 ? '2' : '1') : '0';
   }
 
-  /* 穿透切换：双击机器本体进入，点角落退出 */
-  machine.addEventListener('dblclick', function (e) {
-    e.stopPropagation();
-    if (host) host.toggleClickThrough();
-  });
+  /*
+   * 穿透切换的入口只剩角落按钮了。
+   *
+   * 原来双击机器本体也能切，但整机现在铺了拖拽区（-webkit-app-region: drag），
+   * Chromium 会吞掉落在拖拽区上的 dblclick —— 留着这段代码只会变成
+   * "双击有时有效有时无效"的玄学。设置页有正式开关，这里不再挂双击。
+   */
   el('corner').addEventListener('click', function (e) {
     e.stopPropagation();
     if (host) host.toggleClickThrough();
@@ -413,6 +449,17 @@
       if (st) applyPrefs({ size: st.size, skin: st.skin });
     });
     host.onPrefs(applyPrefs);
+
+    /*
+     * 把系统的"减弱动态效果"告诉主进程。
+     * 窗口尺寸的插值动画跑在主进程里，它读不到 CSS 媒体查询，
+     * 只能由这边量一次再送过去，否则开了无障碍偏好还是会看到窗口缩放。
+     */
+    if (typeof host.setReduceMotion === 'function' && window.matchMedia) {
+      var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+      host.setReduceMotion(mq.matches);
+      mq.addEventListener('change', function (e) { host.setReduceMotion(e.matches); });
+    }
   }
 
   if (host) reconnect();

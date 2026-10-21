@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('washerHost', {
   setCornerRect: (rect) => ipcRenderer.send('washer:corner-rect', rect),
   /** 上报鼠标进入窗口（配合 forward 判断光标是否落在角落） */
   pointer: () => ipcRenderer.send('washer:pointer'),
+  /**
+   * 上报系统是否要求减弱动态效果。
+   * 主进程要拿它决定窗口尺寸切换是插值还是直接跳到位——
+   * 媒体查询在主进程里读不到，只能由页面量一次再送过去。
+   */
+  setReduceMotion: (on) => ipcRenderer.send('washer:reduce-motion', on === true),
   /** 右键菜单 */
   showMenu: () => ipcRenderer.send('washer:show-menu'),
   /** 退出 */
