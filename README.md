@@ -130,7 +130,16 @@ desktopOverlayPort: 0        # 0 = 系统分配，日志里打印实际地址
 ```
 
 - 只绑 `127.0.0.1`，每次启动生成随机 token，`/dsh-washer/state`、`/dsh-washer/health`、`WS /dsh-washer/stream` 全部要 token（query 或 Bearer）。
+- 启动后端点信息写到 `~/.dsh/dsh-washer-overlay.json`（0600，进程退出即删），里面有现成的 `url`：
+
+  ```json
+  { "url": "http://127.0.0.1:61491/dsh-washer/state?token=...",
+    "port": 61491, "token": "...", "pid": 68298 }
+  ```
+
 - 调试端：`debug/overlay.html?port=端口&token=令牌`，浏览器直接打开就能看状态流转，断线会自动指数退避重连。
+
+  ![调试端](docs/overlay-debug.png)
 - 两个必须守住的点，都有回归测试：**工具返回后不能还停在 rinsing**（状态撒谎比不显示更糟）；**`step/*` 不能进节点序列**——`deriveState` 用「最后一个节点是不是产出类节点」判断走到哪，`step-*` 不在白名单里，混进去会让状态从 washing 倒退成 starting。
 
 ### 调试：插件"不见了"先看这里
