@@ -394,6 +394,27 @@ test('计时真的会走：turnTimings 必须用 core.js 认的结构', () => {
   ctx.dispose();
 });
 
+test('推送去重不能按整份快照比（updatedAt 每次都变 = 永不命中）', () => {
+  // 早期拿整份 JSON 字符串做去重，快照里有 updatedAt/耗时，
+  // 于是永远"不相同"→ 每次事件都推，等于没去重；
+  // 反过来若只看 state，时长秒数又会冻住。这里锁住后者。
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('tool/call', { turn: 1, name: 'bash', callId: 'c1' }), NOW + 10);
+  foldEvent(s, ev('tool/result', { turn: 1, message: { toolCallId: 'c1' } }), NOW + 60);
+  // 同一状态下，过一会儿时长就该变——这决定了推不推
+  const sig = (snap) => [snap.state, snap.turn, snap.toolCount, snap.durationText].join('|');
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  ctx.handlers.get('session/event')({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  const a = sig(api.snapshot());
+  const until = Date.now() + 1100;
+  while (Date.now() < until) { /* 等一秒 */ }
+  const b = sig(api.snapshot());
+  assert.notEqual(a, b, '同一状态下时长变了，签名必须跟着变，否则页面计时是冻的');
+  ctx.dispose();
+});
+
 test('apply：卸载后服务关闭，端口释放', async () => {
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });

@@ -39,6 +39,8 @@ export const inject = ['agents', 'sessions'];
 const DEFAULT_PORT = 0;
 /** 推送节流：一个 turn 里状态可能高频变化，100ms 够顺滑又不刷屏。 */
 const PUSH_THROTTLE_MS = 100;
+/** 无事件时刷新时长的节拍（毫秒） */
+const TICK_MS = 500;
 
 /* ------------------------------------------------------------------ *
  * 事件 → deriveState 输入
@@ -380,10 +382,19 @@ export function apply(ctx, config) {
     };
   }
 
+  /**
+   * 快照里 updatedAt 每次都变，拿它做去重等于永不命中——等于没有去重。
+   * 只比较真正会变的部分：状态、轮次、时长、工具流水。
+   * 但时长每秒都在走，所以纯状态去重会让"秒数"停住。
+   * 折中：状态变化必推；状态没变时最多每 PUSH_THROTTLE_MS 推一次，
+   * 让时长秒数能跟上（渲染端看到的是活的计时器，不是冻住的）。
+   */
   function pushNow() {
-    const text = JSON.stringify(snapshot());
-    if (text === lastPushed) return;
-    lastPushed = text;
+    const snap = snapshot();
+    const signature = [snap.state, snap.turn, snap.toolCount, snap.durationText, snap.errorCode].join('|');
+    const text = JSON.stringify(snap);
+    if (signature === lastPushed) return;
+    lastPushed = signature;
     const frame = encodeWsText(text);
     if (frame === null) return;
     for (const socket of clients) {
@@ -396,8 +407,28 @@ export function apply(ctx, config) {
   }
 
   /** 节流推送：连续工具调用时不让每条事件都走一遍序列化 */
-  function schedulePush() {
+  /**
+   * 心跳：没有任何事件时，时长仍然在走，渲染端得看得到秒数。
+   * 只在「有客户端连接 + 轮次进行中」时才定时跑，闲时完全不占 CPU。
+   */
+  let tickTimer = null;
+  function ensureTick() {
+    if (tickTimer !== null) return;
+    tickTimer = setInterval(() => {
+      if (clients.size === 0 || currentSessionId === null) return;
+      const s = sessions.get(currentSessionId);
+      if (s === undefined || !s.running) return;
+      schedulePush(true);
+    }, TICK_MS);
+    if (typeof tickTimer.unref === 'function') tickTimer.unref();
+  }
+
+  function schedulePush(force = false) {
     if (clients.size === 0) return;
+    if (force) {
+      // 心跳走的路径：不受「已有 timer 在排队」限制，但也别猛推
+      if (pushTimer !== null) return;
+    }
     if (pushTimer !== null) return;
     const now = Date.now();
     const wait = Math.max(0, PUSH_THROTTLE_MS - (now - lastPushAt));
@@ -437,6 +468,7 @@ export function apply(ctx, config) {
       + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
     );
     clients.add(socket);
+    ensureTick();
     // 连上先给一份当前快照，省得渲染端干等下一次变化
     const hello = encodeWsText(JSON.stringify(snapshot()));
     if (hello !== null) socket.write(hello);
@@ -525,6 +557,7 @@ export function apply(ctx, config) {
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态
   ctx.effect(() => () => {
     if (pushTimer !== null) clearTimeout(pushTimer);
+    if (tickTimer !== null) clearInterval(tickTimer);
     clearEndpointFile(port, token);
     for (const socket of clients) {
       try { socket.destroy(); } catch { /* noop */ }
