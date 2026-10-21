@@ -25,3 +25,8 @@
         doneHoldMs: 3000
         toolHistoryLimit: 6
         reduceMotion: auto
+        # P1b 桌面悬浮窗：本地 HTTP+WS 服务（只绑 127.0.0.1，带随机 token）。
+        # 默认关——装了不看的人不该莫名多一个后台端口。
+        desktopOverlay: false
+        # 0 = 让系统分配端口，避免抢端口；日志里会打印实际地址
+        desktopOverlayPort: 0

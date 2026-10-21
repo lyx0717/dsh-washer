@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-washer · 悬浮窗调试端</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #16181d;
+    --panel: #1e2128;
+    --line: #2c3038;
+    --text: #e6e8ec;
+    --dim: #8b929e;
+    --ok: #3ecf8e;
+    --warn: #f5a623;
+    --bad: #f05252;
+    --brand: #4a9eff;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+  .card {
+    width: min(560px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 20px 22px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+  }
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot[data-conn="open"] { background: var(--ok); box-shadow: 0 0 8px rgba(62, 207, 142, .7); }
+  .dot[data-conn="lost"] { background: var(--bad); }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .01em; }
+  .sub { font-size: 12px; color: var(--dim); margin-left: auto; font-variant-numeric: tabular-nums; }
+
+  .state {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin: 18px 0 6px;
+  }
+  .stateName {
+    font-size: 34px;
+    font-weight: 650;
+    letter-spacing: -.02em;
+    transition: color .3s;
+  }
+  .stateName[data-s="idle"] { color: var(--dim); }
+  .stateName[data-s="starting"],
+  .stateName[data-s="washing"],
+  .stateName[data-s="rinsing"],
+  .stateName[data-s="spinning"],
+  .stateName[data-s="draining"] { color: var(--brand); }
+  .stateName[data-s="waiting"] { color: var(--warn); }
+  .stateName[data-s="done"] { color: var(--ok); }
+  .stateName[data-s="error"] { color: var(--bad); }
+  .stateName[data-s="off"] { color: var(--dim); }
+  .dur { font-size: 15px; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  /* 滚筒：CSS 变量由状态驱动，这是渲染端的全部逻辑 */
+  .drum {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--line);
+    overflow: hidden;
+    margin: 14px 0 18px;
+  }
+  .drumFill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: var(--brand);
+    transition: width .45s ease, background-color .3s;
+  }
+  .drumFill[data-s="washing"] { width: 66%; background: linear-gradient(90deg, #2b6fd4, #4a9eff); }
+  .drumFill[data-s="rinsing"] { width: 42%; background: linear-gradient(90deg, #2b6fd4, #5fb0ff); }
+  .drumFill[data-s="spinning"] { width: 88%; }
+  .drumFill[data-s="draining"] { width: 18%; background: #2bb3a3; }
+  .drumFill[data-s="waiting"] { width: 35%; background: var(--warn); }
+  .drumFill[data-s="done"] { width: 100%; background: var(--ok); }
+  .drumFill[data-s="error"] { width: 100%; background: var(--bad); }
+  .drumFill[data-s="idle"],
+  .drumFill[data-s="off"] { width: 0%; }
+
+  .rows { display: grid; gap: 8px; font-size: 13px; }
+  .row { display: flex; gap: 10px; align-items: baseline; }
+  .k { color: var(--dim); width: 76px; flex: none; }
+  .v { font-variant-numeric: tabular-nums; word-break: break-all; }
+  .tools { display: grid; gap: 4px; }
+  .tool { display: flex; gap: 8px; align-items: baseline; }
+  .tool b { font-weight: 550; }
+  .tool .ms { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .tool[data-err="1"] b { color: var(--bad); }
+  .empty { color: var(--dim); }
+
+  .raw {
+    margin-top: 18px;
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+  }
+  .raw summary { cursor: pointer; font-size: 12px; color: var(--dim); user-select: none; }
+  pre {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #b8bec9;
+    background: #12141a;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow: auto;
+    max-height: 260px;
+  }
+  .setup { font-size: 12px; color: var(--warn); line-height: 1.7; }
+  .setup code { background: #12141a; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="head">
+    <span class="dot" id="conn" data-conn="idle"></span>
+    <h1>洗衣机 · 悬浮窗调试端</h1>
+    <span class="sub" id="updated">--</span>
+  </div>
+
+  <div id="setup" class="setup" hidden>
+    <p>没拿到连接参数。两种用法：</p>
+    <p>① 直接带参数打开：<code>?port=端口&amp;token=令牌</code></p>
+    <p>② 在 DSH 里把 <code>desktopOverlay</code> 打开，日志里会打印地址。</p>
+  </div>
+
+  <main id="main" hidden>
+    <div class="state">
+      <span class="stateName" id="stateName" data-s="off">--</span>
+      <span class="dur" id="duration">--:--</span>
+    </div>
+
+    <div class="drum"><div class="drumFill" id="drumFill" data-s="off"></div></div>
+
+    <div class="rows">
+      <div class="row"><span class="k">会话</span><span class="v" id="session">--</span></div>
+      <div class="row"><span class="k">轮次</span><span class="v" id="turn">--</span></div>
+      <div class="row"><span class="k">工具数</span><span class="v" id="toolCount">--</span></div>
+      <div class="row"><span class="k">错误码</span><span class="v" id="errorCode">--</span></div>
+      <div class="row"><span class="k">最近工具</span><span class="v"><span class="tools" id="tools"></span></span></div>
+    </div>
+
+    <details class="raw">
+      <summary>原始快照</summary>
+      <pre id="raw">--</pre>
+    </details>
+  </main>
+</div>
+
+<script>
+(function () {
+  var LABEL = {
+    off: '未连接',
+    idle: '待机',
+    starting: '启动中',
+    washing: '洗涤中',
+    rinsing: '漂洗中',
+    spinning: '脱水中',
+    waiting: '等你确认',
+    draining: '排水换水中',
+    done: '洗完了',
+    error: '故障',
+  };
+
+  var el = function (id) { return document.getElementById(id); };
+  var params = new URLSearchParams(location.search);
+  var port = params.get('port');
+  var token = params.get('token');
+
+  if (!port || !token) {
+    el('setup').hidden = false;
+    return;
+  }
+  el('main').hidden = false;
+
+  function setConn(kind) {
+    el('conn').dataset.conn = kind;
+  }
+
+  function render(snap) {
+    var s = snap.state || 'off';
+    var name = el('stateName');
+    name.textContent = LABEL[s] || s;
+    name.dataset.s = s;
+
+    el('duration').textContent = snap.durationText || '--:--';
+    el('drumFill').dataset.s = s;
+    el('session').textContent = snap.sessionId || '--';
+    el('turn').textContent = snap.turn === undefined ? '--' : String(snap.turn);
+    el('toolCount').textContent = snap.toolCount === undefined ? '--' : String(snap.toolCount);
+    el('errorCode').textContent = snap.errorCode || '--';
+
+    var box = el('tools');
+    box.textContent = '';
+    var tools = Array.isArray(snap.tools) ? snap.tools : [];
+    if (tools.length === 0) {
+      var empty = document.createElement('span');
+      empty.className = 'empty';
+      empty.textContent = '暂无';
+      box.appendChild(empty);
+    } else {
+      tools.forEach(function (t) {
+        var row = document.createElement('div');
+        row.className = 'tool';
+        row.dataset.err = t.isError ? '1' : '0';
+        var b = document.createElement('b');
+        b.textContent = t.name || 'tool';
+        row.appendChild(b);
+        if (typeof t.ms === 'number') {
+          var ms = document.createElement('span');
+          ms.className = 'ms';
+          ms.textContent = t.ms + 'ms';
+          row.appendChild(ms);
+        }
+        box.appendChild(row);
+      });
+    }
+
+    el('updated').textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    el('raw').textContent = JSON.stringify(snap, null, 2);
+  }
+
+  /* 断线自动重连：悬浮窗必须能扛住宿主重启 */
+  var ws = null;
+  var retry = 0;
+  function connect() {
+    var url = 'ws://127.0.0.1:' + port + '/dsh-washer/stream?token=' + encodeURIComponent(token);
+    ws = new WebSocket(url);
+    ws.onopen = function () { setConn('open'); retry = 0; };
+    ws.onmessage = function (event) {
+      try { render(JSON.parse(event.data)); } catch (e) { /* 脏帧忽略 */ }
+    };
+    ws.onclose = function () {
+      setConn('lost');
+      retry = Math.min(retry + 1, 6);
+      setTimeout(connect, 300 * Math.pow(2, retry - 1));
+    };
+    ws.onerror = function () { setConn('lost'); };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

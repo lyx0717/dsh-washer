@@ -109,14 +109,29 @@ dsh plugin --profile desktop add /path/to/dsh-washer
 ## 开发
 
 ```bash
-node build.mjs                   # src/ → client.js（内联 core/css/svg，约 117KB）
+node build.mjs                   # src/ → client.js（内联 core/css/svg，约 126KB）
 node --test test/core.test.mjs   # 状态机单测（29 条）
-node test/render.mjs             # 行为测试（26 条）+ 生成 /tmp/washer-render 截图素材
+node --test test/host.test.mjs   # 宿主半单测（15 条）
+node test/render.mjs             # 行为测试（30 条）+ 生成 /tmp/washer-render 截图素材
+node debug/e2e.mjs               # 端到端：起真服务 + 模拟事件流，逐行打印状态迁移
 ```
 
 - `src/core.js` 纯函数状态机，node 下可直接测。
 - `src/client.template.js` 组件源码，`build.mjs` 把 core/CSS/SVG 内联成单文件 `client.js`。
 - `test/render.mjs` 是最小 React hooks 运行时：真跑 hooks、真 re-render，能测到时间轴行为。
+
+### 宿主半（`index.js`）：P1b 数据管道
+
+Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌面窗口（Electron）拿不到那些东西。所以宿主半在 Node 侧监听同一批事件、喂给**同一个** `src/core.js`，再通过本地 HTTP+WS 把快照推出去——两边判定只有一份实现，不会各写一套然后对不上。
+
+```yaml
+desktopOverlay: false        # 默认关；开了才占端口
+desktopOverlayPort: 0        # 0 = 系统分配，日志里打印实际地址
+```
+
+- 只绑 `127.0.0.1`，每次启动生成随机 token，`/dsh-washer/state`、`/dsh-washer/health`、`WS /dsh-washer/stream` 全部要 token（query 或 Bearer）。
+- 调试端：`debug/overlay.html?port=端口&token=令牌`，浏览器直接打开就能看状态流转，断线会自动指数退避重连。
+- 两个必须守住的点，都有回归测试：**工具返回后不能还停在 rinsing**（状态撒谎比不显示更糟）；**`step/*` 不能进节点序列**——`deriveState` 用「最后一个节点是不是产出类节点」判断走到哪，`step-*` 不在白名单里，混进去会让状态从 washing 倒退成 starting。
 
 ### 调试：插件"不见了"先看这里
 

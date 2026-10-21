@@ -47,4 +47,6 @@ for (const token of ['/*__CORE__*/', '__SPRITE__', '__MACHINE__', '__CSS__']) {
 }
 
 writeFileSync(join(here, 'client.js'), out);
-console.log('client.js written:', out.length, 'bytes');
+// out.length 是字符数，中文占 3 字节，直接拿它当文件大小会少报 8%
+const bytes = Buffer.byteLength(out, 'utf8');
+console.log('client.js written:', bytes, 'bytes');

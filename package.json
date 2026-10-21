@@ -21,7 +21,8 @@
     "icon.svg",
     "locale/*.json",
     "README.md",
-    "docs/*.png"
+    "docs/*.png",
+    "debug/overlay.html"
   ],
   "dsh": {
     "bundle": {
