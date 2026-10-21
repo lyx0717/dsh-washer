@@ -12,9 +12,16 @@ import { request as httpRequest } from 'node:http';
 
 import { foldEvent, encodeWsText, apply, isOwnEndpoint } from '../index.js';
 
-/** 测试专用端点路径：绝不能碰 ~/.dsh 下的真实文件（宿主服务在用它） */
-const TEST_ENDPOINT = process.env.DSH_WASHER_ENDPOINT_FILE
-  || '/tmp/dsh-washer-test-endpoint.json';
+/**
+ * 测试专用端点路径：绝不能碰 ~/.dsh 下的真实文件（宿主服务在用它）。
+ *
+ * 这里在**模块加载时**就设好，而不是靠每个用例记得调 useTestEndpoint()。
+ * 曾经是后者：新增用例忘了调，apply() 一跑就把运行中宿主的端点文件
+ * 覆盖成测试实例的 pid/端口，测试退出后那份记录成了死数据，
+ * 悬浮窗只能显示"未连接"。忘一次就踩一次，所以改成加载即生效。
+ */
+const TEST_ENDPOINT = '/tmp/dsh-washer-test-endpoint.json';
+process.env.DSH_WASHER_ENDPOINT_FILE = TEST_ENDPOINT;
 
 function useTestEndpoint() {
   process.env.DSH_WASHER_ENDPOINT_FILE = TEST_ENDPOINT;
@@ -409,8 +416,8 @@ test('计时真的会走：turnTimings 必须用 core.js 认的结构', () => {
 test('端点文件里记的端口必须是真正 listen 的那个', async () => {
   // 早期在 listen 回调外落盘，port 可能还是探活阶段的临时值，
   // 文件里记着一个没人监听的端口，悬浮窗连上去永远"未连接"。实测踩过一次。
-  process.env.DSH_WASHER_ENDPOINT_FILE = '/tmp/dsh-washer-test-endpoint2.json';
-  const file = process.env.DSH_WASHER_ENDPOINT_FILE;
+  useTestEndpoint();
+  const file = TEST_ENDPOINT;
   const { rmSync, readFileSync } = await import('node:fs');
   rmSync(file, { force: true });
 
