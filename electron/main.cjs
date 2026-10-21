@@ -22,7 +22,7 @@ const ENDPOINT_FILE = process.env.DSH_WASHER_ENDPOINT_FILE
  * 但拖拽区（-webkit-app-region）会连带变大——所以宁可按内容收紧。
  */
 const WIN_WIDTH = 132;
-const WIN_HEIGHT = 196;
+const WIN_HEIGHT = 200;
 /** 位置记忆；写在这里省一个持久化模块 */
 const POS_FILE = join(homedir(), '.dsh', 'dsh-washer-window.json');
 
@@ -67,6 +67,41 @@ function readPosition() {
   return null;
 }
 
+/**
+ * 拖动结束后把窗口贴到最近的屏幕边缘。
+ *
+ * 阈值 24pt：小于这个距离手感上是"我想贴边"，大于它则是"我就想放这儿"。
+ * 用 getDisplayMatching 而不是主屏，多显示器时贴着的那块屏才是参照物。
+ */
+const SNAP_DISTANCE = 24;
+
+let snapping = false;
+function snapToEdges() {
+  if (win === null || win.isDestroyed()) return;
+  // 防重入：setPosition 会再次触发 'moved'，不拦住就会无限自我推动，
+  // 实测窗口会被一路推到屏幕外。
+  if (snapping) return;
+  const [x, y] = win.getPosition();
+  const display = screen.getDisplayMatching({ x, y, width: WIN_WIDTH, height: WIN_HEIGHT });
+  const a = display.workArea;
+  const right = a.x + a.width - WIN_WIDTH;
+  const bottom = a.y + a.height - WIN_HEIGHT;
+  let nx = x;
+  let ny = y;
+  if (Math.abs(x - a.x) < SNAP_DISTANCE) nx = a.x;
+  else if (Math.abs(x - right) < SNAP_DISTANCE) nx = right;
+  if (Math.abs(y - a.y) < SNAP_DISTANCE) ny = a.y;
+  else if (Math.abs(y - bottom) < SNAP_DISTANCE) ny = bottom;
+  if (nx !== x || ny !== y) {
+    snapping = true;
+    try { win.setPosition(nx, ny); } finally {
+      // 等这一轮 moved 事件派发完再放开，否则同步 setPosition 后的 moved
+      // 会在 finally 里被漏放行
+      setTimeout(() => { snapping = false; }, 0);
+    }
+  }
+}
+
 function savePosition() {
   if (win === null || win.isDestroyed()) return;
   const [x, y] = win.getPosition();
@@ -104,6 +139,13 @@ function setClickThrough(on) {
   if (win === null || win.isDestroyed()) return;
   win.webContents.send('washer:click-through', clickThrough);
   updateEscapeShortcut();
+  /*
+   * 切换完必须立刻按一次区域规则。
+   * 之前漏了这行：applyIgnoreRegions 只在 mousemove 里被调，而双击进入穿透
+   * 的那一瞬间光标是静止的 —— 没有 mousemove，setIgnoreMouseEvents 就没被调用，
+   * 于是"双击没反应"。点角落退出同理。切态之后立刻同步一次，不依赖鼠标移动。
+   */
+  applyIgnoreRegions();
 }
 
 /**
@@ -191,7 +233,11 @@ function createWindow() {
     win.show();
   });
 
-  win.on('moved', savePosition);
+  // 'moved' 在拖动结束时才稳定触发，正好是磁吸的时机
+  win.on('moved', () => {
+    snapToEdges();
+    savePosition();
+  });
   win.on('closed', () => { win = null; });
 
   // 拖窗外链用系统浏览器打开，不在悬浮窗里导航
