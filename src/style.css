@@ -126,15 +126,8 @@
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
-  transition: background-color 0.16s ease, border-color 0.16s ease;
 }
 
-.dw-strip:hover { background: var(--dw-hover); }
-.dw-strip:focus-visible {
-  outline: 2px solid var(--dw-run);
-  outline-offset: 2px;
-}
 
 .dw-sprite {
   flex: none;
@@ -200,150 +193,6 @@
   animation: dw-pulse 1.6s ease-in-out infinite;
 }
 
-/* ---------- M / L 档：展开卡 ---------- */
-
-.dw-card {
-  box-sizing: border-box;
-  /* M 档内容自然宽度约 96(机器)+12(gap)+130(文字)+28(内边距)=266，
-     固定 322 会在右侧留 56px 空白。L 档有其他内容，用下面的宽档规则放宽。 */
-  width: max-content;
-  min-width: 248px;
-  max-width: 322px;
-  max-width: 100%;
-  padding: 12px 14px 13px;
-  border: 1px solid var(--dw-line);
-  border-radius: 14px;
-  background: var(--dw-card);
-  box-shadow: var(--dw-shadow);
-  animation: dw-card-in 0.24s cubic-bezier(0.3, 0.8, 0.3, 1);
-}
-
-.dw-card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.dw-machine {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.dw-meta {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding-top: 2px;
-}
-.dw-meta-title {
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--dw-t1);
-}
-.dw-meta-sub {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--dw-t2);
-  font-variant-numeric: tabular-nums;
-}
-.dw-meta-sub[data-tone='warn'] { color: var(--dw-sig-wait); }
-.dw-meta-sub[data-tone='error'] { color: var(--dw-sig-err); }
-
-.dw-badge {
-  align-self: flex-start;
-  flex: none;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.5;
-  color: var(--dw-sig);
-  background: color-mix(in srgb, var(--dw-sig) 12%, transparent);
-}
-@supports not (background: color-mix(in srgb, red 10%, transparent)) {
-  .dw-badge { background: transparent; border: 1px solid var(--dw-sig); }
-}
-
-/* 工具流水 */
-.dw-tools {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 11px;
-  padding-top: 10px;
-  border-top: 1px solid var(--dw-line);
-}
-.dw-tool {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--dw-t2);
-}
-.dw-tool-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  color: var(--dw-t1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.dw-tool-dur {
-  flex: none;
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  color: var(--dw-t2);
-}
-.dw-tool-mark {
-  flex: none;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--dw-ok);
-}
-.dw-tool-mark[data-error='1'] { background: var(--dw-err); }
-
-/* 指标行 */
-.dw-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid var(--dw-line);
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--dw-t2);
-  font-variant-numeric: tabular-nums;
-}
-.dw-stat b {
-  font-weight: 600;
-  color: var(--dw-t1);
-}
-
-.dw-empty {
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid var(--dw-line);
-  font-size: 11px;
-  color: var(--dw-t2);
-}
-
-/* 说明条（L 档：本插件的诚实声明——状态全部由宿主事件推导） */
-.dw-foot {
-  margin-top: 9px;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--dw-t2);
-  opacity: 0.85;
-}
-
 @keyframes dw-blink {
   0%, 60% { opacity: 1; }
   61%, 100% { opacity: 0.3; }
@@ -352,21 +201,20 @@
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.45; transform: scale(0.82); }
 }
-@keyframes dw-card-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
 
-/* 降级：尊重系统「减少动态效果」，同时支持插件配置 reduceMotion
+/* 降级：尊重系统「减少动态效果」
  *
  * 这里**不能**用 `.dsh-washer *` 一把梭哈：
  * checklist A4 明确要求「滚筒不转，但状态文字仍在变、指示灯和水位变化仍在」——
  * 指示灯闪烁、水位/进度条过渡是**状态信息**，不是装饰；通配停掉它们等于
  * 把「洗衣机在转」和「Agent 在干活」两个信号一起抹了，用户反而看不出状态。
  *
- * 所以只停「装饰性运动」：滚筒旋转、衣物翻滚、气泡上浮、整机抖动、卡片入场。
- * 这些在减弱动态效果时是会引发不适的连续运动，停掉无信息损失。
- * 指示灯（led/dw-dot/px-led）与水位、进度条**故意不列**，让它们继续动。
+ * 所以只停「装饰性运动」：滚筒旋转、衣物翻滚、气泡上浮、整机抖动。
+ * 指示灯（led/dw-dot/px-led）与水位**故意不列**，让它们继续动。
+ *
+ * 说明：原先还有插件配置 reduceMotion 的三态（始终/从不/跟随系统），
+ * 已按用户要求整体删除窗口——「从不」会让无视系统无障碍设置的人难受，
+ * 「始终」又把状态动效也冻住。现在只跟随系统，旗子保留供 data 属性使用。
  */
 @media (prefers-reduced-motion: reduce) {
   .dsh-washer .dw-pw .drum,
@@ -376,8 +224,7 @@
   .dsh-washer .dw-pw[data-state='spinning'],
   .dsh-washer .dw-aw-drum,
   .dsh-washer .dw-aw-ring::after,
-  .dsh-washer .dw-aw-clothes i,
-  .dsh-washer .dw-card {
+  .dsh-washer .dw-aw-clothes i {
     animation: none !important;
   }
 }
@@ -388,8 +235,7 @@
 .dsh-washer[data-reduce-motion='1'] .dw-pw[data-state='spinning'],
 .dsh-washer[data-reduce-motion='1'] .dw-aw-drum,
 .dsh-washer[data-reduce-motion='1'] .dw-aw-ring::after,
-.dsh-washer[data-reduce-motion='1'] .dw-aw-clothes i,
-.dsh-washer[data-reduce-motion='1'] .dw-card {
+.dsh-washer[data-reduce-motion='1'] .dw-aw-clothes i {
   animation: none !important;
 }
 
@@ -465,39 +311,6 @@
 .dsh-washer[data-variant='header'] .dw-t2 {
   display: none;
 }
-.dsh-washer[data-variant='header'] .dw-card {
-  display: none;
-}
-
-/* ------------------------------------------------------------------ *
- * 故障解释块：错误码对用户没有信息量，这里把它翻译成「发生了什么 + 怎么办」
- * ------------------------------------------------------------------ */
-.dw-err {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--dw-sig-err, #d94a4f) 38%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--dw-sig-err, #d94a4f) 8%, transparent);
-}
-.dw-err-code {
-  color: var(--dw-sig-err, #d94a4f);
-  font: 600 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.04em;
-}
-.dw-err-title {
-  color: var(--dw-t1);
-  font-size: 12px;
-  font-weight: 600;
-}
-.dw-err-hint {
-  color: var(--dw-t2);
-  font-size: 11px;
-  line-height: 1.35;
-}
 
 /* ------------------------------------------------------------------ *
  * overlay 座位（mode:'overlay'）
@@ -525,151 +338,3 @@
   display: none;
 }
 
-/* ------------------------------------------------------------------ *
- * 外观切换行（只在 L 档明细里出现）
- * ------------------------------------------------------------------ */
-.dw-skinrow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 2px 0;
-}
-.dw-skinrow-label {
-  color: var(--dw-t2);
-  font-size: 11px;
-}
-.dw-seg {
-  display: inline-flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.dw-seg-btn {
-  appearance: none;
-  /* 每个选项都是独立按钮：给实体底色 + 边框，而不是靠外层 1px 细边筐住一排纯文字。
-     用户反馈"设置页选项都是文字不是按钮"，就是这里太素了。 */
-  border: 1px solid var(--dw-line);
-  background: var(--dw-card);
-  color: var(--dw-t2);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  line-height: 1;
-  padding: 6px 10px;
-  border-radius: 7px;
-  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
-}
-.dw-seg-btn[data-on='1'] {
-  background: var(--dw-run);
-  border-color: var(--dw-run);
-  color: #fff;
-  font-weight: 600;
-}
-.dw-seg-btn:hover:not([data-on='1']) {
-  background: var(--dw-hover);
-  color: var(--dw-t1);
-  border-color: var(--dw-t2);
-}
-.dw-seg-btn:active { transform: translateY(0.5px); }
-.dw-seg-btn:focus-visible {
-  outline: 2px solid var(--dw-run);
-  outline-offset: 2px;
-}
-
-/* ------------------------------------------------------------------ *
- * 设置页（settings.section）
- * 宿主只给一个空白页位，排版全由插件负责；沿用 --dsw-alias-* token。
- * ------------------------------------------------------------------ */
-.dw-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 4px 2px 16px;
-  max-width: 640px;
-  color: var(--dw-t1);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.dw-set-title {
-  margin: 0 0 2px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--dw-t1);
-}
-
-.dw-set-intro,
-.dw-set-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--dw-t2);
-}
-
-.dw-set-hint { margin-top: -2px; }
-
-.dw-set-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 44px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--dw-line);
-}
-
-.dw-set-row:last-of-type { border-bottom: 0; }
-
-.dw-set-label {
-  flex: 0 0 auto;
-  font-size: 13px;
-  color: var(--dw-t1);
-}
-
-.dw-set-control {
-  display: flex;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
-/* L 档内容更多（统计行 / 外观切换），放宽到固定宽度 */
-.dsh-washer[data-level='L'] .dw-card {
-  width: 322px;
-}
-
-/* 卡片底部：折叠按钮贴右下角。
-   为什么要有它：停靠条展开成卡片后，原本没有任何收起入口（用户反馈"展开后无法缩小"）。 */
-.dw-footbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
-.dw-fold {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 22px;
-  padding: 0;
-  border: 1px solid var(--dw-line);
-  border-radius: 6px;
-  background: var(--dw-card);
-  color: var(--dw-t2);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  line-height: 1;
-  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
-}
-.dw-fold:hover {
-  background: var(--dw-hover);
-  color: var(--dw-t1);
-  border-color: var(--dw-t2);
-}
-.dw-fold:focus-visible {
-  outline: 2px solid var(--dw-run);
-  outline-offset: 2px;
-}
-.dw-fold-icon { display: block; transform: translateY(-1px); }

@@ -20,6 +20,19 @@ contextBridge.exposeInMainWorld('washerHost', {
   showMenu: () => ipcRenderer.send('washer:show-menu'),
   /** 退出 */
   quit: () => ipcRenderer.send('washer:quit'),
+  /** 切换尺寸档位：'normal' | 'tiny' */
+  setSize: (mode) => ipcRenderer.send('washer:set-size', mode),
+  /** 换肤 */
+  setSkin: (name) => ipcRenderer.send('washer:set-skin', name),
+  /** 订阅偏好变化（尺寸 / 皮肤） */
+  onPrefs: (fn) => {
+    const handler = (_event, prefs) => fn(prefs);
+    ipcRenderer.on('washer:prefs', handler);
+    return () => ipcRenderer.removeListener('washer:prefs', handler);
+  },
+  /** 打开/关闭详情面板 */
+  openDetail: () => ipcRenderer.send('washer:open-detail'),
+  closeDetail: () => ipcRenderer.send('washer:close-detail'),
   /** 订阅"快捷键注册失败"的通知 */
   onEscapeUnavailable: (fn) => {
     const handler = (_event, accel) => fn(accel);

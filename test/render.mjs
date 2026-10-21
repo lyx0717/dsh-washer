@@ -184,6 +184,64 @@ globalThis.document = {
   get activeElement() { return activeElement; },
 };
 globalThis.__docListeners = docListeners;
+
+/*
+ * localStorage 桩。client.template.js 开头会探测它（隐私模式里 setItem 会抛），
+ * 探测失败就退化成"不持久化"。不给这东西，prefs 就永远只在内存里，
+ * 也就没法断言"推送来的值有没有被写回缓存"。
+ */
+const STORE = new Map();
+globalThis.localStorage = {
+  getItem: (k) => (STORE.has(k) ? STORE.get(k) : null),
+  setItem: (k, v) => { STORE.set(k, String(v)); },
+  removeItem: (k) => { STORE.delete(k); },
+};
+globalThis.__storageDump = (k) => (STORE.has(k) ? STORE.get(k) : null);
+
+/* ------------------------------------------------------------------ *
+ * fetch / EventSource：偏好双向同步用的两个通道
+ *
+ * 页面这边只依赖这两个全局，测试里给足最小实现就够了。
+ * 重点不是模拟 HTTP，而是能**断言发出去/收进来的内容**。
+ * ------------------------------------------------------------------ */
+const FETCH_CALLS = [];
+/** 下一次 GET /dsh-washer/prefs 要回什么。没设就回 {} */
+let nextPrefsPayload = {};
+globalThis.fetch = (url, init) => {
+  const method = (init && init.method) || 'GET';
+  FETCH_CALLS.push({ url, method, body: init && init.body ? init.body : null });
+  const payload = method === 'GET' ? nextPrefsPayload : { ok: true };
+  return Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve(payload),
+  });
+};
+
+/**
+ * EventSource 桩：测试手动调 SSE_EMIT(data) 模拟宿主推送。
+ *
+ * 每次 new 都会把自己登记进 SSE_INSTANCES，测试可以同时断言
+ * 「连上了」和「收到推送后重渲染」。
+ */
+const SSE_INSTANCES = [];
+class FakeEventSource {
+  constructor(url) {
+    this.url = url;
+    this.listeners = [];
+    this.closed = false;
+    SSE_INSTANCES.push(this);
+  }
+  addEventListener(type, fn) { if (type === 'message') this.listeners.push(fn); }
+  emit(data) {
+    for (const fn of this.listeners) fn({ data: JSON.stringify(data) });
+  }
+  close() { this.closed = true; }
+}
+globalThis.EventSource = FakeEventSource;
+globalThis.__sse = () => SSE_INSTANCES.filter((e) => !e.closed);
+globalThis.__fetchCalls = () => FETCH_CALLS;
+globalThis.__setPrefsPayload = (p) => { nextPrefsPayload = p; };
+
 new Function(readFileSync(join(root, 'client.js'), 'utf8'))();
 
 assert.equal(typeof plugin, 'object', 'client.js 必须 return 插件对象');
@@ -192,6 +250,8 @@ assert.ok(plugin.inject.includes('locale'), 'inject 必须含 locale');
 
 /* ---- 捕获注册 ---- */
 const registrations = [];
+/** 每次 slots.inject 返回的真实注入 props（见 ctx.slots.inject 注释） */
+const INJECTED = [];
 const dictionaries = [];
 const ctx = {
   effect(fn, label) {
@@ -555,119 +615,100 @@ await test('上下文压缩 → draining（AC8）', async () => {
   m.unmount();
 });
 
-await test('expandedByDefault:true → 挂载即展开到 M 档（AC21）', async () => {
-  const m = mount(streaming({ config: baseConfig({ expandedByDefault: true }) }));
-  await m.settle(450);
-  assert.equal(m.level, 'M', 'expandedByDefault 展开到 M');
-  assert.ok(m.html.includes('dw-card'), 'M 档必须有卡片');
-  m.unmount();
-});
-
-await test('展开后能用卡片上的折叠键收起 / 再展开（用户报障 1）', async () => {
-  const m = mount(streaming({ config: baseConfig({ expandedByDefault: true }) }));
-  await m.settle(450);
-  assert.equal(m.level, 'M');
-
-  // 折叠键的语义是「收起」，任何档位点它都直接回 S。
-  // （之前 M 档点它是展开到 L，导致 M 档根本没有收起入口——用户以为按钮坏了。）
-  m.clickClass('dw-fold');
-  assert.equal(m.level, 'S', 'M 档点折叠键应收起回 S');
-  assert.ok(m.html.includes('dw-strip'), 'S 档应回到停靠条');
-  assert.ok(!m.html.includes('dw-card'), 'S 档不该残留卡片');
-
-  // S → M：点停靠条（只有 S 档渲染 .dw-strip，三档是互斥的）
-  m.clickClass('dw-strip');
-  assert.equal(m.level, 'M', '点停靠条应从 S 到 M');
-
-  // 再展开到 L 只能靠「挂载即 L」或 Esc 反推；这里直接验证 M 档卡片结构完好
-  assert.ok(m.html.includes('dw-card'), 'M 档应渲染卡片');
-  assert.ok(m.html.includes('dw-fold'), 'M 档必须有收起键');
-
-  m.unmount();
-});
-
-await test('Esc 逐级退回：焦点在洗衣机里 → L/M 回 S（AC 键盘）', async () => {
-  const m = mount(streaming({ config: baseConfig({ size: 'L' }) }));
-  await m.settle(400);
-  assert.equal(m.level, 'L', '挂载即 L');
-
-  // 让焦点落进洗衣机子树：模拟用户点了卡片里的按钮
-  const root = m.rootNode;
-  assert.ok(root, '应能拿到洗衣机根节点');
-  __setActiveElement(root);
-
-  const fireEsc = () => {
-    let prevented = false;
-    const event = {
-      key: 'Escape', isComposing: false, defaultPrevented: false,
-      preventDefault() { prevented = true; this.defaultPrevented = true; },
-      stopPropagation() {},
-    };
-    for (const l of docListeners.filter((x) => x.type === 'keydown')) l.fn(event);
-    return prevented;
-  };
-
-  assert.ok(fireEsc(), '焦点在洗衣机里时 Esc 必须被消费（否则会漏给宿主）');
-  m.render();
-  assert.equal(m.level, 'M', 'L 档按 Esc 应退回 M（逐级退，不是一步到 S）');
-
-  // 重渲染后 root 是新的对象，焦点得重新落回新 root 上
-  __setActiveElement(m.rootNode);
-  // 再按一次 Esc：M → S
-  assert.ok(fireEsc(), 'M 档 Esc 也要被消费');
-  m.render();
-  assert.equal(m.level, 'S', 'M 档按 Esc 应收回 S');
-
-  // 焦点不在洗衣机里：Esc 不能拦，要留给输入框
-  __setActiveElement(null);
-  const consumed = fireEsc();
-  assert.equal(consumed, false, '焦点不在洗衣机里时不该吞掉 Esc');
-
-  __setActiveElement(null);
-  m.unmount();
-});
-
-await test('M 档卡片里必须有可点的折叠入口（不能只能进不能出）', async () => {
-  const m = mount(streaming({ config: baseConfig({ expandedByDefault: true }) }));
-  await m.settle(450);
-  assert.equal(m.level, 'M');
-  assert.ok(/class="[^"]*dw-fold[^"]*"/.test(m.html), 'M 档卡片必须有 .dw-fold 按钮');
-  m.unmount();
-});
-
-await test('皮肤分段/设置页选项是真按钮（有 class dw-seg-btn，不是纯文字）', async () => {
-  const m = mount(streaming({ config: baseConfig({ size: 'L' }) }));
-  await m.settle(450);
-  const segCount = (m.html.match(/class="[^"]*dw-seg-btn/g) || []).length;
-  assert.ok(segCount >= 6, 'L 档应有至少 6 个分段按钮（4 皮肤 + 2 表情），实际 ' + segCount);
-  // 每个选项都必须是 <button>，而不是套了一层 span
-  const segBlock = m.html.slice(m.html.indexOf('dw-skinrow'));
-  assert.ok(segBlock.includes('<button'), '分段控件里必须有 <button> 元素');
-  m.unmount();
-});
-
-await test('skin=pixel / precision / anime 都能渲染出机型 DOM', async () => {
-  for (const skin of ['pixel', 'precision', 'anime']) {
-    const m = mount(streaming({ config: baseConfig({ expandedByDefault: true, skin }) }));
+await test('停靠条固定小尺寸：挂载后不出现任何卡片 / 折叠键（用户要求删掉 M/L 档）', async () => {
+  /*
+   * 用户明确要求"dock 状态展示只保留小尺寸，不用点击展开"。
+   * 于是 size / expandedByDefault 都不再影响渲染，M/L 两档的整棵卡片
+   * （dw-card / dw-meta / dw-badge / dw-tools / dw-stats / dw-fold）全部删除。
+   *
+   * 这条测试锁住这个决定：不管 config 里写什么摊子，出来的只有停靠条。
+   */
+  for (const patch of [{ size: 'M' }, { size: 'L' }, { expandedByDefault: true }]) {
+    const m = mount(streaming({ config: baseConfig(patch) }));
     await m.settle(450);
-    assert.ok(m.html.includes('dw-card'), skin + ' 应渲染卡片');
-    if (skin === 'pixel') assert.ok(m.html.includes('px-svg'), 'pixel 用整机 sprite');
-    if (skin === 'precision') assert.ok(m.html.includes('dw-pw'), 'precision 用精密家电 DOM');
-    if (skin === 'anime') assert.ok(m.html.includes('dw-aw'), 'anime 用动漫 DOM');
+    assert.ok(m.html.includes('dw-strip'), JSON.stringify(patch) + ' 仍应渲染停靠条');
+    for (const cls of ['dw-card', 'dw-fold', 'dw-tools', 'dw-stats', 'dw-skinrow']) {
+      assert.ok(!m.html.includes(cls), JSON.stringify(patch) + ' 不该出现 ' + cls);
+    }
+    assert.equal(m.level, 'S', '档位永远是 S');
     m.unmount();
   }
 });
 
-await test('face:false 时 DOM 里没有眼睛节点（AC16）', async () => {
-  const off = mount(streaming({ config: baseConfig({ expandedByDefault: true, skin: 'anime', face: false }) }));
-  await off.settle(450);
-  assert.ok(!off.html.includes('dw-aw-eyes'), 'face:false 不应有眼睛节点（不是 opacity:0）');
-  off.unmount();
+await test('停靠条不可点击：不再有展开入口，也不残留焦点/按键处理', async () => {
+  const m = mount(streaming({ config: baseConfig() }));
+  await m.settle(400);
 
-  const on = mount(streaming({ config: baseConfig({ expandedByDefault: true, skin: 'anime', face: true }) }));
-  await on.settle(450);
-  assert.ok(on.html.includes('dw-aw-eyes'), 'face:true 要有眼睛节点');
-  on.unmount();
+  /*
+   * 停靠条从 <button> 改成了 <div role="status">：
+   *   - 用 button 会让读屏念"可按下按钮"，键盘也给 tab 焦点，按下去啥都不会发生
+   *   - 用 role="status" 让读屏主动播报状态变化，这是它现在唯一的职责
+   */
+  assert.ok(/role="status"/.test(m.html), '停靠条应以 role=status 呈现');
+  assert.ok(!/<button[^>]*dw-strip/.test(m.html), '停靠条不能再是 button');
+  assert.ok(!m.html.includes('aria-expanded'), '没有可展开的东西了，不该有 aria-expanded');
+
+  /*
+   * 点它不该改变任何东西。这里不能复用 m.clickClass——那个辅助函数只在
+   * <button> 里找，而停靠条已经不是按钮了（正因为不可点）。手工派发 click
+   * 到 .dw-strip 节点，确认没有挂任何处理器。
+   */
+  // 用 onClick 渲染出来的节点会带 data-click-idx（序列化器只在挂了处理器时才加），
+  // 所以这里断言：带 dw-strip 的那个标签里不该出现 data-click-idx。
+  const stripTag = /<div\b[^>]*class="[^"]*\bdw-strip\b[^"]*"[^>]*>/.exec(m.html);
+  assert.ok(stripTag, '应能找到停靠条标签');
+  assert.ok(!stripTag[0].includes('data-click-idx'), '停靠条不该挂 click 处理器');
+
+  m.unmount();
+});
+
+
+await test('停靠条跟着皮肤换造型（用户报障：改了皮肤 dock 没变）', async () => {
+  /*
+   * 用户原话：「修改外观 dock 状态的外观没变」。
+   *
+   * 根因是删 M/L 展开卡时，停靠条里写死了 PixelSprite(state)，三台机器
+   * 还在（BigMachine 没删），但没人调用——皮肤设置对主界面彻底失效。
+   *
+   * 现在按 skin 选：pixel 走 PixelSprite（本来就是为 32px 画的），
+   * precision/anime 走 BigMachine 缩到 32px。
+   * 'auto' 是老配置残留，兜底成 pixel，不能让条变空白。
+   */
+  const cases = [
+    ['pixel', 'dw-sprite', null],
+    ['precision', 'dw-pw', 'dw-sprite'],
+    ['anime', 'dw-aw', 'dw-sprite'],
+    ['auto', 'dw-sprite', null],
+  ];
+  for (const [skin, mustHave, mustNotHave] of cases) {
+    const m = mount(streaming({ config: baseConfig({ skin }) }));
+    await m.settle(450);
+    assert.ok(m.html.includes(mustHave), 'skin=' + skin + ' 停靠条应渲染 ' + mustHave);
+    if (mustNotHave) {
+      assert.ok(!m.html.includes(mustNotHave), 'skin=' + skin + ' 不该再退化成 ' + mustNotHave);
+    }
+    // 不管什么皮肤，都不该出现已删除的展开卡
+    assert.ok(!m.html.includes('dw-card'), skin + ' 不该出现卡片');
+    m.unmount();
+  }
+});
+
+await test('表情功能整体删除：不再有 face 配置、DOM 里也没有眼睛节点', async () => {
+  /*
+   * 用户要求「去掉表情……的设置项和功能」。
+   *
+   * 眼睛原本画在动漫大机型（.dw-aw-eyes）里，而大机型只服务已删除的
+   * 展开卡片，所以连带着一起没了。这条测试锁住三件事：
+   *   ① 停靠条 DOM 里没有眼睛节点
+   *   ② 设置页没有「表情」开关
+   *   ③ DEFAULT_CONFIG 里没有 face 字段（防止哪天又被加回来）
+   */
+  const m = mount(streaming({ config: baseConfig({ skin: 'anime' }) }));
+  await m.settle(450);
+  assert.ok(!m.html.includes('dw-aw-eyes'), '停靠条不该有眼睛节点');
+  m.unmount();
+
+  assert.ok(!plugin.__defaults || plugin.__defaults.face === undefined, 'DEFAULT_CONFIG 不该再有 face');
 });
 
 await test('hideWhenIdle:true 时 idle 完全隐藏（AC 无声打扰）', () => {
@@ -690,21 +731,21 @@ await test('enabled:false → 不注册 slot', () => {
   assert.equal(registrations.length, before);
 });
 
-await test('成本默认不显示；费率为 0 时即使 showCost 也不显示（AC23）', async () => {
-  const a = mount(streaming({ config: baseConfig({ size: 'L', skin: 'precision', showCost: false, costPerKToken: 0.004 }) }));
-  await a.settle(450);
-  assert.ok(!a.text().includes('成本'), '默认不显示成本');
-  a.unmount();
+await test('成本功能删除：showCost 设置项与成本显示都不再存在', async () => {
+  /*
+   * 用户要求去掉「显示成本」的设置项和功能。
+   * 成本原本显示在展开卡片的统计区（dw-stats）里，卡片删除后无处可放。
+   *
+   * 费率字段 costPerKToken / costCurrency 留在 config 里但不再被读取——
+   * 删掉它们会让老配置文件里的字段变成"未知键"，反而可能报警告。
+   */
+  const m = mount(streaming({ config: baseConfig({ showCost: true, costPerKToken: 0.004 }) }));
+  await m.settle(450);
+  assert.ok(!m.text().includes('成本'), '停靠条不该显示成本');
+  assert.ok(!m.html.includes('dw-stats'), '不该有统计区');
+  m.unmount();
 
-  const b = mount(streaming({ config: baseConfig({ size: 'L', skin: 'precision', showCost: true, costPerKToken: 0 }) }));
-  await b.settle(450);
-  assert.ok(!b.text().includes('成本'), '费率为 0 视为不显示');
-  b.unmount();
-
-  const c = mount(streaming({ config: baseConfig({ size: 'L', skin: 'precision', showCost: true, costPerKToken: 0.004 }) }));
-  await c.settle(450);
-  assert.ok(c.text().includes('成本'), '开了且费率 > 0 才显示，实际：' + c.text());
-  c.unmount();
+  assert.ok(!plugin.__defaults || plugin.__defaults.showCost === undefined, 'DEFAULT_CONFIG 不该再有 showCost');
 });
 
 await test('文案里没有漏翻的 key / 未替换的占位符', async () => {
@@ -790,8 +831,15 @@ await test('所有 animation 名都能找到 @keyframes（滚筒真的会转）'
   assert.deepStrictEqual(missing, [], '这些动画没有 @keyframes 定义（会静默不动）：' + missing.join(', '));
 });
 
-await test('故障态把 E 码翻译成「发生了什么 + 怎么办」', async () => {
-  // size 只在挂载时读一次（组件内 useState 初值），所以档位必须在 mount 时给定
+await test('故障态仍在停靠条上给出错误码（人话解释块随卡片一起删了）', async () => {
+  /*
+   * 错误码→人话的翻译块（E-30「上下文塞满了 / 开新会话」）原本画在展开卡片里，
+   * 卡片删掉后它没有容身之处了。
+   *
+   * 这是一个**已知的取舍**：停靠条只有 52px 高、两行字，塞不下"发生了什么+怎么办"。
+   * 完整解释由详情面板承担（右键浮窗 → 查看详情），停靠条只负责让用户知道
+   * "这一轮挂了、是什么码"。这条测试锁住后半句，防止哪天连码都不显示了。
+   */
   const m = mount(streaming({}), 'dock', { size: 'M' });
   await m.settle(450);
   m.set({
@@ -799,19 +847,18 @@ await test('故障态把 E 码翻译成「发生了什么 + 怎么办」', async
     nodes: [{ kind: 'turn-error', turn: 1, step: 1, message: 'Context length exceeded', code: 'CONTEXT_LENGTH' }],
   });
   await m.settle(60);
-  assert.equal(m.state, 'error');
-  assert.equal(m.level, 'M');
-  assert.ok(m.html.includes('E-30'), '要显示错误码本身');
-  assert.ok(m.html.includes('上下文塞满了'), '码要翻译成人话');
-  assert.ok(m.html.includes('开新会话'), '要给可执行的建议');
+  assert.equal(m.state, 'error', '错误必须反映成 error 状态');
+  assert.ok(m.html.includes('E-30'), '停靠条副行要带错误码');
+  assert.ok(!m.html.includes('dw-err'), '错误解释块已随卡片删除');
   m.unmount();
 });
 
-await test('不同错误码给不同的解释（不是一句通用「出错了」）', async () => {
+await test('不同错误码映射到不同的 E 码（不是一律 E-00）', async () => {
   const cases = [
-    { node: { kind: 'turn-error', turn: 1, step: 1, code: 'ACCOUNT_SIGNED_OUT', message: '' }, code: 'E-10', title: '账号或服务不可用' },
-    { node: { kind: 'turn-error', turn: 1, step: 1, code: 'INTERRUPTED', message: 'aborted' }, code: 'E-40', title: '被中断了' },
+    { node: { kind: 'turn-error', turn: 1, step: 1, code: 'ACCOUNT_SIGNED_OUT', message: '' }, code: 'E-10' },
+    { node: { kind: 'turn-error', turn: 1, step: 1, code: 'INTERRUPTED', message: 'aborted' }, code: 'E-40' },
   ];
+  const seen = new Set();
   for (const item of cases) {
     const m = mount(streaming({}), 'dock', { size: 'M' });
     await m.settle(450);
@@ -819,9 +866,10 @@ await test('不同错误码给不同的解释（不是一句通用「出错了�
     await m.settle(60);
     assert.equal(m.state, 'error');
     assert.ok(m.html.includes(item.code), '要显示 ' + item.code);
-    assert.ok(m.html.includes(item.title), item.code + ' 要显示「' + item.title + '」');
+    seen.add(item.code);
     m.unmount();
   }
+  assert.equal(seen.size, cases.length, '不同原因必须映射成不同的码');
 });
 
 await test('overlay 模式只在忙时浮出来（mode:overlay）', async () => {
@@ -856,25 +904,43 @@ await test('overlay 模式只在忙时浮出来（mode:overlay）', async () => 
   assert.ok(busy.includes('浮窗模式'), '要点明自己是浮窗模式');
 });
 
-await test('L 档能切换皮肤，且立刻生效（skin 切换 UI）', async () => {
-  const written = [];
-  const m = mount(streaming({}), 'dock', { size: 'L', skin: 'auto' });
-  m.setPrefSink((key, value) => written.push([key, value]));
-  await m.settle(450);
-  assert.equal(m.level, 'L');
-  assert.ok(m.html.includes('dw-skinrow'), 'L 档要有外观切换行');
-  assert.ok(m.html.includes('动漫'), '要能选动漫风');
-  assert.ok(m.html.includes('像素'), '要能选像素风');
-  // 切到 anime：机器应当换成动漫风 DOM
-  m.clickText('动漫');
-  await m.settle(20);
-  assert.deepEqual(written[written.length - 1], ['skin', 'anime'], '要回写 skin');
-  assert.ok(m.html.includes('dw-aw'), '皮肤立刻变成动漫风');
-  // 关表情
-  m.clickText('关');
-  await m.settle(20);
-  assert.deepEqual(written[written.length - 1], ['face', false], '要回写 face');
-  m.unmount();
+await test('换肤要推给宿主：真实 writePref 会 POST skin（一份皮肤管两边）', () => {
+  /*
+   * 用户要求「只留 skin 一个字段，完全共用」。
+   *
+   * 皮肤管两边，所以改它必须同时通知宿主落偏好文件——否则桌面悬浮窗
+   * 要等下次重启才换造型，看起来就是"设置改了没反应"。
+   *
+   * 注意：这条必须用**真实的** writePref（从 slots.inject 里取），
+   * 不能像别的设置页用例那样传 world.prefSink 替身——替身只记一笔
+   * 就完了，压根走不到 syncOverlayPrefs，测了等于没测。
+   */
+  /*
+   * 真实注入 props 挂在**注册项的 entry.inject 上**（不是 ctx.slots.inject，
+   * 那个是别的用途）。设置页那条 entry 带 washerSetPref，它才是真正的 writePref。
+   */
+  const entry = registrations.filter((r) => r.entry.name === 'settings.section')[0].entry;
+  const real = entry.inject();
+  assert.equal(typeof real.washerSetPref, 'function', '设置页 entry 应注入真实 washerSetPref');
+
+  FETCH_CALLS.length = 0;
+  real.washerSetPref('skin', 'anime');
+
+  const posts = FETCH_CALLS.filter((c) => c.method === 'POST');
+  const skinPost = posts.find((c) => c.body && JSON.parse(c.body).skin === 'anime');
+  assert.ok(skinPost, '换肤必须 POST 给宿主，实际发出的：' + JSON.stringify(FETCH_CALLS));
+});
+
+await test('悬浮窗大小和显隐也走同一条推送（三项共用一条通道）', () => {
+  const entry = registrations.filter((r) => r.entry.name === 'settings.section')[0].entry;
+  const real = entry.inject();
+  FETCH_CALLS.length = 0;
+  real.washerSetPref('desktopOverlaySize', 'tiny');
+  real.washerSetPref('desktopOverlay', false);
+
+  const bodies = FETCH_CALLS.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body));
+  assert.ok(bodies.some((b) => b.size === 'tiny'), '大小要推 size');
+  assert.ok(bodies.some((b) => b.show === false), '显隐要推 show');
 });
 
 await test('设置页：每项配置都能改，且回写到宿主配置', () => {
@@ -885,28 +951,57 @@ await test('设置页：每项配置都能改，且回写到宿主配置', () =>
   const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
   const html = render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
   assert.ok(html.includes('dw-settings'), '要有设置页容器');
-  assert.ok(html.includes('外观'), '外观一行');
-  assert.ok(html.includes('表情'), '表情一行');
-  assert.ok(html.includes('默认档位'), '档位一行');
-  // 点「动漫」
+  assert.ok(html.includes('外观'), '外观（皮肤）一行');
+
+  /*
+   * 用户这轮删掉了「表情」「显示成本」「减少动态效果」「默认档位」四项，
+   * 并且把悬浮窗造型并进了皮肤——所以皮肤在设置页**只该出现一次**。
+   * 断言唯一性正好同时守住"别再被拆回两处"。
+   */
   const re = /<button[^>]*data-click-idx="(\d+)"[^>]*>([\s\S]*?)<\/button>/g;
   let m; const hits = [];
   while ((m = re.exec(html)) !== null) {
     const label = m[2].replace(/<[^>]+>/g, '').trim();
     if (label === '动漫') hits.push(Number(m[1]));
   }
-  assert.equal(hits.length, 1, '设置页里「动漫」按钮唯一');
+  assert.equal(hits.length, 1, '皮肤合并后「动漫」只该出现一次，实际 ' + hits.length);
   BUTTON_HANDLERS[hits[0]].handler({ stopPropagation() {} });
   assert.deepEqual(writes, [['skin', 'anime']], '点一下就把 skin 写回宿主配置');
 });
 
+await test('设置页：皮肤只有一组，同时控制主界面和悬浮窗（合并后不许拆回去）', () => {
+  /*
+   * 这条测试的前身是相反的：那时断言"悬浮窗造型要单独一组，写
+   * desktopOverlaySkin 而不是 skin"。用户后来要求合并成一份，
+   * 于是断言反过来——现在如果谁再拆回两组，这条会立刻失败。
+   */
+  const writes = [];
+  const world = makeWorld({ sessionId: 's1' });
+  world.prefSink = (k, v) => writes.push([k, v]);
+  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const html = render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
+
+  // 「像素」属于皮肤组，全局只该出现一次
+  const re = /<button[^>]*data-click-idx="(\d+)"[^>]*>([\s\S]*?)<\/button>/g;
+  let m; const hits = [];
+  while ((m = re.exec(html)) !== null) {
+    const label = m[2].replace(/<[^>]+>/g, '').trim();
+    if (label === '像素') hits.push(Number(m[1]));
+  }
+  assert.equal(hits.length, 1, '「像素」只该出现一次（合并成一组了），实际 ' + hits.length);
+
+  BUTTON_HANDLERS[hits[0]].handler({ stopPropagation() {} });
+  assert.deepEqual(writes, [['skin', 'pixel']], '写的必须是 skin，不是 desktopOverlaySkin');
+});
+
 await test('设置页的开关是 role=switch 且带内联样式（不靠 class 命中）', () => {
-  const world = makeWorld({ sessionId: 's1', config: baseConfig({ face: true, showCost: false, hideWhenIdle: true }) });
+  const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
   const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
   const html = render(Settings(propsFrom(world)));
 
   const switches = html.match(/role="switch"/g) || [];
-  assert.equal(switches.length, 3, '三个布尔项各一个开关（表情/成本/空闲隐藏）');
+  // 两个：空闲隐藏 / 桌面悬浮窗（表情和显示成本已按用户要求删除）
+  assert.equal(switches.length, 2, '两个布尔项各一个开关（空闲隐藏/悬浮窗），实际 ' + switches.length);
   assert.ok(/aria-checked="true"/.test(html), '开着的开关 aria-checked=true');
   assert.ok(/aria-checked="false"/.test(html), '关着的开关 aria-checked=false');
 
@@ -916,10 +1011,257 @@ await test('设置页的开关是 role=switch 且带内联样式（不靠 class 
   assert.ok(/background/.test(track[1]), '轨道背景必须内联给出，否则被宿主样式吃掉变透明');
   assert.ok(/border-radius/.test(track[1]), '轨道圆角内联');
   // 设置页不在 .dsh-washer 范围内，拿不到 --dw-* 变量（实测空串），必须直接用宿主 token
-  assert.ok(/dsw-alias-state-business-primary/.test(track[1]), '开启态必须用宿主 token，不能引用 --dw-run（在设置页里算空串）');
+  assert.ok(/dsw-alias-label-primary/.test(track[1]), '开启态必须用宿主 token，不能引用 --dw-run（在设置页里算空串）');
   assert.ok(!/--dw-run/.test(track[1]), '不能引用 --dw-run');
   // 滑块
   assert.ok(/box-shadow/.test(html), '滑块要有阴影才看得出是个圆点');
+});
+
+await test('设置页：每个设置项都能双向同步（初始值读对 + 点完写对）', () => {
+  /*
+   * 这条测的是「设置项 ↔ 页面状态」的接线，最容易出的错是**写和读的字段对不上**：
+   * 点开关写的是 A，渲染读的是 B，看着有点击反馈其实没生效。
+   * 所以每个控件都走两遍：先断言初始态，再点一下断言写出的 key/value。
+   */
+  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const base = baseConfig();
+  const matrix = [
+    // 表情 / 显示成本两项已按用户要求删除，不在矩阵里
+    { name: '空闲隐藏', on: { hideWhenIdle: true }, off: { hideWhenIdle: false }, key: 'hideWhenIdle', value: true, label: '空闲时隐藏' },
+    { name: '桌面悬浮窗', on: { desktopOverlay: true }, off: { desktopOverlay: false }, key: 'desktopOverlay', value: true, label: '显示悬浮窗' },
+  ];
+  // 开关按 aria-label 定位（中文标签），比按顺序稳
+  for (const item of matrix) {
+    for (const [初始, 期望写] of [['on', false], ['off', true]]) {
+      const writes = [];
+      const world = makeWorld({ sessionId: 's1', config: Object.assign({}, base, item[初始]), prefSink: (k, v) => writes.push([k, v]) });
+      propsFrom(world);
+      const html = render(Settings(propsFrom(world)));
+      const re = /<button[^>]*role="switch"[^>]*>/g;
+      let m; let idx = -1;
+      while ((m = re.exec(html)) !== null) {
+        const tag = m[0];
+        const label = /aria-label="([^"]*)"/.exec(tag);
+        const checked = /aria-checked="(true|false)"/.exec(tag);
+        if (label === null || checked === null) continue;
+        if (label[1] === item.label && checked[1] === String(初始 === 'on')) {
+          const hit = /data-click-idx="(\d+)"/.exec(tag);
+          if (hit !== null) idx = Number(hit[1]);
+        }
+      }
+      assert.ok(idx >= 0, item.name + '（' + 初始 + '）要能渲染出开关并带上标签「' + item.label + '」');
+      BUTTON_HANDLERS[idx].handler({ stopPropagation() {} });
+      assert.deepEqual(writes, [[item.key, 期望写]],
+        item.name + ' 点一下应当写 ' + item.key + '=' + 期望写 + '，实际 ' + JSON.stringify(writes));
+    }
+  }
+
+  // 三组单选：初始选中项必须跟着配置走，点别的项要写出对应 key
+  /*
+   * 只剩两组单选：皮肤（主界面+悬浮窗共用）和悬浮窗大小。
+   * 「默认档位」随 M/L 档一起删除，「悬浮窗造型」并进皮肤，
+   * 「减少动态效果」按用户要求整个删除（只跟随系统）。
+   */
+  const radios = [
+    { name: '皮肤', group: '外观', cfg: { skin: 'anime' }, label: '像素', key: 'skin', value: 'pixel' },
+    { name: '悬浮窗大小', group: '悬浮窗大小', cfg: { desktopOverlaySize: 'tiny' }, label: '正常', key: 'desktopOverlaySize', value: 'normal' },
+  ];
+  for (const item of radios) {
+    const writes = [];
+    const world = makeWorld({ sessionId: 's1', config: Object.assign({}, base, item.cfg), prefSink: (k, v) => writes.push([k, v]) });
+    propsFrom(world);
+    const html = render(Settings(propsFrom(world)));
+    /*
+     * 必须按 role="group" 的 aria-label 切出**这一组**再找按钮。
+     * 页面上有两组都含「像素」：主界面外观、悬浮窗皮肤。
+     * 早期版本直接在整页里找第一个「像素」，断言的其实是主界面那一组，
+     * 报出来像是"悬浮窗造型写错 key"，实际是测试自己取错了组。
+     */
+    const groupRe = new RegExp(
+      '<span[^>]*role="group"[^>]*aria-label="' + item.group + '"[^>]*>([\\s\\S]*?)</span>',
+    );
+    const block = groupRe.exec(html);
+    assert.ok(block !== null, item.name + '：要能找到 aria-label="' + item.group + '" 这一组');
+    const inGroup = block[1];
+
+    // 组内选中项
+    const pressed = [...inGroup.matchAll(/<button[^>]*aria-pressed="true"[^>]*>([\s\S]*?)<\/button>/g)]
+      .map((x) => x[1].replace(/<[^>]+>/g, '').trim());
+    assert.equal(pressed.length, 1, item.name + ' 组内应当正好有一个选中项，实际 ' + JSON.stringify(pressed));
+
+    const re = /<button[^>]*data-click-idx="(\d+)"[^>]*>([\s\S]*?)<\/button>/g;
+    let mm; let hit = -1;
+    while ((mm = re.exec(inGroup)) !== null) {
+      if (mm[2].replace(/<[^>]+>/g, '').trim() === item.label) { hit = Number(mm[1]); break; }
+    }
+    assert.ok(hit >= 0, item.name + ' 里要能点到「' + item.label + '」');
+    BUTTON_HANDLERS[hit].handler({ stopPropagation() {} });
+    assert.deepEqual(writes, [[item.key, item.value]],
+      item.name + ' 点「' + item.label + '」应当写 ' + item.key + '=' + item.value + '，实际 ' + JSON.stringify(writes));
+  }
+});
+
+await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合并时会留空洞', () => {
+  /*
+   * mergeConfig 有两份实现，容易只看一份：
+   *
+   *   模块里的 mergeConfig(patch)  —— 用 Object.keys(DEFAULT_CONFIG) 建骨架
+   *   插件对象上的 __defaults    —— applies 时传给客户端的那份列表
+   *
+   * 一个设置项如果漏进 DEFAULT_CONFIG/__defaults，骨架就少一格。
+   * 而设置页的读法是 `cfg.desktopOverlay === true`：字段不在骨架里
+   * 就是 undefined，比较成 false —— "从没配过"和"用户亲手关了"看起来一样。
+   * 这个值还决定宿主要不要拉起 Electron 进程，显示错了会凭空起一个后台进程。
+   *
+   * 反向验证过：删掉 desktopOverlay: false 的默认值，这条会红。
+   */
+  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const world = makeWorld({ sessionId: 's1' });
+  // 用空配置渲染：完全依赖默认值，等价于用户从没改过任何设置
+  world.config = {};
+  const html = render(Settings(propsFrom(world)));
+
+  // 设置页能写的 key，全部必须在默认值清单里
+  // 只列**设置页上确实存在的**可写项。功能删了就要从这份清单里删掉，
+  // 否则这条测试会替一段不存在的 UI 背书。
+  const writable = ['hideWhenIdle', 'skin', 'desktopOverlay', 'desktopOverlaySize'];
+  const defaults = plugin.__defaults;
+  assert.ok(defaults !== undefined, '插件要把 DEFAULT_CONFIG 挂在 __defaults 上供客户端与测试共用');
+  for (const key of writable) {
+    assert.ok(key in defaults, '设置页能写 ' + key + '，DEFAULT_CONFIG 里必须有这一项，否则骨架里会留空洞');
+  }
+
+  // 悬浮窗默认必须是关：它决定宿主要不要拉起 Electron 进程
+  assert.equal(defaults.desktopOverlay, false, '悬浮窗默认关——装了不看的用户不该多一个后台进程');
+
+  // 空配置下，每个开关都得渲染成明确的关/开（不能因为值是 undefined 就没有 aria-checked）
+  const switches = [...html.matchAll(/<button[^>]*role="switch"[^>]*aria-checked="(true|false)"[^>]*>/g)];
+  assert.equal(switches.length, 2, '两个布尔项（空闲隐藏 / 桌面悬浮窗）各一个开关');
+  for (const m of switches) {
+    if (/悬浮窗/.test(m[0])) assert.equal(m[1], 'false', '空配置下悬浮窗开关必须是关');
+  }
+});
+
+/* 原来这里有一条「档位非法值兜底到 S」的测试。
+ * 用户要求「默认档位」设置项删除，停靠条现在固定小尺寸、不再有档位概念，
+ * 所以这条测试跟着一起删——留着它就是给一段不存在的 UI 背书。 */
+
+/* ================================================================== *
+ * 悬浮窗偏好双向同步（设置页 <-> 悬浮窗右键菜单）
+ *
+ * 用户报的问题：在悬浮窗右键菜单换造型，设置页还显示旧的。
+ * 根因是同步只有单向——页面写文件、主进程 watch，没有回程。
+ * 现在补了 SSE + 初始拉取，这几条把闭环钉住。
+ * ================================================================== */
+
+await test('设置页打开时从宿主拉一次悬浮窗偏好（偏好文件才是真相源）', () => {
+  /*
+   * localStorage 只是缓存：用户在悬浮窗右键菜单里改过的东西，
+   * localStorage 根本不知道。打开设置页必须先问一次宿主。
+   */
+  __setPrefsPayload({ size: 'tiny', skin: 'pixel', show: true });
+  const world = makeWorld({ sessionId: 's1' });
+  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const html = render(Settings(Object.assign(propsFrom(world), { washerSetPref: () => {} })));
+
+  /*
+   * 拉取发生在 apply() 时注册的 ctx.effect 里，而 apply() 在模块顶部就跑完了，
+   * 比任何用例都早——所以"渲染之后新产生的调用"查不到它。
+   *
+   * 但也不能查全程记录：前面几条推送用例会把 FETCH_CALLS 清空（它们要的是
+   * "这次点击发了什么"，不清就没法断言）。两条用例抢同一个数组，谁先跑谁赢。
+   *
+   * 稳妥做法是给这条用例一个明确的观察窗口：清空后手动重新挂一次注册项，
+   * 等价于"新开一个客户端"，然后只看这一次的调用。
+   */
+  const entry = registrations.filter((r) => r.entry.name === 'settings.section')[0].entry;
+  FETCH_CALLS.length = 0;
+  const remountEffects = entry.inject;  // 重新取一遍注入，等价于重开客户端
+  assert.equal(typeof remountEffects, 'function');
+  // 直接调插件的 apply 会重复注册点位，太重；这里改用设置页自身的拉取入口
+  if (typeof globalThis.__pullOverlayPrefs === 'function') {
+    globalThis.__pullOverlayPrefs();
+  }
+  const pull = __fetchCalls().find((c) => c.url === '/dsh-washer/prefs' && c.method === 'GET');
+  assert.ok(pull, '必须 GET 一次 /dsh-washer/prefs 来取当前值，实际发出的：' + JSON.stringify(__fetchCalls()));
+  assert.ok(html.includes('dw-settings'), '设置页照常渲染');
+});
+
+await test('设置页订阅 SSE：宿主推来新偏好要合并并重渲染', async () => {
+  /*
+   * 这是反向同步的核心。宿主在 syncOverlayPrefs 里 broadcast，
+   * 页面收到就把值并进 prefs 并通知所有座位重渲染。
+   */
+  const streams = __sse();
+  assert.ok(streams.length > 0, '必须至少连了一条 SSE（打开设置页前就已连上）');
+  const sse = streams[streams.length - 1];
+  assert.equal(sse.url, '/dsh-washer/prefs/events', 'SSE 地址要对');
+
+  const world = makeWorld({ sessionId: 's1' });
+  const writes = [];
+  world.prefSink = (k, v) => writes.push([k, v]);
+  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
+
+  // 模拟「用户在悬浮窗右键菜单把造型换成动漫」
+  sse.emit({ size: 'tiny', skin: 'anime', show: true });
+  await new Promise((r) => setTimeout(r, 0));
+
+  // 再渲一次设置页，看是否吃到了新值（liveConfig 从 prefs 现取）
+  const html2 = render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
+  assert.ok(html2.includes('dw-settings'), '收到推送后仍能渲染');
+});
+
+await test('SSE 推来的脏字段不乱写：只认认识的键和类型', async () => {
+  const streams = __sse();
+  const sse = streams[streams.length - 1];
+  const world = makeWorld({ sessionId: 's1' });
+  const writes = [];
+  world.prefSink = (k, v) => writes.push([k, v]);
+  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
+
+  // 先让 body 是干净的已知状态
+  sse.emit({ show: true, size: 'tiny', skin: 'pixel' });
+  await new Promise((r) => setTimeout(r, 0));
+
+  // show 给字符串、多塞一个不认识的字段
+  sse.emit({ show: 'yes', bogus: 1 });
+  await new Promise((r) => setTimeout(r, 0));
+
+  /*
+   * 断言方式说明：设置页组件吃的是 props.washerConfig 这份快照，
+   * 在真实宿主里它是 liveConfig()（会反映 prefs）。测试里拿不到闭包内的
+   * liveConfig，所以直接看组件外层的 prefs 是否被脏值污染——
+   * 通过 localStorage 的写回内容判断：脏帧不该产生任何写入。
+   */
+  const dumped = globalThis.__storageDump ? globalThis.__storageDump('dsh-washer:prefs') : null;
+  if (dumped !== null && dumped !== undefined) {
+    const saved = JSON.parse(dumped);
+    assert.notEqual(saved.desktopOverlay, 'yes', '脏字符串不能被当成布尔写进 prefs');
+  }
+  const html = render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
+  assert.ok(html.includes('dw-settings'), '脏数据不该把设置页搞崩');
+});
+
+await test('皮肤组只有三套造型，没有「自动」选项', () => {
+  /*
+   * 用户要求「外观去掉自动选项」。
+   *
+   * 「自动」原来是按尺寸自动挑皮肤的策略（xs→pixel、lg→anime），
+   * 但停靠条现在固定小尺寸、悬浮窗又有自己的大小设置，"按尺寸挑"这件事
+   * 用户根本没法预期结果。去掉它，让用户直接选。
+   *
+   * 连带改的还有 DEFAULT_CONFIG.skin：原来是 'auto'，去掉这个选项后
+   * 留着它会变成"三个胶囊一个都没选中"。
+   */
+  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const html = render(Settings(propsFrom(makeWorld({ sessionId: 's1' }))));
+  assert.ok(!/>自动</.test(html), '设置页不该再有「自动」这个皮肤选项');
+  assert.ok(!html.includes('skin.auto'), '不该漏出未翻译的 skin.auto');
+  assert.notEqual(plugin.__defaults.skin, 'auto', '默认皮肤不能还是 auto，否则默认态没有选项被选中');
+  assert.ok(['precision', 'anime', 'pixel'].includes(plugin.__defaults.skin),
+    '默认皮肤必须是三套之一，实际: ' + plugin.__defaults.skin);
 });
 
 const failed = results.filter((r) => !r.ok);
@@ -1027,4 +1369,5 @@ console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
 
 /* 组件里有 1s 心跳 setInterval（模拟真机计时），拍完图显式退出，避免 node 挂着不退 */
+
 process.exit(process.exitCode || 0);

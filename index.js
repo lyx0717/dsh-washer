@@ -18,6 +18,9 @@
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   deriveState,
@@ -32,8 +35,18 @@ import {
 
 export const name = 'dsh-washer';
 
-/** 宿主服务：agents 提供 agent/status，sessions 提供事件序号与 flush */
-export const inject = ['agents', 'sessions'];
+/**
+ * 宿主服务：agents 提供 agent/status，sessions 提供事件序号与 flush，
+ * webServer 用来挂一个同源路由给网页端写悬浮窗偏好。
+ *
+ * 为什么偏好要走 webServer 而不是自己那个带 token 的 HTTP 服务：
+ * 网页端是宿主的同源页面，`fetch('/dsh-washer/prefs')` 是相对路径请求，
+ * 不用知道端口、不用带 token、不受 connect-src 的 CSP 限制。
+ * 自己那套 127.0.0.1:随机端口 + token 是给**独立 Electron 进程**用的，
+ * 网页端根本没有那套凭据（之前想靠 props.washerEndpoint 拿，那注入项不存在，
+ * 于是每次都在第一行静默 return，功能看着写了实际一次都没发出去）。
+ */
+export const inject = ['agents', 'sessions', 'webServer'];
 
 /** 默认端口。0 = 让系统分配，避免和别的程序抢端口。 */
 const DEFAULT_PORT = 0;
@@ -41,6 +54,27 @@ const DEFAULT_PORT = 0;
 const PUSH_THROTTLE_MS = 100;
 /** 无事件时刷新时长的节拍（毫秒） */
 const TICK_MS = 500;
+
+/**
+ * 宿主同源路由：网页端写悬浮窗偏好走的路径。
+ * 网页端用 fetch('/dsh-washer/prefs') 相对路径请求，不需要端口和 token。
+ */
+const WEB_PREFS_PATH = '/dsh-washer/prefs';
+/** 偏好请求体上限。就三个字段，4KB 已经非常宽松。 */
+const PREF_BODY_LIMIT = 4096;
+/**
+ * 偏好变化推送（SSE）。悬浮窗右键菜单改了造型/尺寸，设置页要跟着变。
+ *
+ * 为什么是 SSE 不是 WebSocket：
+ *   - 只需要服务端 → 浏览器单向推，SSE 天生就是这个
+ *   - 走普通 HTTP，同源相对路径就能连，不用端口、不用 token、不过 CSP 的
+ *     connect-src（EventSource 同源是允许的）
+ *   - EventSource 断线自动重连，不用自己写重试
+ * WebSocket 那边已经有一套带 token 的（给 Electron 用），别混。
+ */
+const WEB_PREFS_EVENTS_PATH = '/dsh-washer/prefs/events';
+/** SSE 心跳。中间层（各种代理/休眠）会掐掉长时间无数据的连接。 */
+const SSE_HEARTBEAT_MS = 25000;
 
 /* ------------------------------------------------------------------ *
  * 事件 → deriveState 输入
@@ -67,7 +101,101 @@ function createSessionState() {
     turnTimings: new Map(),
     /** 最近一次 agent/status */
     running: false,
+    /**
+     * 最新的 usage 快照（来自 assistant/message.data.usage）。
+     * 注意：这些数字是**累加**的（同一 turn 内单调增长），不是每条消息各自的量，
+     * 所以要拿它算速度必须看前后两次的差值。
+     */
+    usage: null,
+    /** 模型名，来自 assistant/message.data.message.source.model */
+    model: null,
+    /** 上一份 usage 与对应时刻，用来算增量速度 */
+    lastUsage: null,
+    /** 最近的 (时间, 累计输出 token) 采样，用于滑动窗口算速度 */
+    tokenSamples: [],
   };
+}
+
+/** 速度滑动窗口（毫秒）。取 5 秒：太短抖得看不清，太长反应迟钝。 */
+const SPEED_WINDOW_MS = 5000;
+
+function num(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+/**
+ * 从 token 采样里算输出速度（token/秒）。
+ *
+ * 用**累计输出 token 的差值**除以时间差，不是"有几次采样"。
+ *
+ * 早先这里是死板的"窗口内至少两个采样点"，结果速度永远不显示：
+ * 一次工具调用动辄几秒，中间只有工具结果事件、没有 assistant/message，
+ * 5 秒窗口里常常就一个采样点。而采样点是**有增长才记**的，
+ * 所以相邻两点的差值天然就是真实产出，不必非得落在同一个窗口里。
+ *
+ * 现在的口径：
+ *   1. 取窗口内最早的采样做起点；
+ *   2. 窗口内没有两个点时，退到"最近两个有效采样"，跨度不超过
+ *      SPEED_STALE_MS——再久就不是"当前速度"而是历史平均了；
+ *   3. 输出完全没增长（空闲）仍然返回 null，不编 0。
+ */
+const SPEED_STALE_MS = 15000;
+
+export function speedOf(samples, now, windowMs = SPEED_WINDOW_MS) {
+  if (!Array.isArray(samples) || samples.length < 2) return null;
+  const last = samples[samples.length - 1];
+  // 最近一次采样已经很旧了，说明这段时间没有新产出，别再报陈年速度
+  if (now - last.at > SPEED_STALE_MS) return null;
+
+  const from = now - windowMs;
+  let first = null;
+  for (const sample of samples) {
+    if (sample.at >= from) { first = sample; break; }
+  }
+  // 窗口内不足两点：退到最近两个采样
+  if (first === null || first === last) {
+    first = samples.length >= 2 ? samples[samples.length - 2] : null;
+  }
+  if (first === null || first === last) return null;
+  // 兜底窗口跨度：两点隔得太远，算出来的是平均速度不是当前速度
+  if (last.at - first.at > SPEED_STALE_MS) return null;
+
+  const dt = last.at - first.at;
+  if (dt <= 0) return null;
+  const dTokens = last.output - first.output;
+  // 累计值回退说明开了新会话或计数被重置，这种样本没法用
+  if (dTokens < 0) return null;
+  // 没有增长就是闲置，返回 null 让前端显示 —，而不是骗人的 0
+  if (dTokens === 0) return null;
+  return dTokens / (dt / 1000);
+}
+
+/**
+ * 按耗时倒序聚合本轮的工具调用。
+ *
+ * 同一工具多次调用合并成一条，取最大耗时——面板要回答的是
+ * "哪个工具在拖后腿"，逐次罗列反而看不清。
+ */
+export function rankTools(nodes, turn, limit = 6) {
+  if (!Array.isArray(nodes)) return [];
+  const byName = new Map();
+  for (const node of nodes) {
+    // 耗时记在 tool-result 上（callTime = 调用发起时刻，time = 结果返回时刻），
+    // 和 core.js 的 recentTools 同源，别改成读 node.ms —— 那是另一套字段，这里没有。
+    if (node.kind !== 'tool-result') continue;
+    if (turn !== undefined && node.turn !== turn) continue;
+    if (typeof node.callTime !== 'number' || typeof node.time !== 'number') continue;
+    const ms = node.time - node.callTime;
+    const prev = byName.get(node.name);
+    if (prev === undefined) {
+      byName.set(node.name, { name: node.name, ms, calls: 1, isError: node.isError === true });
+    } else {
+      prev.calls += 1;
+      if (ms > prev.ms) prev.ms = ms;
+      if (node.isError) prev.isError = true;
+    }
+  }
+  return [...byName.values()].sort((a, b) => b.ms - a.ms).slice(0, limit);
 }
 
 function pushNode(state, node) {
@@ -164,6 +292,46 @@ export function foldEvent(state, event, now) {
      */
     case 'step/start':
     case 'step/end': {
+      return state;
+    }
+    case 'assistant/message': {
+      /*
+       * 一次模型回复结束（不是每个流式分片）。
+       * data 结构（实测）：
+       *   { turn, step, message: { role, content, source: { provider, model, ... }, id },
+       *     usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, totalTokens },
+       *     stream: [...] }
+       *
+       * usage 是**累加值**：同一 turn 内第二条消息的 totalTokens 比第一条大。
+       * 直接拿去当"本条用了多少"是错的，要存快照再算差值。
+       */
+      const src = data.message && data.message.source;
+      if (src && typeof src.model === 'string') state.model = src.model;
+      const u = data.usage;
+      if (u && typeof u.outputTokens === 'number') {
+        state.lastUsage = state.usage === null ? null : { usage: state.usage, at: now };
+        state.usage = {
+          input: num(u.inputTokens),
+          output: num(u.outputTokens),
+          cacheRead: num(u.cacheReadTokens),
+          cacheWrite: num(u.cacheWriteTokens),
+          total: num(u.totalTokens),
+        };
+        // 只在输出真的涨了才记采样：平白多记一个"和上一条一样"的点，
+        // 会让速度被稀释成偏低的数。
+        const prev = state.tokenSamples.length === 0
+          ? null : state.tokenSamples[state.tokenSamples.length - 1];
+        if (prev === null || state.usage.output > prev.output) {
+          state.tokenSamples.push({ at: now, output: state.usage.output });
+        }
+        // 采样留得比速度窗口长一些：窗口内点数不够时要靠更早的点兜底
+        const cutoff = now - SPEED_STALE_MS * 2;
+        while (state.tokenSamples.length > 2 && state.tokenSamples[0].at < cutoff) {
+          state.tokenSamples.shift();
+        }
+      }
+      state.partial = null;
+      pushNode(state, { kind: 'assistant-message', turn: data.turn, model: src ? src.model : null });
       return state;
     }
     case 'turn/end': {
@@ -299,10 +467,139 @@ function persistEndpoint(port, token) {
   }
 }
 
+/**
+ * 拉起 Electron 悬浮窗。
+ *
+ * 之前是人工 `./electron/start.sh`，导致「重启宿主后悬浮窗没了」——
+ * 用户以为它会跟着走，其实一直是手动起的。这里改成宿主负责生命周期：
+ * apply 时 spawn，disposer 里 kill。
+ *
+ * 三条限制：
+ *   1. 只起一次：单实例锁在 electron 那边，重复起也只是把窗口提到前面。
+ *   2. 崩了不自动重试：无限重启会刷屏，而且崩多半是环境问题（Electron 被删、
+ *      权限没了），自动重试治不了根。用户可以从设置里关掉再打开重试。
+ *   3. 宿主退出时 kill 掉整个进程组，否则 Electron 会变成孤儿还在跑。
+ */
+function electronBinary() {
+  const fromEnv = process.env.DSH_WASHER_ELECTRON;
+  if (typeof fromEnv === 'string' && fromEnv !== '') return fromEnv;
+  return join(homedir(), '.dsh', 'electron', 'Electron.app', 'Contents', 'MacOS', 'Electron');
+}
+
+/**
+ * 悬浮窗偏好文件：设置页 → 宿主 → 主进程 的唯一通道。
+ *
+ * 主进程读不到浏览器的 localStorage，只能靠这个文件传话。反过来
+ * 主进程也会在用户点右键菜单时改这个文件，所以两边都可能写——
+ * 用整份覆盖（而不是增量 merge）会让两边互相抹掉对方刚改的字段。
+ * 这里读-合并-写，且在同一个 tick 内完成，本机不会有竞争。
+ */
+function overlayPrefsFile() {
+  return process.env.DSH_WASHER_PREFS_FILE
+    || join(homedir(), '.dsh', 'dsh-washer-float-prefs.json');
+}
+
+export function writeOverlayPrefs(patch) {
+  if (patch === null || typeof patch !== 'object') return null;
+  const file = overlayPrefsFile();
+  let current = {};
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) current = raw;
+  } catch { /* 文件不存在或坏了都按空处理 */ }
+  const next = Object.assign({}, current);
+  // 只接受认识且类型对的字段，防止页面传脏数据把窗口搞成 0 宽
+  if (patch.size === 'normal' || patch.size === 'tiny') next.size = patch.size;
+  if (typeof patch.skin === 'string' && /^[a-z]{3,12}$/.test(patch.skin)) next.skin = patch.skin;
+  if (patch.show === true || patch.show === false) next.show = patch.show;
+  try {
+    writeFileSync(file, JSON.stringify(next), { mode: 0o600 });
+    // writeFileSync 的 mode 只在新建时生效，已存在的老文件权限不会自动收紧
+    chmodSync(file, 0o600);
+  } catch {
+    return null;
+  }
+  return next;
+}
+
+/**
+ * 读当前偏好。同步、纯读，失败返回空对象。
+ *
+ * 单独抽出来是因为它现在有两个消费者：设置页的初始状态、SSE 推送的载荷。
+ * 两边必须看到同一份数据，不能一边用文件、一边用内存副本。
+ */
+export function readOverlayPrefs() {
+  try {
+    const raw = JSON.parse(readFileSync(overlayPrefsFile(), 'utf8'));
+    return raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function spawnOverlay(ctx, opts) {
+  const binary = electronBinary();
+  if (!existsSync(binary)) return null;
+  const appDir = join(dirname(fileURLToPath(import.meta.url)), 'electron');
+  if (!existsSync(join(appDir, 'main.cjs'))) return null;
+  const args = [appDir];
+  if (opts.size) args.push('--size', opts.size);
+  if (opts.skin) args.push('--skin', opts.skin);
+  let child = null;
+  try {
+    child = spawn(binary, args, {
+      detached: false,
+      stdio: 'ignore',
+      // ELECTRON_RUN_AS_NODE 必须清掉：宿主自己就是 Electron，
+      // 子进程会继承这个变量，一带进去 Electron 就退化成纯 Node，
+      // require('electron') 直接 MODULE_NOT_FOUND。
+      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '' }),
+    });
+  } catch {
+    return null;
+  }
+  // 子进程退出后不留句柄，否则宿主退出会被它拖住
+  child.on('error', () => { child = null; });
+  child.unref();
+  return child;
+}
+
 export function apply(ctx, config) {
   const cfg = config && typeof config === 'object' ? config : {};
-  // 桌面悬浮窗默认关着——装了不看的人不该莫名多一个后台端口
-  const enabled = cfg.desktopOverlay === true;
+  /**
+   * 启动时用偏好文件里的**外观**设置覆盖静态 config。
+   *
+   * 这是「启动客户端时初始状态没同步」的根因：静态 config 里写的是默认
+   * 皮肤，而用户在设置页改成 pixel 后，那个值落在偏好文件里，启动路径
+   * 压根没读它——于是每次启动都先冒出一台默认造型的洗衣机，过几百毫秒
+   * 被 watchPrefs 纠正成像素。用户看到的就是"启动时状态不对"。
+   *
+   * 皮肤现在只有一份（主界面和悬浮窗共用），字段名就是 skin。
+   *
+   * ⚠️ 只覆盖 size / skin，**不要覆盖 show**。
+   *
+   * 这两类字段语义不同：
+   *   - size / skin：纯粹的显示偏好，用户改成什么就该是什么
+   *   - show / desktopOverlay：config 里是"我要不要这个功能"（装了插件就开），
+   *     偏好文件里是"当前这一刻窗口是不是显示着"。用后者去覆盖前者，
+   *     等于用户在运行中把窗口藏一次，功能就永久关闭了——重启也不回来。
+   *     实测踩过：运行中拨到关 → 文件留下 show:false → 重启后服务根本不 listen。
+   *
+   * show 的处理交给 Electron 侧：main.cjs 启动时自己读 prefs.show 决定
+   * 窗口要不要 show（见 electron/main.cjs 的 whenReady）。宿主只负责把
+   * 进程拉起来，显不显示不归它管。
+   */
+  const savedPrefs = readOverlayPrefs();
+  if (savedPrefs.size === 'normal' || savedPrefs.size === 'tiny') cfg.desktopOverlaySize = savedPrefs.size;
+  if (typeof savedPrefs.skin === 'string' && /^[a-z]{3,12}$/.test(savedPrefs.skin)) cfg.skin = savedPrefs.skin;
+
+  /*
+   * 桌面悬浮窗默认关着——装了不看的人不该莫名多一个后台端口。
+   *
+   * 这里用 let 不用 const：设置页的开关是运行时能拨的，用户在运行中把它打开
+   * 也应该立刻起悬浮窗，不能等下次重启宿主才生效。
+   */
+  let enabled = cfg.desktopOverlay === true;
 
   /** sessionId → 会话状态 */
   const sessions = new Map();
@@ -315,6 +612,62 @@ export function apply(ctx, config) {
   let lastPushed = '';
   let lastPushAt = 0;
   let pushTimer = null;
+  /** 由宿主拉起的 Electron 悬浮窗进程 */
+  let overlayChild = null;
+  /** 订阅了偏好推送（SSE）的网页客户端。设置页开一个、关一个。 */
+  const prefClients = new Set();
+
+  /**
+   * 把当前偏好推给所有 SSE 订阅者。
+   *
+   * 任何一方改了偏好都要调它：设置页自己改的（那次没意义但无害，
+   * 幂等）、悬浮窗右键菜单改的（这是关键的一条）。
+   * 直接推整份而不是增量：字段只有三个，计算增量不值当，
+   * 而且整份能顺便纠正客户端上任何漂移的值。
+   */
+  function pushPrefs() {
+    if (prefClients.size === 0) return;
+    const payload = `data: ${JSON.stringify(readOverlayPrefs())}\n\n`;
+    for (const client of prefClients) client.write(payload);
+  }
+
+  /**
+   * 拉起悬浮窗。集中在一处，方便"运行时开关"和"启动"两条路径复用。
+   * 返回是否真的拉起来了。
+   *
+   * 这里不再检查 server.listening：调用方保证。以前自己检查过，结果是
+   * 「启动时关 → 运行中拨开」时服务还没起来，直接 return false，
+   * 于是开关永远拉不起窗口（服务由 startService 负责，见那里的注释）。
+   */
+  function launchOverlay() {
+    if (overlayChild !== null) return true;
+    if (cfg.desktopOverlayAutoLaunch === false) return false;
+    overlayChild = spawnOverlay(ctx, {
+      size: cfg.desktopOverlaySize,
+      /*
+       * skin 可能是 'auto'——那是主界面的"按尺寸自动挑"策略，浮窗没有这个
+       * 概念（它只有一个固定尺寸）。这里落成具体造型，避免把 'auto'
+       * 传给浮窗后它不认识、回落到 precision 而和设置页显示的不一致。
+       */
+      skin: cfg.skin === 'precision' || cfg.skin === 'anime' || cfg.skin === 'pixel'
+        ? cfg.skin
+        : 'precision',
+    });
+    if (overlayChild === null) {
+      ctx.logger?.warn?.('[dsh-washer] 悬浮窗没起来：找不到 Electron 或 electron/main.cjs');
+      return false;
+    }
+    // 进程自己退了就把引用清掉，否则下次拨开关会以为它还活着，永远不再拉起
+    overlayChild.on('exit', () => { overlayChild = null; });
+    return true;
+  }
+
+  /** 关掉悬浮窗进程。用户把开关拨到关时要真退出，不能只是隐藏。 */
+  function shutdownOverlay() {
+    if (overlayChild === null) return;
+    try { overlayChild.kill(); } catch { /* 已经退出就算了 */ }
+    overlayChild = null;
+  }
 
   function resolveSessionId(subject) {
     if (subject === undefined || subject === null) return null;
@@ -346,7 +699,10 @@ export function apply(ctx, config) {
         elapsedMs: 0,
         durationText: '--:--',
         tools: [],
+        toolRank: [],
         toolCount: 0,
+        model: null,
+        speed: null,
         tokenUsage: null,
         errorCode: null,
         lastEndedAt: null,
@@ -382,8 +738,16 @@ export function apply(ctx, config) {
         ms: t.ms === undefined ? null : t.ms,
         isError: t.isError === true,
       })),
+      // 详情面板要的是"谁最慢"，按耗时倒序；上面的 tools 是时间序给流水用的。
+      // 同一工具多次调用在这里合并成一个，取最大耗时——面板里关心的是
+      // "哪个工具在拖后腿"，不是每一次调用。
+      toolRank: rankTools(s.nodes, turn),
       toolCount: toolCountOf(s.nodes, turn),
-      tokenUsage: null,
+      // 详情面板用：模型、速度、token 用量。tokenUsage 早先是恒 null，
+      // 现在 assistant/message 的 usage 能填上了。
+      model: s.model,
+      speed: speedOf(s.tokenSamples, now),
+      tokenUsage: s.usage,
       // errorCodeOf(null) 会返回 'E-00'，所以只在确实有错误节点时才问它
       errorCode: hasError(s.nodes) ? errorCodeOf(lastErrorNode(s.nodes)) : null,
       lastEndedAt: turnEndTimeOf(s.turnTimings, turn) || null,
@@ -400,7 +764,14 @@ export function apply(ctx, config) {
    */
   function pushNow() {
     const snap = snapshot();
-    const signature = [snap.state, snap.turn, snap.toolCount, snap.durationText, snap.errorCode].join('|');
+    // 面板数据（模型/速度/token）也要进签名，否则它们变了却不推——
+    // 洗衣机本体不变不代表详情没变。
+    const usage = snap.tokenUsage;
+    const tokenSig = usage === null ? '' : `${usage.input}/${usage.output}/${usage.cacheRead}`;
+    const signature = [
+      snap.state, snap.turn, snap.toolCount, snap.durationText, snap.errorCode,
+      snap.model, Math.round(snap.speed === null ? -1 : snap.speed), tokenSig,
+    ].join('|');
     const text = JSON.stringify(snap);
     if (signature === lastPushed) return;
     lastPushed = signature;
@@ -505,12 +876,75 @@ export function apply(ctx, config) {
       res.end(JSON.stringify({ ok: true }));
       return;
     }
+    /*
+     * 设置页改悬浮窗大小/皮肤/开关时 POST 到这里。
+     * 宿主自己管不了 Electron 窗口，只负责把值落到偏好文件，
+     * 主进程 watch 那个文件后自己改窗口——这样不必为改个皮肤重启宿主。
+     *
+     * 只收 POST：GET 一个改状态的接口会被浏览器预取和链接预览误触发。
+     */
+    if (url.pathname === '/dsh-washer/prefs') {
+      /*
+       * GET 给设置页：它进页面时要知道当前值（偏好文件才是真相源，
+       * localStorage 只是缓存——用户在浮窗右键菜单里改过的东西，
+       * localStorage 根本不知道）。
+       */
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(readOverlayPrefs()));
+        return;
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'content-type': 'application/json', allow: 'GET, POST' });
+        res.end(JSON.stringify({ error: 'method not allowed' }));
+        return;
+      }
+      let body = '';
+      let tooBig = false;
+      req.on('data', (chunk) => {
+        body += chunk;
+        // 这个接口只收三个小字段，10KB 已经荒谬了，防的是内存被灌
+        if (body.length > 10240) { tooBig = true; req.destroy(); }
+      });
+      req.on('end', () => {
+        if (tooBig) return;
+        let patch = null;
+        try { patch = JSON.parse(body); } catch { patch = null; }
+        // 走 syncOverlayPrefs 而不是直接写文件：拨开关时要拉起/杀掉进程
+        const saved = syncOverlayPrefs(patch);
+        if (saved === null) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad request' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(saved));
+      });
+      return;
+    }
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
   });
   server.on('upgrade', onUpgrade);
 
-  if (enabled) {
+  /**
+   * 起 HTTP+WS 服务。抽成函数是因为它现在有两条触发路径：
+   *   - 启动时桌面悬浮窗配置为开（下面 if (enabled)）
+   *   - 运行中用户把「显示悬浮窗」拨到开（syncOverlayPrefs）
+   *
+   * 早先只有一条，且 launchOverlay() 里写着 `if (!server.listening) return false;`，
+   * 于是「启动时关、运行中打开」这条路径永远拉不起进程：服务从没 listen 过，
+   * 前置条件直接失败，开关看着就是坏的。
+   */
+  function startService() {
+    if (server.listening) {
+      // 已经在听：可能只是用户把开关拨回来了，服务一直在
+      launchOverlay();
+      return;
+    }
+    server.once('error', (error) => {
+      ctx.logger?.warn?.(`[dsh-washer] overlay service failed: ${error.message}`);
+    });
     server.listen(cfg.desktopOverlayPort ?? DEFAULT_PORT, '127.0.0.1', () => {
       port = server.address().port;
       // token 随机、只在内存里，宿主日志又不落盘 —— 光打印的话用户根本拿不到，
@@ -519,6 +953,9 @@ export function apply(ctx, config) {
       // 早期写法在 listen 回调外调用，port 还可能是探活阶段的临时值，
       // 结果文件里记着一个没人监听的端口——悬浮窗连上去永远是"未连接"。
       if (server.listening && port > 0) persistEndpoint(port, token);
+      // 悬浮窗跟着宿主一起活：服务起来了才拉，否则页面连上也是"未连接"。
+      // 崩溃不自动重启（见 spawnOverlay 注释）。
+      launchOverlay();
       // 把带 token 的调试地址打出来，否则用户拿不到 token，也就打不开调试页。
       // token 只进本机日志，不进任何网络响应。
       ctx.logger?.info?.(`[dsh-washer] overlay: http://127.0.0.1:${port}/dsh-washer/state?token=${token}`);
@@ -533,9 +970,127 @@ export function apply(ctx, config) {
         );
       }
     });
-    server.on('error', (error) => {
-      ctx.logger?.warn?.(`[dsh-washer] overlay service failed: ${error.message}`);
-    });
+  }
+
+  if (enabled) {
+    startService();
+  }
+
+  /*
+   * 网页端 → 悬浮窗偏好：走宿主自己的 webServer，同源相对路径。
+   *
+   * 这条路由跟上面那个 127.0.0.1:随机端口 的服务不是一回事，别混：
+   *   - 上面那个：给**独立 Electron 进程**用，必须带 token（其它本机程序也连得上）
+   *   - 这条：给**宿主自己的网页**用，同源 fetch，天然只对登录态页面开放
+   *
+   * 只收 POST：GET 会被链接预取、页面预览之类的自动请求命中，
+   * 那种请求不该有副作用。
+   */
+  if (ctx.webServer !== undefined) {
+    /*
+     * 偏好变化推送（SSE）：设置页长连着这条，收到就重渲染。
+     *
+     * 痛点：用户在悬浮窗右键菜单里换了造型。那个改动只到主进程 -> 偏好文件，
+     * 设置页读的是 localStorage，它永远不知道文件变了，于是两边长期不一致，
+     * 得手动刷新页面才"看起来"同步上——这就是用户报的问题本身。
+     */
+    ctx.effect(() => ctx.webServer.register({
+      /*
+       * 必须是 exact 而不是 prefix。
+       *
+       * 上面那条 /dsh-washer/prefs 是 prefix 匹配，它会把 /dsh-washer/prefs/events
+       * 也吃掉——实测连 SSE 收到的是 405 method not allowed，因为事件流用 GET，
+       * 而 prefs 那条路（POST-only 时代）只让 POST 过。改成精确匹配把两条路分开。
+       */
+      kind: 'exact',
+      path: WEB_PREFS_EVENTS_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'GET') {
+          res.writeHead(405, { 'content-type': 'application/json', allow: 'GET' });
+          res.end(JSON.stringify({ error: 'method not allowed' }));
+          return;
+        }
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store, no-transform',
+          // 关掉 nginx 之类的缓冲，否则事件会攒着不发
+          'x-accel-buffering': 'no',
+          connection: 'keep-alive',
+        });
+        // 连上先推一份当前值：页面不用另外发一次 GET，也就没有
+        // "先 GET 再连 SSE"中间漏掉一次变更的窗口期。
+        res.write(`data: ${JSON.stringify(readOverlayPrefs())}\n\n`);
+
+        const client = { write: (payload) => { try { res.write(payload); } catch { /* 客户端已断 */ } } };
+        prefClients.add(client);
+        const beat = setInterval(() => {
+          // SSE 注释行，客户端不解析，纯粹防连接被中间层掐掉
+          client.write(': ping\n\n');
+        }, SSE_HEARTBEAT_MS);
+        beat.unref?.();
+
+        const drop = () => {
+          clearInterval(beat);
+          prefClients.delete(client);
+        };
+        req.on('close', drop);
+        req.on('error', drop);
+        res.on('error', drop);
+      },
+    }), 'dsh-washer: web overlay-prefs events');
+
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'prefix',
+      path: WEB_PREFS_PATH,
+      handler: async (req, res) => {
+        /*
+         * GET 给设置页：它进页面时要拿当前值。
+         *
+         * 注意这条是**另一个 handler**，跟上面 127.0.0.1 那个服务里的
+         * /dsh-washer/prefs 不是同一份代码——那个是给 Electron 用的、带 token 的。
+         * 早先只在那边加了 GET，页面这边一直是 POST-only，
+         * 于是设置页拉不到当前值、只能显示 localStorage 里的旧缓存。
+         */
+        if (req.method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify(readOverlayPrefs()));
+          return;
+        }
+        if (req.method !== 'POST') {
+          res.writeHead(405, { 'content-type': 'application/json', allow: 'GET, POST' });
+          res.end(JSON.stringify({ error: 'method not allowed' }));
+          return;
+        }
+        let body = '';
+        let tooBig = false;
+        req.on('data', (chunk) => {
+          if (tooBig) return;
+          body += chunk;
+          if (body.length > PREF_BODY_LIMIT) {
+            tooBig = true;
+            res.writeHead(413, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'payload too large' }));
+            req.destroy();
+          }
+        });
+        req.on('end', () => {
+          if (tooBig) return;
+          let patch = null;
+          try { patch = JSON.parse(body); } catch { patch = null; }
+          // 走 syncOverlayPrefs：拨「显示悬浮窗」时要拉起/杀掉进程，
+          // 光写文件那段代码走不到，用户看到的就是"开关没反应"
+          const saved = syncOverlayPrefs(patch);
+          if (saved === null) {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'bad request' }));
+            return;
+          }
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify(saved));
+        });
+      },
+    }), 'dsh-washer: web overlay-prefs route');
+
   }
 
   // ---------- 事件订阅 ----------
@@ -585,8 +1140,66 @@ export function apply(ctx, config) {
     }
     clients.clear();
     if (server.listening) server.close();
+    /*
+     * 宿主走了悬浮窗也该走，否则它连着一个已经关闭的端口，
+     * 永远显示"未连接"——比没有还糟。
+     * 只在自己拉起过的时候杀：手动 ./electron/start.sh 起的那个由用户自己管。
+     */
+    shutdownOverlay();
   }, 'dsh-washer: overlay service');
 
-  /** 给测试用的内省口（导出在 apply 之外拿不到，挂到闭包上） */
-  return { port: () => port, snapshot };
+  /*
+   * 设置页改了悬浮窗偏好：先落盘，再让运行中的东西跟着动。
+   *
+   * 落盘之后 Electron 侧还有两件事要做，分两条路：
+   *   - size / skin：主进程在 watch 偏好文件，自己就会跟上（见 electron/main.cjs）
+   *   - show：进程根本不在的时候没人 watch，只能宿主自己处理——
+   *       开 → 拉起进程；关 → 杀掉进程
+   *
+   * 这也是"显示悬浮窗开关没生效"的根因：早期版本 enabled 是 apply 时算一次的
+   * 常量，运行中拨开关只会写文件，拉起/杀进程那段代码根本走不到。
+   */
+  const syncOverlayPrefs = (patch) => {
+    const saved = writeOverlayPrefs(patch);
+    if (saved === null) return null;
+    if (patch !== null && typeof patch === 'object' && typeof patch.show === 'boolean') {
+      enabled = patch.show;
+      if (enabled) {
+        /*
+         * 先起服务再拉窗口。顺序不能反：窗口一起来就连 HTTP+WS，
+         * 服务还在 listen 的路上，页面会先渲染一帧"未连接"。
+         *
+         * 关于"关掉时要不要停服务"：不停。这条 Web 路由本身就挂在宿主
+         * 的 webServer 上，跟这个 127.0.0.1 服务无关；而服务停了之后
+         * 下次打开要重新 listen + 落端点文件，白白多一段竞态。
+         * 服务很小（一个 http server + 零连接），留着比反复起停稳。
+         */
+        startService();
+      } else {
+        shutdownOverlay();
+      }
+    }
+    /*
+     * 广播给所有设置页。这里覆盖了「悬浮窗右键菜单改了 → 设置页跟着变」
+     * 那条反向路径：主进程改完文件会 POST 回这里，走到这一行。
+     * 设置页自己改的时候也会推一次，客户端拿到同样的值，幂等。
+     */
+    pushPrefs();
+    return saved;
+  };
+
+  /*
+   * 给测试用的内省口（导出在 apply 之外拿不到，挂到闭包上）
+   *
+   * syncOverlayPrefs 是设置页和悬浮窗之间唯一的桥。
+   * 之前客户端那边想用 props.washerEndpoint 自己拼 HTTP 请求，但客户端插件
+   * 根本没有这个注入项，首行就 return 了，POST 一次都没发出去——功能看着写了，
+   * 实际静默不工作。改成宿主直接给函数：不用端点、不用端口、不过 CSP，
+   * 也不会把 token 暴露给页面。
+   */
+  return {
+    port: () => port,
+    snapshot,
+    syncOverlayPrefs,
+  };
 }

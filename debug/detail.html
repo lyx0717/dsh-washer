@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- connect-src 必须同时放行 http://，否则 WS 空闲时用 HTTP 拉一次快照的兜底会被 CSP 直接拒掉 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src http://127.0.0.1:* ws://127.0.0.1:*;">
+<title>洗衣机详情</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #16181e;
+    --line: #262a33;
+    --text: #e8eaee;
+    --dim: #8b929e;
+    --faint: #6b7280;
+    --ok: #2ee06a;
+    --warn: #f5b93a;
+    --bad: #e5484d;
+    --run: #3aa0ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font: 12px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+  }
+  /* 顶部拖拽条：整个标题栏都能拖，这是信息窗唯一的移动方式 */
+  .bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    -webkit-app-region: drag;
+  }
+  .bar .title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .bar .dot[data-s="running"] { background: var(--run); }
+  .bar .dot[data-s="done"] { background: var(--ok); }
+  .bar .dot[data-s="error"] { background: var(--bad); }
+  .bar .dot[data-s="waiting"] { background: var(--warn); }
+  .bar .turn { color: var(--faint); font-size: 11px; }
+  .bar .x {
+    -webkit-app-region: no-drag;
+    cursor: pointer; color: var(--dim);
+    width: 18px; height: 18px; display: grid; place-items: center;
+    border-radius: 4px; font-size: 13px;
+  }
+  .bar .x:hover { background: rgba(255,255,255,.1); color: var(--text); }
+
+  .body { padding: 10px 12px; overflow-y: auto; height: calc(100% - 37px); }
+  .body::-webkit-scrollbar { width: 6px; }
+  .body::-webkit-scrollbar-thumb { background: #333a46; border-radius: 3px; }
+
+  .sec { margin-bottom: 12px; }
+  .sec h4 {
+    margin: 0 0 5px; font-size: 10px; font-weight: 600;
+    color: var(--faint); text-transform: uppercase; letter-spacing: .06em;
+  }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  .row .k { color: var(--dim); flex: none; }
+  .row .v { font-variant-numeric: tabular-nums; text-align: right; min-width: 0; }
+  /* 模型名可能很长，截断 + 悬停看全名 */
+  .row .v.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /*
+   * 模型名折两行：名字在上，provider 前缀在下。
+   * 面板这行只装得下 17~18 个字符，而 group/deepseek-v4.1-flash 有 24 个，
+   * 单行省略号会把关键的名字段整个切掉，只剩 group/deepseek-v4…。
+   * 名字用正常字号，前缀降级成小灰字——前缀是路由信息，不是用户关心的东西。
+   * 名字本身仍可能超长（自定义模型名），所以单独允许它自己省略。
+   */
+  .row .v.model { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+  .row .v.model .m-name {
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .row .v.model .m-provider {
+    font-size: 10px; color: var(--faint); letter-spacing: .02em;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* 工具耗时横条：一眼看出谁慢，比看数字快 */
+  .tool { padding: 2px 0; }
+  .tool .top { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+  .tool .name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool .ms { color: var(--dim); flex: none; }
+  .tool .ms[data-err="1"] { color: var(--bad); }
+  .tool .track { height: 3px; background: var(--line); border-radius: 2px; margin-top: 2px; }
+  .tool .fill { height: 100%; border-radius: 2px; background: var(--run); transition: width .25s; }
+  .tool .fill[data-err="1"] { background: var(--bad); }
+
+  .empty { color: var(--faint); font-size: 11px; padding: 2px 0; }
+  .note { color: var(--faint); font-size: 10px; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="bar" id="bar">
+  <div class="title">
+    <span class="dot" id="dot" data-s="off"></span>
+    <span id="stateLabel">未连接</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="turn" id="turn"></span>
+    <span class="x" id="close" title="关闭">✕</span>
+  </div>
+</div>
+
+<div class="body">
+  <div class="sec">
+    <h4>运行</h4>
+    <div class="row"><span class="k">模型</span><span class="v model" id="model" title=""></span></div>
+    <div class="row"><span class="k">速度</span><span class="v" id="speed">—</span></div>
+    <div class="row"><span class="k">本轮耗时</span><span class="v" id="elapsed">--:--</span></div>
+  </div>
+
+  <div class="sec">
+    <h4>Token</h4>
+    <div class="row"><span class="k">输入</span><span class="v" id="tokIn">—</span></div>
+    <div class="row"><span class="k">输出</span><span class="v" id="tokOut">—</span></div>
+    <div class="row"><span class="k">缓存读取</span><span class="v" id="tokCache">—</span></div>
+    <div class="row"><span class="k">缓存命中</span><span class="v" id="hitRate">—</span></div>
+    <div class="note" id="tokNote">数字来自宿主 usage，累计值</div>
+  </div>
+
+  <div class="sec">
+    <h4>工具耗时 <span id="toolHint" style="color:var(--faint);font-weight:400"></span></h4>
+    <div id="tools"><div class="empty">本轮还没调用工具</div></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var LABEL = {
+    off: '未连接', idle: '待机', starting: '启动中', washing: '洗涤中',
+    rinsing: '漂洗中', spinning: '脱水中', waiting: '等你确认',
+    draining: '排水换水', done: '洗完了', error: '故障',
+  };
+  var el = function (id) { return document.getElementById(id); };
+  var host = window.washerHost || null;
+
+  function fmtNum(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return '—';
+    return n.toLocaleString('en-US');
+  }
+
+  /*
+   * 模型名按第一个斜杠折两行：group/deepseek-v4.1-flash
+   *   → 名字 deepseek-v4.1-flash（正常字号）
+   *   → 前缀 group（小灰字）
+   * 只按第一个 / 拆，因为模型名自己也可能带斜杠（如 meta-llama/Llama-3-70B）。
+   * 没有斜杠就只显示名字，不硬造一个空前缀行。
+   */
+  function setModel(name) {
+    var node = el('model');
+    if (!name) { node.textContent = '—'; node.removeAttribute('title'); return; }
+
+    var cut = name.indexOf('/');
+    var provider = cut > 0 ? name.slice(0, cut) : '';
+    var model = cut > 0 ? name.slice(cut + 1) : name;
+
+    node.textContent = '';
+    var nameNode = document.createElement('span');
+    nameNode.className = 'm-name';
+    nameNode.textContent = model;
+    node.appendChild(nameNode);
+
+    if (provider !== '') {
+      var providerNode = document.createElement('span');
+      providerNode.className = 'm-provider';
+      providerNode.textContent = provider;
+      node.appendChild(providerNode);
+    }
+    node.title = name;
+  }
+
+  function renderTools(rank) {
+    var box = el('tools');
+    if (!Array.isArray(rank) || rank.length === 0) {
+      box.innerHTML = '<div class="empty">本轮还没调用工具</div>';
+      el('toolHint').textContent = '';
+      return;
+    }
+    var max = 1;
+    for (var i = 0; i < rank.length; i++) if (rank[i].ms > max) max = rank[i].ms;
+    var html = '';
+    for (var j = 0; j < rank.length; j++) {
+      var t = rank[j];
+      var pct = Math.max(2, Math.round((t.ms / max) * 100));
+      var err = t.isError ? '1' : '0';
+      html += '<div class="tool">'
+        + '<div class="top">'
+        + '<span class="name" title="' + esc(t.name) + '">' + esc(t.name)
+        + (t.calls > 1 ? ' <span style="color:var(--faint)">×' + t.calls + '</span>' : '')
+        + '</span>'
+        + '<span class="ms" data-err="' + err + '">' + fmtMs(t.ms) + '</span>'
+        + '</div>'
+        + '<div class="track"><div class="fill" data-err="' + err + '" style="width:' + pct + '%"></div></div>'
+        + '</div>';
+    }
+    box.innerHTML = html;
+    el('toolHint').textContent = '按最慢排序';
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function fmtMs(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return '—';
+    if (ms < 1000) return Math.round(ms) + 'ms';
+    if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+    return Math.floor(ms / 60000) + 'm' + Math.round((ms % 60000) / 1000) + 's';
+  }
+
+  function render(snap) {
+    var s = snap.state || 'off';
+    el('stateLabel').textContent = LABEL[s] || s;
+    el('dot').dataset.s = s;
+    el('turn').textContent = snap.turn > 0 ? '第 ' + snap.turn + ' 轮' : '';
+    el('elapsed').textContent = snap.durationText || '--:--';
+
+    setModel(snap.model);
+    // 速度：Host 侧是 5 秒滑动窗口的均值，不是瞬时值
+    el('speed').textContent = typeof snap.speed === 'number' && snap.speed >= 0
+      ? snap.speed.toFixed(1) + ' tok/s'
+      : '—';
+
+    var u = snap.tokenUsage;
+    if (u === null || u === undefined) {
+      el('tokIn').textContent = '—';
+      el('tokOut').textContent = '—';
+      el('tokCache').textContent = '—';
+      el('hitRate').textContent = '—';
+    } else {
+      el('tokIn').textContent = fmtNum(u.input);
+      el('tokOut').textContent = fmtNum(u.output);
+      el('tokCache').textContent = fmtNum(u.cacheRead);
+      // 命中率 = 缓存读取 / (输入 + 缓存读取)。
+      // 分母不含输出：缓存只作用于输入侧，算进去会把命中率稀释成错的数。
+      var denom = (u.input || 0) + (u.cacheRead || 0);
+      el('hitRate').textContent = denom > 0
+        ? Math.round((u.cacheRead / denom) * 100) + '%'
+        : '—';
+    }
+    renderTools(snap.toolRank);
+  }
+
+  el('close').addEventListener('click', function () {
+    if (host) host.closeDetail(); else window.close();
+  });
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  var retry = 0;
+
+  /*
+   * 兜底拉取：WS 只在宿主认为"有变化"时才推帧，空闲时可能长时间一帧没有。
+   * 光等 onmessage 会让面板开着却是「未连接 / 全是 —」，看起来像坏了。
+   * 所以连上那一刻、以及每次重连后，都直接用 HTTP 拉一次当前快照。
+   */
+  function pullOnce(endpoint) {
+    if (!endpoint || typeof endpoint.url !== 'string') return;
+    fetch(endpoint.url)
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (snap) { if (snap) render(snap); })
+      .catch(function () { /* 拉不到就等 WS，别把面板弄崩 */ });
+  }
+
+  function connect(endpoint) {
+    var ws;
+    try {
+      ws = new WebSocket('ws://127.0.0.1:' + endpoint.port
+        + '/dsh-washer/stream?token=' + encodeURIComponent(endpoint.token));
+    } catch (e) { return; }
+    ws.onopen = function () {
+      retry = 0;
+      pullOnce(endpoint);
+    };
+    ws.onmessage = function (ev) {
+      try { render(JSON.parse(ev.data)); } catch (e) { /* 脏帧忽略 */ }
+    };
+    ws.onclose = function () {
+      retry = Math.min(retry + 1, 5);
+      setTimeout(reconnect, 500 * Math.pow(2, retry - 1));
+    };
+  }
+  function reconnect() {
+    if (!host) return;
+    host.state().then(function (st) {
+      if (st && st.endpoint) {
+        // 不等 onopen：WS 握手要时间，这一发让面板立刻有数
+        pullOnce(st.endpoint);
+        connect(st.endpoint);
+      } else setTimeout(reconnect, 2000);
+    });
+  }
+  if (host) reconnect();
+})();
+</script>
+</body>
+</html>

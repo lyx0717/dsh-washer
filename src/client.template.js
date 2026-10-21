@@ -42,35 +42,25 @@ window.__ModuleLoader__.load({
       'sub.draining': '上下文压缩中 · 第 {n} 件',
       'sub.done': '用时 {dur} · 共 {n} 件',
       'sub.error': '{code} · 点开看看',
-      'label.tools': '工具',
-      'label.tokens': 'Token',
-      'label.turns': '轮次',
-      'label.cost': '成本',
-      'label.expand': '展开明细',
-      'label.collapse': '收起',
       'label.washer': '洗衣机状态',
       'overlay.running': '浮窗模式 · 想看得更全请切回 dock',
       'label.skin': '外观',
-      'skin.auto': '跟随尺寸',
       'skin.precision': '精密家电',
       'skin.anime': '动漫',
       'skin.pixel': '像素',
-      'label.face': '表情',
-      'face.on': '开',
-      'face.off': '关',
-      'label.skinHint': '「跟随尺寸」= 小尺寸像素、中尺寸精密、大尺寸动漫',
       'set.title': '洗衣机',
       'set.intro': 'Agent 干活时的状态指示。改完立即生效。',
       'set.nav': '洗衣机',
-      'set.cost': '显示成本',
       'set.hideIdle': '空闲时隐藏',
-      'set.size': '默认档位',
       'set.restartHint': '档位和外观改完不用重启；成本需要先配好单价才会显示金额。',
-      'set.reduceMotion': '减少动态效果',
-      'reduce.auto': '跟随系统',
-      'reduce.always': '始终减弱',
-      'reduce.never': '不减弱',
-      'label.reduceMotionHint': '「跟随系统」由系统辅助功能开关决定；减弱只停滚筒、衣物、气泡这类装饰运动，指示灯和水位照常变化——它们表示状态。',
+      'set.overlay': '桌面悬浮窗',
+      'set.overlayOn': '显示悬浮窗',
+      'set.skinHint': '主界面和桌面悬浮窗共用这一套皮肤，改这里两边一起变。',
+      'set.overlayHint': '开启后随客户端启动，在桌面角落显示一台洗衣机；关掉会立刻收起。',
+      'set.overlaySize': '悬浮窗大小',
+      'ov.normal': '正常',
+      'ov.tiny': '极简',
+      'set.overlaySizeHint': '「极简」只留指示灯，不显示状态文字，占桌面空间最小。',
       'err.e00.title': '出了点问题',
       'err.e00.hint': '原因不明，可以重试一次',
       'err.e10.title': '账号或服务不可用',
@@ -84,8 +74,6 @@ window.__ModuleLoader__.load({
       'err.e40.hint': '不是故障，重新发一次就能续上',
       'err.e50.title': '被策略拦下了',
       'err.e50.hint': '这一步触发了限制，换个说法试试',
-      'label.noTools': '这轮还没有工具调用',
-      'foot': '状态全部由宿主事件推导，不猜测',
     };
 
     const EN = {
@@ -111,35 +99,25 @@ window.__ModuleLoader__.load({
       'sub.draining': 'Compacting context · {n} pcs',
       'sub.done': 'Took {dur} · {n} pcs',
       'sub.error': '{code} · tap to inspect',
-      'label.tools': 'Tools',
-      'label.tokens': 'Tokens',
-      'label.turns': 'Turns',
-      'label.cost': 'Cost',
-      'label.expand': 'Show details',
-      'label.collapse': 'Collapse',
       'label.washer': 'Washer status',
       'overlay.running': 'Overlay mode - switch back to dock for full detail',
       'label.skin': 'Skin',
-      'skin.auto': 'By size',
       'skin.precision': 'Precision',
       'skin.anime': 'Anime',
       'skin.pixel': 'Pixel',
-      'label.face': 'Face',
-      'face.on': 'On',
-      'face.off': 'Off',
-      'label.skinHint': '"By size" = pixel when small, precision when medium, anime when large',
       'set.title': 'Washer',
       'set.intro': 'Live status while the agent works. Changes take effect immediately.',
       'set.nav': 'Washer',
-      'set.cost': 'Show cost',
       'set.hideIdle': 'Hide when idle',
-      'set.size': 'Default size',
       'set.restartHint': 'Skin and size apply instantly; cost only shows once a unit price is configured.',
-      'set.reduceMotion': 'Reduced motion',
-      'reduce.auto': 'Follow system',
-      'reduce.always': 'Always reduce',
-      'reduce.never': 'Never reduce',
-      'label.reduceMotionHint': '"Follow system" respects your OS accessibility setting. Reducing stops only decorative motion (drum, clothes, bubbles); status indicators keep animating.',
+      'set.overlay': 'Desktop overlay',
+      'set.overlayOn': 'Show overlay',
+      'set.skinHint': 'One skin shared by the dock bar and the desktop overlay — change it once, both update.',
+      'set.overlayHint': 'Starts with the app and shows a washer in the corner of your desktop. Turning it off removes it immediately.',
+      'set.overlaySize': 'Overlay size',
+      'ov.normal': 'Normal',
+      'ov.tiny': 'Minimal',
+      'set.overlaySizeHint': '"Minimal" keeps only the indicator light with no status text - the smallest footprint.',
       'err.e00.title': 'Something went wrong',
       'err.e00.hint': 'Unknown cause - try again',
       'err.e10.title': 'Account or service unavailable',
@@ -153,8 +131,6 @@ window.__ModuleLoader__.load({
       'err.e40.hint': 'Not a failure - send it again to continue',
       'err.e50.title': 'Blocked by policy',
       'err.e50.hint': 'This step hit a limit - rephrase and retry',
-      'label.noTools': 'No tool calls this turn',
-      'foot': 'Every state is derived from host events, never guessed',
     };
 
     /* 每状态：水位 / 转速 / 泡沫。机型自己的表，和文案解耦 */
@@ -172,22 +148,53 @@ window.__ModuleLoader__.load({
       anime: { w: 230, h: 258 },
     };
 
+    /*
+     * 停靠条里那台机器的显示宽度。和 .dw-sprite 的 32px 对齐——
+     * 条高 52px，机器占 32×40，右边留文字。三套造型都缩到同一宽度，
+     * 换皮肤时文字位置不会跟着跳。
+     */
+    const WASHER_STRIP_MACHINE_W = 32;
+
     const DEFAULT_CONFIG = {
       enabled: true,
       mode: 'dock',
-      size: 'S',
-      expandedByDefault: false,
-      skin: 'auto',
-      skinBySize: { xs: 'pixel', sm: 'precision', md: 'precision', lg: 'anime' },
-      face: false,
-      reduceMotion: 'auto',
-      showCost: false,
+      /*
+       * 停靠条只有一种形态：不再有 S/M/L 三档，也不再点击展开。
+       * size / expandedByDefault 是旧字段，留着只为兼容老 config 不报错，
+       * 但已经没有任何代码读它们——渲染永远是 S 档停靠条。
+       */
+      /*
+       * 默认皮肤。以前是 'auto'（按尺寸自动挑 pixel/anime），
+       * 用户要求去掉"自动"选项——那就不能留个默认值让下拉里没有任何一项被选中。
+       * 直接落成 pixel：停靠条本身就是像素 sprite，视觉最连贯。
+       */
+      skin: 'pixel',
+      /*
+       * 皮肤只有一份：主界面停靠条和桌面悬浮窗共用同一个 skin。
+       *
+       * 早先分成 skin（主界面）和 desktopOverlaySkin（浮窗）两个字段，
+       * 结果是用户改了一个另一个不变，界面上两组"精密/动漫/像素"看着一模一样
+       * 却各自独立，本身就是误导。现在合并成一份，浮窗启动参数也读这个字段。
+       *
+       * skinBySize 只保留 xs/lg 两档宽度：停靠条里的迷你 sprite 和
+       * 悬浮窗/浮层用的大图。sm/md 是旧三档时代的产物，已无人使用。
+       */
+      skinBySize: { xs: 'pixel', lg: 'pixel' },
       costPerKToken: 0,
       costCurrency: 'CNY',
       hideWhenIdle: false,
       overlayOnlyWhenBusy: true,
       doneHoldMs: 6000,
       toolHistoryLimit: 6,
+      // 桌面悬浮窗（Electron 壳）：靠 localStorage 持久化，
+      // 宿主侧 apply() 读的是 cordis 配置，所以这里只负责"设置页能改、能同步给浮窗"
+      //
+      // desktopOverlay 必须在默认值里显式给出：设置页读的是 cfg.desktopOverlay === true，
+      // 这个键一旦缺失就比较成 undefined，"未配置"和"用户关了"会显示成同一个样子。
+      // 它同时决定宿主要不要拉起 Electron，默认必须是关——装了不看的人
+      // 不该莫名多一个后台进程和端口。
+      desktopOverlay: false,
+      desktopOverlaySize: 'normal',
     };
 
     /* ------------------------------------------------------------------ *
@@ -220,15 +227,11 @@ window.__ModuleLoader__.load({
       return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     }
 
-    function formatCost(tokens, cfg) {
-      const rate = cfg.costPerKToken;
-      if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return '';
-      if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) return '';
-      const value = (tokens / 1000) * rate;
-      const digits = value >= 1 ? 2 : 3;
-      return (cfg.costCurrency === 'USD' ? '$' : '¥') + value.toFixed(digits);
-    }
 
+    /**
+     * 皮肤只有三个合法值。老配置里可能还留着 skin:'auto'，按 pixel 处理，
+     * 免得渲染时拿到一个谁都不认识的字符串。
+     */
     function pickSkin(cfg, bucket) {
       if (cfg.skin !== 'auto') return cfg.skin;
       const mapped = cfg.skinBySize ? cfg.skinBySize[bucket] : undefined;
@@ -236,13 +239,13 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * reduceMotion 三态：
-     *   'always' 强制减弱（用户手动关动画）
-     *   'never'  强制不减弱（哪怕系统开着）
-     *   'auto'   跟随系统 —— 之前这里直接 return '0'，等于把系统开关当空气
+     * 减弱动态效果：只跟随系统，不再提供设置项。
      *
-     * 只读一次系统偏好即可，不需要挂 matchMedia 变更监听：
-     * 系统的实时变化由 CSS 的 @media 自己兜底，这里只负责配置态的初值。
+     * 原先有个三态设置（始终/从不/跟随系统），但「从不」等于无视用户的
+     * 无障碍设置，「始终」又让状态动效（滚筒、指示灯）也被冻住——它们本来
+     * 是传达信息的手段，不是装饰。既然两头都会把人带沟里，就不该让用户选。
+     *
+     * 只读一次系统偏好：实时变化由 CSS 里各处的 @media 自己兜底。
      */
     function systemPrefersReducedMotion() {
       try {
@@ -254,9 +257,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function reduceMotionFlag(cfg) {
-      if (cfg.reduceMotion === 'always') return '1';
-      if (cfg.reduceMotion === 'never') return '0';
+    function reduceMotionFlag() {
       return systemPrefersReducedMotion() ? '1' : '0';
     }
 
@@ -279,6 +280,18 @@ window.__ModuleLoader__.load({
         },
         dangerouslySetInnerHTML: { __html: SPRITE_SVG },
       });
+    }
+
+    /**
+     * 停靠条里那台小机器：按皮肤选造型。
+     *
+     * 宽度固定 30px。'auto'（老配置残留）走 pickSkin 落到 pixel，
+     * 不认识的值也一样——不能让停靠条因为一个脏字段变空白。
+     */
+    function MachineStrip(skin, state, screenTime) {
+      const resolved = skin === 'precision' || skin === 'anime' || skin === 'pixel' ? skin : 'pixel';
+      if (resolved === 'pixel') return PixelSprite(state);
+      return BigMachine(resolved, state, WASHER_STRIP_MACHINE_W, screenTime);
     }
 
     /* 任意机型统一放进固定尺寸 + transform 缩放的框里：重排一次都不做 */
@@ -345,15 +358,17 @@ window.__ModuleLoader__.load({
         h('div', { className: 'feet' })));
     }
 
-    function AnimeMachine(state, width, face, screenTime) {
+    function AnimeMachine(state, width, screenTime) {
       const play = SPEED[state] === '0s' ? 'paused' : 'running';
-      const eyes = face ? h('div', { className: 'dw-aw-eyes' }, h('i'), h('i')) : null;
+      // 表情（眼睛）曾经可开关，现在固定为关：在 32px 的停靠条里
+      // 一双眼睛只占几个像素，看不出表情，反而让机器显得脏。
+      const eyes = null;
       return MachineFrame('anime', state, width,
         h('div', {
           className: 'dw-aw',
           'data-state': state,
           'data-size': 'lg',
-          'data-face': face ? 'on' : 'off',
+
           style: {
             '--w': Math.round(NATURAL.anime.w) + 'px',
             '--speed': SPEED[state],
@@ -380,8 +395,8 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dw-aw-cord' })));
     }
 
-    function BigMachine(skin, state, width, face, screenTime) {
-      if (skin === 'anime') return AnimeMachine(state, width, face, screenTime);
+    function BigMachine(skin, state, width, screenTime) {
+      if (skin === 'anime') return AnimeMachine(state, width, screenTime);
       if (skin === 'pixel') return PixelMachine(state, width);
       return PrecisionMachine(state, width, screenTime);
     }
@@ -440,15 +455,9 @@ window.__ModuleLoader__.load({
       const nodes = useChat((s) => s.legacy.nodes);
       const turnTimings = useChat((s) => s.legacy.turnTimings);
       const outline = useProjection('turnOutline');
-      const tokenUsage = useProjection('tokenUsage');
-      const sessionStats = useProjection('sessionStats');
       // 上下文压缩的实时信号（chat nodes 里的 compaction 节点是压缩**落地后**才有的）
       const trajectory = useTrajectory((snapshot) => snapshot);
 
-      // size 决定挂载档位；expandedByDefault 是兼容别名（等价 size:'M'）
-      const [level, setLevel] = React.useState(
-        mergedCfg.size === 'L' ? 'L' : (mergedCfg.size === 'M' || mergedCfg.expandedByDefault === true ? 'M' : 'S'),
-      );
       const [, setTick] = React.useState(0);
       const [sticky, setSticky] = React.useState(null);
       const [shown, setShown] = React.useState(null);
@@ -515,49 +524,18 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(id);
       }, [sticky]);
 
-      const cycle = React.useCallback(() => {
-        setLevel((current) => (current === 'S' ? 'M' : current === 'M' ? 'L' : 'S'));
-      }, []);
-      /**
-       * Esc 逐级退回：L → M → S。
-       *
-       * 为什么用 document 级监听而不是根节点的 onKeyDown：
-       * React 的 onKeyDown 是合成事件、走冒泡，只有「焦点就在洗衣机的子孙节点里」
-       * 才会触发。而用户在 M/L 档看着卡片时，焦点多半还停在输入框或页面别处，
-       * 此时在根节点上挂 onKeyDown 根本收不到事件——表现为「按 Esc 没反应」。
-       *
-       * 这里用 document 捕获阶段监听，覆盖两条路径：
-       *   1. 焦点在洗衣机子树里 → 拦下 Esc，逐级退回（焦点可能已不在根节点上，
-       *      比如用户点了卡片里的皮肤按钮，React 委托处理器同样会漏）；
-       *   2. 焦点不在洗衣机里   → 交给宿主，输入框自己处理 Esc（取消生成等）。
-       */
+      // 根节点 ref：不再用于键盘处理（没有可收起的档位了），但保留它，
+      // 供测试和宿主定位"这台洗衣机的 DOM 根"，也便于将来做点击穿透之类的判断。
       const washerRootRef = React.useRef(null);
 
-      React.useEffect(() => {
-        if (level === 'S') return undefined;
-        const onDocKeyDown = (event) => {
-          if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
-          const root = washerRootRef.current;
-          if (root === null || !root.isConnected) return;
-          const active = typeof document === 'undefined' ? null : document.activeElement;
-          const focusInside = active !== null && active !== undefined && root.contains(active);
-          // 焦点不在洗衣机里：不拦，让输入框等宿主控件自己消化 Esc
-          if (!focusInside) return;
-          event.preventDefault();
-          event.stopPropagation();
-          setLevel((current) => (current === 'L' ? 'M' : 'S'));
-        };
-        document.addEventListener('keydown', onDocKeyDown, true);
-        return () => document.removeEventListener('keydown', onDocKeyDown, true);
-      }, [level]);
-
-      const onKeyDown = React.useCallback((event) => {
-        if (event.key === 'Escape' && level !== 'S') {
-          event.stopPropagation();
-          setLevel((current) => (current === 'L' ? 'M' : 'S'));
-        }
-      }, [level]);
-
+      /*
+       * 停靠条固定为一种形态，不再有展开档位。
+       *
+       * 这里曾经有三档（S 停靠条 / M 卡片 / L 大卡片+统计），点击循环、Esc 逐级退回。
+       * 用户明确要求只保留小尺寸：一个显示"洗到哪了"的状态条，不需要点开看详情——
+       * 详情该去悬浮窗右键菜单或详情面板看。于是 level 状态、cycle、
+       * document 级 Esc 捕获、M/L 两档的整棵卡片 DOM 全部删除。
+       */
       if (mergedCfg.enabled === false) return null;
       if (sessionId === undefined || sessionId === null || removed) return null;
 
@@ -572,18 +550,10 @@ window.__ModuleLoader__.load({
       const turn = latestTurnOf(outline);
       const elapsed = elapsedOf(turnTimings, turn, now);
       const toolCount = toolCountOf(nodes, turn);
-      const tools = recentTools(nodes, mergedCfg.toolHistoryLimit);
       const lastEnd = turnEndTimeOf(turnTimings, turn);
       const errorNode = findTurnError(nodes, turn) || findToolFailure(nodes, turn);
       const code = errorCodeOf(errorNode);
-      // 错误码本身对用户没信息量，翻译成「发生了什么 + 怎么办」
-      const errText = state === 'error' ? explainError(code) : null;
       const active = activeTool(runningCalls);
-      const tokens = tokenUsage
-        ? (Number(tokenUsage.uncachedInputTokens) || 0) + (Number(tokenUsage.cacheReadTokens) || 0)
-          + (Number(tokenUsage.cacheWriteTokens) || 0) + (Number(tokenUsage.outputTokens) || 0)
-        : 0;
-      const cost = mergedCfg.showCost === true ? formatCost(tokens, cfg) : '';
       const dur = formatDuration(elapsed);
 
       const title = tr('state.' + state);
@@ -601,140 +571,42 @@ window.__ModuleLoader__.load({
 
       const tone = state === 'error' ? 'error' : (state === 'waiting' ? 'warn' : (state === 'done' ? 'ok' : undefined));
 
-      const strip = h('button', {
-        type: 'button',
+      /*
+       * 停靠条从 <button> 改成静态 <div>：它不再可点开，就不是可交互控件。
+       * 继续用 button 会让读屏把它念成"可按下按钮"，键盘也会给它 tab 焦点，
+       * 按下去却什么都不会发生——比不给焦点更让人困惑。
+       * 状态信息改用 role="status" 传达，读屏会主动播报状态变化。
+       */
+      const strip = h('div', {
         className: 'dw-strip',
-        onClick: cycle,
-        'aria-expanded': level === 'S' ? 'false' : 'true',
+        role: 'status',
         'aria-label': tr('label.washer') + ': ' + title + ' · ' + sub,
-        title: level === 'S' ? tr('label.expand') : tr('label.collapse'),
+        title: tr('label.washer') + ': ' + title + ' · ' + sub,
       },
-      PixelSprite(state),
+      /*
+       * 皮肤要真的生效。
+       *
+       * 删掉 M/L 展开卡时，这里跟着变成了写死的 PixelSprite——条上永远是像素小图，
+       * 用户改设置页皮肤当然一点变化没有。三台机器本来都在（BigMachine 还在），
+       * 只是没人调用它们了。
+       *
+       * 停靠条里机器只占 30px 宽，三套造型在这个尺寸下都还能认出来，
+       * 所以按 skin 直接选；老配置里的 'auto' 由 pickSkin 兜底成 pixel。
+       */
+      MachineStrip(mergedCfg.skin, state, dur),
       h('span', { className: 'dw-text' },
         h('span', { className: 'dw-t1', 'data-tone': tone }, title),
         h('span', { className: 'dw-t2' }, sub)),
       h('span', { className: 'dw-dot' }));
 
-      if (level === 'S') {
-        return h('div', {
-          className: 'dsh-washer',
-          ref: washerRootRef,
-          'data-state': state,
-          'data-level': 'S',
-          'data-variant': variant,
-          'data-reduce-motion': reduceMotionFlag(cfg),
-          onKeyDown,
-        }, strip);
-      }
-
-      const bucket = level === 'M' ? 'sm' : 'lg';
-      const skin = pickSkin(cfg, bucket);
-      const machineWidth = level === 'M' ? 96 : 176;
-      const screenTime = state === 'idle' || state === 'off' ? '--:--' : dur;
-
-      const toolRows = tools.length === 0
-        ? [h('div', { className: 'dw-empty', key: 'empty' }, tr('label.noTools'))]
-        : tools.map((item, index) => h('div', { className: 'dw-tool', key: 'tool-' + index },
-          h('span', { className: 'dw-tool-mark', 'data-error': item.isError ? '1' : '0' }),
-          h('span', { className: 'dw-tool-name' }, item.name),
-          h('span', { className: 'dw-tool-dur' }, item.ms === undefined ? '' : formatToolMs(item.ms))));
-
-      // 外观切换：直接改 store，立刻生效（不用手编 cordis.patch.yml）
-      const skinNow = pickSkin(cfg, level === 'M' ? 'sm' : 'lg');
-      const skinOptions = [
-        ['auto', tr('skin.auto')],
-        ['precision', tr('skin.precision')],
-        ['anime', tr('skin.anime')],
-        ['pixel', tr('skin.pixel')],
-      ];
-      const skinRow = h('div', { className: 'dw-skinrow' },
-        h('span', { className: 'dw-skinrow-label' }, tr('label.skin')),
-        h('span', { className: 'dw-seg', role: 'group', 'aria-label': tr('label.skin') },
-          skinOptions.map(([value, text]) => h('button', {
-            key: 'skin-' + value,
-            type: 'button',
-            className: 'dw-seg-btn',
-            'data-on': (mergedCfg.skin === value ? '1' : '0'),
-            onClick: (event) => {
-              event.stopPropagation();
-              setPref('skin', value);
-            },
-          }, text))),
-        h('span', { className: 'dw-skinrow-label' }, tr('label.face')),
-        h('span', { className: 'dw-seg', role: 'group', 'aria-label': tr('label.face') },
-          [['on', tr('face.on')], ['off', tr('face.off')]].map(([value, text]) => h('button', {
-            key: 'face-' + value,
-            type: 'button',
-            className: 'dw-seg-btn',
-            'data-on': ((mergedCfg.face === true ? 'on' : 'off') === value ? '1' : '0'),
-            onClick: (event) => {
-              event.stopPropagation();
-              setPref('face', value === 'on');
-            },
-          }, text))));
-
-      const stats = [
-        h('span', { key: 'tools' }, tr('label.tools') + ' ', h('b', {}, String(toolCount))),
-        h('span', { key: 'tokens' }, tr('label.tokens') + ' ', h('b', {}, formatTokens(tokens))),
-      ];
-      if (sessionStats && typeof sessionStats.turns === 'number') {
-        stats.push(h('span', { key: 'turns' }, tr('label.turns') + ' ', h('b', {}, String(sessionStats.turns))));
-      }
-      if (cost !== '') {
-        stats.push(h('span', { key: 'cost' }, tr('label.cost') + ' ', h('b', {}, cost)));
-      }
-
-      let badgeText = '';
-      if (state === 'error') badgeText = code;
-      else if (state === 'idle') badgeText = lastEnd === undefined ? '' : formatClock(lastEnd);
-      else if (state === 'off') badgeText = '';
-      else badgeText = dur;
-      const badgeTone = state === 'error' ? 'error' : undefined;
-
-      // 卡片头的折叠按钮：点标题区在 M ⇄ L 之间切换，L 档再点就收起回 S。
-      // 为什么不在整张卡片上挂 onClick：卡片里已经有皮肤分段控件和自己的按钮，
-      // 外层再监听点击会让"点控件"同时触发折叠（得靠每个子按钮 stopPropagation 兜底，
-      // 漏一个就是 bug）。用显式按钮最稳，也让键盘/读屏能直接摸到。
-      // 收起键在任何档位都直接回 S。之前 M 档点它是「展开到 L」，
-      // 于是 M 档既没有收起入口、连按 Esc 也只是退回 M，用户会以为按钮坏了。
-      const headToggle = h('button', {
-        type: 'button',
-        className: 'dw-fold',
-        onClick: (event) => {
-          event.stopPropagation();
-          setLevel('S');
-        },
-        'aria-expanded': 'true',
-        'aria-label': tr('label.collapse'),
-        title: tr('label.collapse'),
-      }, h('span', { className: 'dw-fold-icon', 'aria-hidden': 'true' }, '⌄'));
-
       return h('div', {
         className: 'dsh-washer',
         ref: washerRootRef,
         'data-state': state,
-        'data-level': level,
+        'data-level': 'S',
         'data-variant': variant,
-        'data-reduce-motion': reduceMotionFlag(cfg),
-        onKeyDown,
-      },
-      // 三档互斥：S 只显示停靠条，M/L 只显示卡片（同屏出现两个「待机」是明显的错）
-      level === 'S' ? strip : h('div', { className: 'dw-card' },
-        h('div', { className: 'dw-card-head' },
-          h('div', { className: 'dw-machine' }, BigMachine(skin, state, machineWidth, mergedCfg.face === true, screenTime)),
-          h('div', { className: 'dw-meta' },
-            h('span', { className: 'dw-meta-title', 'data-tone': tone }, title),
-            h('span', { className: 'dw-meta-sub', 'data-tone': tone }, sub)),
-          badgeText === '' ? null : h('span', { className: 'dw-badge', 'data-tone': badgeTone }, badgeText)),
-        errText === null ? null : h('div', { className: 'dw-err' },
-          h('span', { className: 'dw-err-code' }, code),
-          h('span', { className: 'dw-err-title' }, tr(errText.title)),
-          h('span', { className: 'dw-err-hint' }, tr(errText.hint))),
-        h('div', { className: 'dw-tools' }, toolRows),
-        level === 'L' ? h('div', { className: 'dw-stats' }, stats) : null,
-        level === 'L' ? skinRow : null,
-        level === 'L' ? h('div', { className: 'dw-foot' }, tr('foot')) : null,
-        h('div', { className: 'dw-footbar' }, headToggle)));
+        'data-reduce-motion': reduceMotionFlag(),
+      }, strip);
     }
 
     /* ------------------------------------------------------------------ *
@@ -765,7 +637,15 @@ window.__ModuleLoader__.load({
       // 所以拿不到插件自己的 --dw-* 变量（实测 --dw-run 算出空串）。而 var(--x, fallback)
       // 只在"变量无效"时回退，空串算"已定义"，于是整条背景色失效、开关变成透明方块。
       // 这里直接用宿主 token，并且不再套一层自家变量。
-      const BRAND = 'var(--dsw-alias-state-business-primary)';
+      /*
+       * 选中态主色。原来用 state-business-primary（深蓝 #4176e6），
+       * 和宿主设置页其它控件对不上——用户反馈"选择按钮得是黑色"。
+       * 宿主自己的激活态（勾选框、页面 tab 下划线）用的是 label-primary，
+       * 浅色主题下是 #0f1115（近黑），深色主题下自动翻成浅色。
+       * 跟着它走就和整套设置页一致了。
+       */
+      const BRAND = 'var(--dsw-alias-label-primary)';
+      const BRAND_FG = 'var(--dsw-alias-label-primary-inverted)';
       const LINE = 'var(--dsw-alias-border-l1)';
       const sw = (key, on, ariaLabel) => h('button', {
         key,
@@ -799,7 +679,8 @@ window.__ModuleLoader__.load({
           width: '18px',
           height: '18px',
           borderRadius: '50%',
-          background: '#fff',
+          // 宿主自己的开关滑块色；写死 #fff 在深色主题下会突兀
+          background: 'var(--dsw-alias-switch-thumb, #fff)',
           boxShadow: '0 1px 2px rgba(0,0,0,.28)',
           transition: 'left 0.18s cubic-bezier(.32,.72,0,1)',
         },
@@ -822,7 +703,8 @@ window.__ModuleLoader__.load({
             appearance: 'none',
             border: '1px solid ' + (on ? BRAND : LINE),
             background: on ? BRAND : 'transparent',
-            color: on ? '#fff' : 'var(--dsw-alias-label-secondary)',
+            // 选中态底色是黑（深色主题是白），字必须反着来，不能写死 #fff
+            color: on ? BRAND_FG : 'var(--dsw-alias-label-secondary)',
             borderRadius: '999px',
             padding: '4px 11px',
             font: 'inherit',
@@ -840,30 +722,24 @@ window.__ModuleLoader__.load({
         h('h3', { className: 'dw-set-title' }, tr('set.title')),
         h('p', { className: 'dw-set-intro' }, tr('set.intro')),
 
-        row('label.face', sw('face', cfg.face === true, tr('label.face'))),
-        row('set.cost', sw('showCost', cfg.showCost === true, tr('set.cost'))),
         row('set.hideIdle', sw('hideWhenIdle', cfg.hideWhenIdle === true, tr('set.hideIdle'))),
 
         row('label.skin', seg(tr('label.skin'), [
-          ['auto', tr('skin.auto')],
           ['precision', tr('skin.precision')],
           ['anime', tr('skin.anime')],
           ['pixel', tr('skin.pixel')],
         ], cfg.skin, (value) => setPref('skin', value))),
-        h('p', { className: 'dw-set-hint' }, tr('label.skinHint')),
+        h('p', { className: 'dw-set-hint' }, tr('set.skinHint')),
 
-        row('set.size', seg(tr('set.size'), [
-          ['S', 'S'], ['M', 'M'], ['L', 'L'],
-        ], cfg.size, (value) => setPref('size', value))),
-
-        row('set.reduceMotion', seg(tr('set.reduceMotion'), [
-          ['auto', tr('reduce.auto')],
-          ['always', tr('reduce.always')],
-          ['never', tr('reduce.never')],
-        ], cfg.reduceMotion === undefined ? 'auto' : cfg.reduceMotion,
-        (value) => setPref('reduceMotion', value))),
-        h('p', { className: 'dw-set-hint' }, tr('label.reduceMotionHint')),
-
+        h('h4', { className: 'dw-set-sub' }, tr('set.overlay')),
+        h('p', { className: 'dw-set-hint' }, tr('set.overlayHint')),
+        row('set.overlayOn', sw('desktopOverlay', cfg.desktopOverlay === true, tr('set.overlayOn'))),
+        row('set.overlaySize', seg(tr('set.overlaySize'), [
+          ['normal', tr('ov.normal')],
+          ['tiny', tr('ov.tiny')],
+        ], cfg.desktopOverlaySize === undefined ? 'normal' : cfg.desktopOverlaySize,
+        (value) => setPref('desktopOverlaySize', value))),
+        h('p', { className: 'dw-set-hint' }, tr('set.overlaySizeHint')),
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));
     }
 
@@ -922,7 +798,7 @@ window.__ModuleLoader__.load({
         'data-state': state,
         'data-level': 'S',
         'data-variant': 'overlay',
-        'data-reduce-motion': reduceMotionFlag(cfg),
+        'data-reduce-motion': reduceMotionFlag(),
       },
       h('button', {
         type: 'button',
@@ -957,6 +833,13 @@ window.__ModuleLoader__.load({
       name: 'dsh-washer',
       // 只要 slots 与 locale：配置改动存 localStorage，不再依赖 configForms。
       inject: ['slots', 'locale'],
+      /**
+       * 默认值清单。客户端合并配置的骨架就是它，
+       * 测试也拿它钉「设置页能写的字段一个都不能漏」：
+       * 漏了的字段在骨架里没有格子，设置页读出来就是 undefined，
+       * "从没配过"和"用户亲手关了"就分不出来了。
+       */
+      __defaults: DEFAULT_CONFIG,
       apply(ctx, config) {
         const cfg = mergeConfig(config);
         ensureStyles();
@@ -997,6 +880,56 @@ window.__ModuleLoader__.load({
           prefs[key] = value;
           try { if (storage !== null) storage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* 存不了也要让本次生效 */ }
           notifyPrefs();
+          syncOverlayPrefs(key, value);
+        };
+
+        /*
+         * 悬浮窗的三个偏好要额外告诉宿主一声。
+         *
+         * 为什么不能只写 localStorage：悬浮窗是独立的 Electron 进程，它的主进程
+         * 读不到浏览器的 localStorage。宿主把值落进偏好文件，浮窗主进程 watch
+         * 那个文件后自己改窗口大小/换造型——否则用户改完设置得重启宿主才生效，
+         * 看起来就是"设置改了没反应"。
+         *
+         * 失败不打扰用户：设置本身已经在 localStorage 里生效了，只是浮窗要等下次启动。
+         */
+        /*
+         * 只有两项往返同步：显不显示、浮窗大小。
+         *
+         * 皮肤曾经也在这里（desktopOverlaySkin ↔ skin），合并成单一 skin 后
+         * 它仍然要同步，但走的不是这条通道——skin 是本地偏好，改它时
+         * writePref 会额外把值推给宿主，见下方 syncSkinToOverlay。
+         */
+        const OVERLAY_PREF_KEYS = {
+          desktopOverlay: 'show',
+          desktopOverlaySize: 'size',
+          /*
+           * skin 现在同时是主界面皮肤和浮窗造型，所以改它必须推一份给宿主，
+           * 否则浮窗要等下次重启才换。反方向由 SSE 回灌（见 applyRemotePrefs）。
+           */
+          skin: 'skin',
+        };
+        /** 宿主用 ctx.webServer 注册的同源路由，页面直接相对路径请求即可。 */
+        const OVERLAY_PREFS_PATH = '/dsh-washer/prefs';
+        /*
+         * 注意：这里必须用**同源相对路径**。
+         *
+         * 之前写成 props.washerEndpoint().url + 拼 token —— 那个注入项在客户端
+         * 插件里根本不存在，首行就 return，POST 一次都没发出去，功能看着写了
+         * 实际静默不工作。宿主那边已经用 ctx.webServer 注册了同源路由
+         * /dsh-washer/prefs，页面和它是同一个 origin，直接相对路径打过去即可：
+         * 不用端口、不用 token、不受 connect-src 的 CSP 限制。
+         */
+        const syncOverlayPrefs = (key, value) => {
+          const field = OVERLAY_PREF_KEYS[key];
+          if (field === undefined) return;
+          try {
+            fetch(OVERLAY_PREFS_PATH, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ [field]: value }),
+            }).catch(() => { /* 宿主没接这条路就算了，不影响设置本身 */ });
+          } catch { /* 同上 */ }
         };
         // 组件一律通过 washerGetConfig() 现取，而不是吃 inject 给的快照：
         // inject 回调只在注册时跑一次，重渲染不会重新求值。
@@ -1004,6 +937,105 @@ window.__ModuleLoader__.load({
           prefListeners.add(fn);
           return () => { prefListeners.delete(fn); };
         };
+
+        /*
+         * ---------------- 悬浮窗偏好：反方向同步 ----------------
+         *
+         * 到此为止全是「设置页 → 悬浮窗」：页面写 localStorage，再 POST 给宿主，
+         * 宿主落文件，Electron 主进程 watch 文件改窗口。
+         *
+         * 缺的一半是反过来的：用户在悬浮窗右键菜单里换造型/切极简，
+         * 那个改动只到 Electron 主进程和偏好文件。设置页读的是 localStorage，
+         * **没有任何东西告诉它变了**——于是两边长期不一致，要手动刷新页面
+         * 才"看起来"同步上。
+         *
+         * 现在补上：
+         *   1) 打开设置页时先从宿主拉一次当前值（偏好文件才是真相源，
+         *      localStorage 只是缓存，它不知道右键菜单里改过什么）
+         *   2) 长连 SSE，宿主只要推过来就合并进 prefs 并重渲染
+         */
+        const OVERLAY_PREFS_EVENTS_PATH = '/dsh-washer/prefs/events';
+
+        /**
+         * 把宿主给的字段并进本地 prefs。
+         *
+         * 只认认识的字段、只做覆盖不删除：宿主那边少了某个 key 不代表
+         * 用户要清空它，多半只是从没写过。返回值表示到底有没有变化，
+         * 没变化就不重渲染，免得 SSE 心跳把整页刷一遍。
+         */
+        const applyRemotePrefs = (remote) => {
+          if (remote === null || typeof remote !== 'object') return;
+          // skin 从浮窗菜单改也要回灌到主界面皮肤，所以反向映射保留 skin → skin
+          const REVERSE = { show: 'desktopOverlay', size: 'desktopOverlaySize', skin: 'skin' };
+          let changed = false;
+          for (const field of Object.keys(REVERSE)) {
+            if (remote[field] === undefined) continue;
+            const key = REVERSE[field];
+            let value = remote[field];
+            // 本地字段名和文件字段名眼瞅着一样，但类型不同：
+            // 文件里 size 是 'tiny'/'normal'，页面里是 desktopOverlaySize
+            if (key === 'desktopOverlay' && typeof value !== 'boolean') continue;
+            if (prefs[key] === value) continue;
+            prefs[key] = value;
+            changed = true;
+          }
+          if (!changed) return;
+          try { if (storage !== null) storage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* 存不了也要让本次生效 */ }
+          notifyPrefs();
+        };
+
+        /** 拉一次当前值。失败静默——宿主没起时页面照样能用旧的 localStorage 值。 */
+        const pullOverlayPrefs = () => {
+          try {
+            fetch(OVERLAY_PREFS_PATH, { headers: { accept: 'application/json' } })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => applyRemotePrefs(data))
+              .catch(() => { /* 宿主没接这条路就算了 */ });
+          } catch { /* 同上 */ }
+        };
+
+        /*
+         * 长连 SSE。EventSource 断线会自己重连（默认 3 秒左右），
+         * 所以不用写重试逻辑；页面关掉时 EventSource 随文档销毁。
+         *
+         * 为什么不用 WebSocket：那是给 Electron 用的、带 token 的端口，
+         * 页面这边同源 HTTP 就够，还不用碰 CSP 的 connect-src 名单。
+         */
+        let prefEvents = null;
+        const startPrefEvents = () => {
+          if (prefEvents !== null) return;
+          if (typeof EventSource === 'undefined') {
+            // 极老的浏览器没有 EventSource：退化成只拉一次，至少打开时不显示旧值
+            pullOverlayPrefs();
+            return;
+          }
+          try {
+            prefEvents = new EventSource(OVERLAY_PREFS_EVENTS_PATH);
+          } catch {
+            prefEvents = null;
+            return;
+          }
+          prefEvents.addEventListener('message', (event) => {
+            try { applyRemotePrefs(JSON.parse(event.data)); } catch { /* 坏帧跳过，等下一帧 */ }
+          });
+          // error 事件里不用做任何事：EventSource 自己会重连。
+          // 真正断网时它会一直重试，这正是想要的——用户切回来就自动恢复。
+        };
+
+        ctx.effect(() => {
+          pullOverlayPrefs();
+          startPrefEvents();
+          return () => {
+            if (prefEvents !== null) { try { prefEvents.close(); } catch { /* noop */ } prefEvents = null; }
+          };
+        }, 'dsh-washer: overlay prefs sync');
+
+        // 测试用把手：拉取发生在 apply() 里，比任何用例都早，而且前面几条
+        // 推送用例会把 fetch 记录清空——想断言"打开时会拉一次"就没法看全程了。
+        // 暴露出来让测试能开一个明确的观察窗口。
+        if (typeof globalThis === 'object' && globalThis !== null) {
+          globalThis.__pullOverlayPrefs = pullOverlayPrefs;
+        }
 
         // 同一命名空间重复注册同语言会抛错（HMR / 重复挂载），逐个容错
         ctx.effect(() => {

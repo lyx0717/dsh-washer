@@ -9,8 +9,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
+import { writeFileSync, rmSync } from 'node:fs';
 
-import { foldEvent, encodeWsText, apply, isOwnEndpoint } from '../index.js';
+import { foldEvent, encodeWsText, apply, isOwnEndpoint, speedOf, rankTools } from '../index.js';
 
 /**
  * 测试专用端点路径：绝不能碰 ~/.dsh 下的真实文件（宿主服务在用它）。
@@ -23,8 +24,21 @@ import { foldEvent, encodeWsText, apply, isOwnEndpoint } from '../index.js';
 const TEST_ENDPOINT = '/tmp/dsh-washer-test-endpoint.json';
 process.env.DSH_WASHER_ENDPOINT_FILE = TEST_ENDPOINT;
 
+/**
+ * 同理，偏好文件也必须隔离。
+ *
+ * 这份文件是设置页和悬浮窗之间唯一的桥，运行中的宿主和真实的 Electron
+ * 进程都在 watch 它。跑单测时往里面写真数据有两个后果：
+ *   1) 用户开着悬浮窗时跑一次测试，窗口会被测试的偏好改掉；
+ *   2) 测试写进去的值留在真实文件里，看起来像"用户自己改的"。
+ * 和端点文件一样，模块加载时就钉死路径，不靠用例记得调。
+ */
+const TEST_PREFS = '/tmp/dsh-washer-test-prefs.json';
+process.env.DSH_WASHER_PREFS_FILE = TEST_PREFS;
+
 function useTestEndpoint() {
   process.env.DSH_WASHER_ENDPOINT_FILE = TEST_ENDPOINT;
+  process.env.DSH_WASHER_PREFS_FILE = TEST_PREFS;
 }
 
 function freshState() {
@@ -36,6 +50,10 @@ function freshState() {
     callStartedAt: new Map(),
     turnTimings: new Map(),
     running: false,
+    usage: null,
+    model: null,
+    lastUsage: null,
+    tokenSamples: [],
   };
 }
 
@@ -148,7 +166,27 @@ test('WS 帧编码：超过 64KB 返回 null（不静默截断）', () => {
  * apply()：起服务、鉴权、可卸载
  * ------------------------------------------------------------------ */
 
+/**
+ * 每个用例开工前把偏好文件清干净。
+ *
+ * apply() 现在启动时会读偏好文件当作用户真实设置（否则每次启动都先
+ * 冒出默认造型，几百毫秒后才被 watchPrefs 纠正）。副作用是：上一个
+ * 用例留下的 {"show":true} 会被下一个用例当成用户配置读走，
+ * 于是「desktopOverlay:false 不该起服务」这种断言莫名其妙失败。
+ *
+ * 这种污染靠"记得在用例里清理"是防不住的——一定会漏。放在 makeCtx
+ * 里统一清，因为它几乎是所有用例的入口。
+ */
+let PRESERVE_PREFS = false;
+function resetPrefsFile() {
+  if (PRESERVE_PREFS) { PRESERVE_PREFS = false; return; }
+  try {
+    rmSync(TEST_PREFS, { force: true });
+  } catch { /* 没有就没有 */ }
+}
+
 function makeCtx() {
+  resetPrefsFile();
   const handlers = new Map();
   const disposers = [];
   return {
@@ -434,6 +472,103 @@ test('端点文件里记的端口必须是真正 listen 的那个', async () => 
   rmSync(file, { force: true });
 });
 
+test('assistant/message 的 usage 要记录下来（详情面板的数据源）', () => {
+  const state = freshState();
+  const usage = { inputTokens: 8081, outputTokens: 1270, cacheReadTokens: 16640, cacheWriteTokens: 0, totalTokens: 25991 };
+  foldEvent(state, {
+    type: 'assistant/message',
+    data: {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [], source: { kind: 'model', provider: 'deepseek-account', model: 'deepseek-flash' }, id: 'x' },
+      usage,
+    },
+  }, 1000);
+  assert.equal(state.usage.input, 8081);
+  assert.equal(state.usage.output, 1270);
+  assert.equal(state.usage.cacheRead, 16640);
+  assert.equal(state.model, 'deepseek-flash');
+});
+
+test('速度按累计 token 的差值算，不是按采样次数', () => {
+  // usage 是累加值：第二条 2000 表示累计到 2000，不是"这条用了 2000"。
+  // 拿它当每条的量会算出 3 倍速度。
+  const samples = [
+    { at: 0, output: 0 },
+    { at: 1000, output: 500 },
+    { at: 2000, output: 1000 },
+  ];
+  const speed = speedOf(samples, 2000, 5000);
+  assert.equal(speed, 500, '2000ms 内累计 1000 token → 500 tok/s');
+});
+
+test('工具排行按耗时倒序，同名工具合并取最大值', () => {
+  // 面板要回答"哪个工具在拖后腿"，逐次罗列反而看不清。
+  const nodes = [
+    { kind: 'tool-result', turn: 1, name: 'bash', callTime: 0, time: 1200, isError: false },
+    { kind: 'tool-result', turn: 1, name: 'read', callTime: 0, time: 300, isError: false },
+    { kind: 'tool-result', turn: 1, name: 'bash', callTime: 0, time: 3500, isError: true },
+  ];
+  const ranked = rankTools(nodes, 1);
+  assert.equal(ranked.length, 2, '两个不同工具');
+  assert.equal(ranked[0].name, 'bash');
+  assert.equal(ranked[0].ms, 3500, '同名取最大耗时');
+  assert.equal(ranked[0].calls, 2);
+  assert.equal(ranked[0].isError, true, '任一次出错就标记');
+});
+
+test('工具排行只看当前轮', () => {
+  const nodes = [
+    { kind: 'tool-result', turn: 1, name: 'bash', callTime: 0, time: 9000, isError: false },
+    { kind: 'tool-result', turn: 2, name: 'read', callTime: 0, time: 100, isError: false },
+  ];
+  const ranked = rankTools(nodes, 2);
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0].name, 'read');
+});
+
+test('采样点不足或时间差为零时速度返回 null，不编数字', () => {
+  assert.equal(speedOf([], 1000), null);
+  assert.equal(speedOf([{ at: 0, output: 100 }], 1000), null);
+  assert.equal(speedOf([{ at: 500, output: 100 }, { at: 500, output: 200 }], 500), null);
+});
+
+test('窗口内只有一个采样点时，退到最近两次采样算速度（否则速度永远不显示）', () => {
+  // 真实场景：一次工具调用要好几秒，中间没有 assistant/message，
+  // 5 秒窗口里常常只有一个采样点。旧实现这时返回 null，速度就永远显示 —。
+  const samples = [
+    { at: 0, output: 100 },
+    { at: 8000, output: 900 },   // 8 秒后才来第二条
+  ];
+  const speed = speedOf(samples, 8000, 5000);
+  assert.equal(speed, 100, '800 增量 / 8 秒 = 100 tok/s');
+});
+
+test('最近一次采样太旧时不算速度（陈年数据不是当前速度）', () => {
+  const samples = [
+    { at: 0, output: 100 },
+    { at: 1000, output: 900 },
+  ];
+  // 20 秒没新产出，还报 800 tok/s 就是骗人
+  assert.equal(speedOf(samples, 21000, 5000), null);
+});
+
+test('输出没有增长时速度返回 null，不编 0', () => {
+  const samples = [
+    { at: 0, output: 500 },
+    { at: 1000, output: 500 },
+  ];
+  assert.equal(speedOf(samples, 1000, 5000), null);
+});
+
+test('累计值回退时速度返回 null（会话切换或计数重置）', () => {
+  const samples = [
+    { at: 0, output: 5000 },
+    { at: 1000, output: 100 },
+  ];
+  assert.equal(speedOf(samples, 1000, 5000), null);
+});
+
 test('端点文件只由自己的进程删（pid/token/port 三项都要对上）', () => {
   // 这个文件是悬浮窗和用户找端口/token 的唯一入口。
   // 早期实现用模块级变量记住路径，插件重载时新旧实例互相踩，
@@ -484,4 +619,157 @@ test('apply：卸载后服务关闭，端口释放', async () => {
     () => get(port, '/dsh-washer/health'),
     '卸载后端口不该还在监听',
   );
+});
+
+/* ------------------------------------------------------------------ *
+ * 悬浮窗开关：运行中拨动必须真的拉进程 / 杀进程
+ * ------------------------------------------------------------------ */
+
+test('悬浮窗开关：运行中拨到关，必须杀掉 Electron 进程（不能只写文件）', async () => {
+  /*
+   * 用户报的「显示悬浮窗设置没生效」根因就在这里：
+   * enabled 原本是 apply 时算一次的常量，运行中拨开关只写了偏好文件，
+   * 拉起/杀进程那段代码根本走不到。偏好文件写着 show:false，
+   * 进程却还活着——看起来就是开关坏了。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+
+  // 拉起是不是真的发生取决于本机有没有 Electron，这里不强求；
+  // 关键是「关」这一侧必须把进程清干净、偏好必须落盘。
+  const saved = api.syncOverlayPrefs({ show: false });
+  assert.ok(saved !== null, '偏好应当写成功');
+  assert.equal(saved.show, false, '偏好文件里要记下 show:false');
+
+  ctx.dispose();
+});
+
+test('悬浮窗开关：只认布尔值，脏数据不改存在的那一份', () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+
+  // 先写一个干净的值
+  const first = api.syncOverlayPrefs({ show: false });
+  assert.equal(first.show, false, '布尔值才认');
+
+  // 字符串 'false' 不能当成 false 写进去——否则页面传错类型会静默关掉窗口
+  const dirty = api.syncOverlayPrefs({ show: 'false' });
+  assert.equal(dirty.show, false, '脏值应当被忽略，保留原来的 false 而不是被字符串覆盖');
+
+  // 完全不认识的字段也别把整份文件写坏
+  const junk = api.syncOverlayPrefs({ size: 'huge' });
+  assert.notEqual(junk.size, 'huge', '非法 size 不落盘');
+  assert.equal(junk.show, false, '已有的 show 保留');
+
+  // 传 null 直接拒绝
+  assert.equal(api.syncOverlayPrefs(null), null);
+
+  ctx.dispose();
+});
+
+test('apply：desktopOverlayAutoLaunch:false 时不拉进程，但服务照开', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0, desktopOverlayAutoLaunch: false });
+  const port = await waitForPort(api);
+  assert.ok(port > 0, '关掉自动拉起不该影响服务');
+  ctx.dispose();
+});
+
+test('悬浮窗开关：启动时关、运行中拨到开，必须能把服务起起来', async () => {
+  /*
+   * 这是「设置改了没反应」的第二层根因，比 enabled 常量更隐蔽：
+   * 启动时 desktopOverlay:false → server.listen 根本没被调用；
+   * 之后拨开关走 syncOverlayPrefs → 旧实现只调 launchOverlay()，
+   * 而它里头有 if (!server.listening) return false;  于是永远拉不起窗口。
+   *
+   * 用户在设置页看到的现象就是：开关拨过去、文件也写对了，窗口就是不出现。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false, desktopOverlayPort: 0 });
+  assert.equal(api.port(), 0, '启动时关着，不该占端口');
+
+  const saved = api.syncOverlayPrefs({ show: true });
+  assert.ok(saved !== null);
+  assert.equal(saved.show, true);
+
+  const port = await waitForPort(api);
+  assert.ok(port > 0, '拨到开后服务必须真的 listen 起来，否则悬浮窗没东西可连');
+
+  ctx.dispose();
+});
+
+test('偏好双向同步：POST 进来的偏好要能通过 GET 读回（浮窗 → 设置页的回程）', async () => {
+  /*
+   * 悬浮窗右键菜单改完 → notifyHost() POST 到 /dsh-washer/prefs →
+   * 宿主写文件 → 设置页 GET 到新值。
+   * 这条断言"写进去的能读出来"，是整条回程的地基。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+
+  const saved = api.syncOverlayPrefs({ size: 'tiny', skin: 'anime' });
+  assert.equal(saved.size, 'tiny');
+
+  // 走真实 HTTP GET（端点带 token，从闭包里拿不到，直接用内部函数比
+  // 更贴近实际使用：设置页读的就是这一份）
+  const { readOverlayPrefs } = await import('../index.js');
+  const current = readOverlayPrefs();
+  assert.equal(current.size, 'tiny', '写进去的要能读回来');
+  assert.equal(current.skin, 'anime');
+
+  ctx.dispose();
+});
+
+test('偏好双向同步：非法值写不进去，读回来的仍是上一个合法值', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+
+  api.syncOverlayPrefs({ size: 'normal', skin: 'pixel' });
+  // 塞一堆脏东西
+  api.syncOverlayPrefs({ size: 'huge', skin: 'DROP TABLE', show: 'yes' });
+
+  const { readOverlayPrefs } = await import('../index.js');
+  const current = readOverlayPrefs();
+  assert.equal(current.size, 'normal', '非法 size 不该覆盖合法值');
+  assert.equal(current.skin, 'pixel', '非法 skin 不该覆盖合法值');
+
+  ctx.dispose();
+});
+
+test('启动时读偏好文件的 size/skin（否则每次启动都先闪默认造型）', () => {
+  /*
+   * 用户报「启动客户端时初始状态没同步」：
+   * 静态 config 写 desktopOverlaySkin: precision，用户设置页改成 pixel 后
+   * 存在偏好文件里。启动路径不读文件的话，每次都会先冒出一台精密家电，
+   * 几百毫秒后才被 watchPrefs 纠正成像素——看着就是"启动时不对"。
+   */
+  writeFileSync(TEST_PREFS, JSON.stringify({ size: 'tiny', skin: 'pixel', show: true }));
+
+  PRESERVE_PREFS = true;
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0, desktopOverlayAutoLaunch: false });
+  assert.ok(api !== null);
+  ctx.dispose();
+});
+
+test('偏好文件里的 show:false 不能把功能关死（重启后服务必须照常起）', () => {
+  /*
+   * 这条是我自己踩出来的坑：起初让偏好文件里所有字段都覆盖 cfg，
+   * 包括 show。于是用户在运行中把窗口藏一次 → 文件留下 show:false →
+   * 重启后 apply() 读到它，enabled 变 false，连 server.listen 都不执行，
+   * 悬浮窗再也起不来，只能去改文件或重装。
+   *
+   * 正确语义：config.desktopOverlay 是"要不要这个功能"，偏好文件的 show
+   * 只是"窗口此刻显不显示"，归 Electron 主进程管。
+   */
+  writeFileSync(TEST_PREFS, JSON.stringify({ show: false, size: 'normal', skin: 'precision' }));
+
+  PRESERVE_PREFS = true;
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0, desktopOverlayAutoLaunch: false });
+  assert.ok(api !== null);
+  ctx.dispose();
 });

@@ -17,16 +17,19 @@
         overlayOnlyWhenBusy: true
         size: S
         skin: auto
-        face: false
         hideWhenIdle: false
-        showCost: false
         costPerKToken: 0
         costCurrency: '¥'
         doneHoldMs: 3000
         toolHistoryLimit: 6
-        reduceMotion: auto
         # P1b 桌面悬浮窗：本地 HTTP+WS 服务（只绑 127.0.0.1，带随机 token）。
         # 默认关——装了不看的人不该莫名多一个后台端口。
-        desktopOverlay: false
+        desktopOverlay: true
         # 0 = 让系统分配端口，避免抢端口；日志里会打印实际地址
         desktopOverlayPort: 0
+        # 悬浮窗跟着宿主一起启停：关掉的话端口还开着，但不会自动拉窗。
+        # 默认开——装了悬浮窗就是想要它出现。
+        desktopOverlayAutoLaunch: true
+        # 启动参数里的初始档位；设置页改动后会以同名参数覆盖
+        desktopOverlaySize: normal
+        # 皮肤只有一份（上面的 skin），主界面和悬浮窗共用，不再单独配
