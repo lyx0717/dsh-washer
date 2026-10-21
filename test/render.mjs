@@ -1266,12 +1266,10 @@ await test('皮肤组只有三套造型，没有「自动」选项', () => {
     '默认皮肤必须是三套之一，实际: ' + plugin.__defaults.skin);
 });
 
-const failed = results.filter((r) => !r.ok);
-console.log('\n' + (results.length - failed.length) + ' passed, ' + failed.length + ' failed');
-if (failed.length > 0) {
-  for (const f of failed) console.error('\n[' + f.name + ']\n' + (f.error && f.error.stack));
-  process.exitCode = 1;
-}
+/*
+ * 这里不再打印汇总、也不提前 exitCode：CSS_TEXT 之后还有用例要跑，
+ * 汇总统一放在文件末尾。提前 print 会让「后面的用例没跑」看起来像全绿。
+ */
 
 /* ================================================================== *
  * 截图素材
@@ -1370,6 +1368,39 @@ for (const { name, level, html } of cells) {
 console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
 
+await test('造型自己的指示灯能拿到状态色（不是写死在 SVG 里的绿）', () => {
+  /*
+   * 用户报「洗衣机右上角的指示灯没有与洗衣机融为一体」。
+   *
+   * 原来的做法是浮窗在最外层挂一颗独立圆灯，三套造型各自又带着自己的灯，
+   * 悬空那颗怎么看都是贴上去的异物。改成只用造型自带的灯之后，
+   * 关键是状态色必须真的能传进去 —— 像素造型的 .px-led 靠 dw-px 容器
+   * 上的 --dw-led 上色，浮窗容器以前没挂 dw-px，灯就永远停在 SVG 里
+   * 写死的 #2ee06a（绿）。
+   */
+  const machines = readFileSync(new URL('../debug/float.machines.js', import.meta.url), 'utf8');
+  const cssMatch = machines.match(/var SKIN_CSS = ("(?:[^"\\]|\\.)*");/);
+  assert.ok(cssMatch, 'float.machines.js 里要有 SKIN_CSS');
+  const skinCss = JSON.parse(cssMatch[1]);
+  assert.ok(
+    skinCss.includes('.dw-px .px-led'),
+    '像素造型的灯必须靠 .dw-px .px-led 上色，否则状态色进不去',
+  );
+  assert.ok(
+    /\.dw-px\s*{[^}]*--dw-led:\s*var\(--led/.test(skinCss),
+    '必须有 --dw-led ← --led 的别名，浮窗用的是 --led',
+  );
+  // 造型容器要挂 dw-px，否则上面那条选择器命不中
+  assert.ok(
+    /function pixelMachine\(state, width\)\s*{[\s\S]{0,400}?el\('div', 'dw-px'\)/.test(machines),
+    '像素造型容器必须挂 dw-px class',
+  );
+  // 浮窗页面不能再有外挂的灯
+  const floatHtml = readFileSync(new URL('../debug/float.html', import.meta.url), 'utf8');
+  assert.ok(!/class="lamp"/.test(floatHtml), '浮窗不该再挂独立的 .lamp 圆灯');
+  assert.ok(!/el\('lamp'\)/.test(floatHtml), 'popup 里不该再引用 lamp 元素');
+});
+
 await test('设置页每个 class 都真的在 CSS 里有样式（不是裸 div 堆着）', () => {
   /*
    * 用户报「设置页样式还是乱，都挤在一起了」。
@@ -1397,6 +1428,14 @@ await test('设置页每个 class 都真的在 CSS 里有样式（不是裸 div 
 });
 
 
-/* 组件里有 1s 心跳 setInterval（模拟真机计时），拍完图显式退出，避免 node 挂着不退 */
-
-process.exit(process.exitCode || 0);
+/* ---------- 最终汇总 ---------- *
+ * 必须放在文件最末：CSS_TEXT 与截图之后还追加了几条用例，
+ * 提前 process.exit 会让它们"没跑却显示通过"。
+ */
+const finalFailed = results.filter((r) => !r.ok);
+if (finalFailed.length > 0) {
+  for (const f of finalFailed) console.error('  ✗ ' + f.name + '\n      ' + f.error);
+}
+console.log('\n' + results.filter((r) => r.ok).length + ' passed, ' + finalFailed.length + ' failed');
+/* 组件里有 1s 心跳 setInterval（模拟真机计时），显式退出，避免 node 挂着不退 */
+process.exit(finalFailed.length > 0 ? 1 : 0);

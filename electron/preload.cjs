@@ -10,12 +10,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('washerHost', {
   /** 当前是否穿透 */
   state: () => ipcRenderer.invoke('washer:state'),
-  /** 切换穿透 */
-  toggleClickThrough: () => ipcRenderer.send('washer:toggle-click-through'),
-  /** 上报角落按钮矩形，穿透模式下只有这块接收鼠标 */
-  setCornerRect: (rect) => ipcRenderer.send('washer:corner-rect', rect),
-  /** 上报鼠标进入窗口（配合 forward 判断光标是否落在角落） */
-  pointer: () => ipcRenderer.send('washer:pointer'),
+  /*
+   * 注意这里没有"切换穿透"：开关在设置页和 ⌥⌘W，浮窗自己不再是入口。
+   * 同理也没有 setCornerRect / pointer —— 穿透不再留"可点的角落"。
+   */
   /**
    * 上报系统是否要求减弱动态效果。
    * 主进程要拿它决定窗口尺寸切换是插值还是直接跳到位——

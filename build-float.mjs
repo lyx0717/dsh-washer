@@ -68,6 +68,33 @@ const MACHINE_SVG = src('machine.svg').trim();
  * 所以套一层 .washerskin 作用域。只抽 :root 那一段——[data-ds-dark-theme]
  * 那份是宿主暗色主题专用的，浮窗自己有背景，不需要。
  */
+/**
+ * 抽出 style.css 里「32px 像素 sprite」那一整段。
+ *
+ * 像素造型的三个可动图层（水位 / 泡沫 / 指示灯）在主界面和浮窗是同一套
+ * SVG、同一批 class。以前浮窗自己补了一份简化版，结果 led 变色的规则
+ * 漏了，浮窗的灯卡在 SVG 里写死的颜色。现在直接搬原文，两边不会漂。
+ */
+function grabPxBlock() {
+  const style = src('style.css');
+  const start = style.indexOf('/* ---------- 32px 像素 sprite 的三个可动图层 ---------- */');
+  const end = style.indexOf('/* ---------- 精密家电 / 动漫风', start);
+  if (start < 0 || end < 0) throw new Error('style.css 里找不到像素 sprite 段落');
+  /*
+   * --dw-water / --dw-foam / --dw-led 是主界面的变量名，浮窗用的是
+   * --water / --foam / --led（和 SVG 里内联的初始值一致）。
+   * 这里补一层别名，别去改造型侧的变量名——那边还有别的引用。
+   */
+  const alias = [
+    '.dw-px {',
+    '  --dw-water: var(--water, 7);',
+    '  --dw-foam: var(--foam, 0);',
+    '  --dw-led: var(--led, #7c8896);',
+    '}',
+  ].join('\n');
+  return style.slice(start, end).trim() + '\n' + alias;
+}
+
 function skinCss() {
   const style = src('style.css');
   const start = style.indexOf('.dsh-washer {');
@@ -89,6 +116,9 @@ function skinCss() {
     '.washerskin[data-state="draining"] { --dw-sig: #1f9aa8; }',
     '.washerskin[data-state="done"] { --dw-sig: var(--dw-sig-ok); }',
     '.washerskin[data-state="error"] { --dw-sig: var(--dw-sig-err); }',
+    '',
+    '/* 像素 sprite 的可动图层：直接搬主界面那段（.dw-px 作用域），不另写一套 */',
+    grabPxBlock(),
     '',
     '/* dsh-washer · skin-precision.css */',
     src('skin-precision.css'),
@@ -172,9 +202,14 @@ const out = `/**
   }
 
   function pixelMachine(state, width) {
-    var host = el('div');
+    /*
+     * 容器挂 dw-px —— 和主界面 dock 里像素 sprite 用的是同一个 class。
+     * style.css 那套 .dw-px .px-led / .px-water / .px-foam 规则靠它命中；
+     * 以前浮窗没挂这个 class，于是灯永远是 SVG 里写死的绿色，
+     * 状态色根本进不去。
+     */
+    var host = el('div', 'dw-px');
     host.innerHTML = MACHINE_SVG;
-    // 像素图靠 --water / --foam / --led / --spin-dur 驱动，主界面和浮窗共用同一套变量名
     host.style.lineHeight = '0';
     return frame('pixel', state, width, host);
   }

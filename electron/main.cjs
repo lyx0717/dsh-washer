@@ -45,7 +45,6 @@ let win = null;
 let detailWin = null;
 /** 鼠标穿透状态：true 时点击直接穿到底下的应用 */
 /** 角落按钮的矩形（窗口内 CSS 像素）；穿透模式下只有这块接收鼠标 */
-let cornerRect = null;
 let clickThrough = false;
 /** 当前尺寸档位：'normal' | 'tiny' */
 let sizeMode = 'normal';
@@ -259,28 +258,13 @@ function setClickThrough(on) {
 /**
  * 真正的穿透控制。
  *
- * 关键点：不能简单地 setIgnoreMouseEvents(true, {forward:true}) 一关了事——
- * 那样窗口收不到任何鼠标事件，页面上再放什么按钮都点不到，等于单向门。
- * 正确做法是每次鼠标移动后告诉系统"这块要穿透、那块不要"：
- * 只有光标落在角落按钮上时才恢复接收事件。
- *
- * 页面通过 IPC 把角落的矩形（相对窗口的 CSS 像素）传上来，
- * 主进程按 1:1 记着（窗口不可缩放，所以不用换算缩放比）。
+ * 穿透是整窗一刀切：开就全穿透，关就全接收。
+ * 早期留过"角落里可点的一小块"当退出通道，现在退出改走设置页开关和
+ * ⌥⌘W 全局快捷键，那个可点的洞就是穿在机器身上的一块异物，已删掉。
  */
 function applyIgnoreRegions() {
   if (win === null || win.isDestroyed()) return;
-  if (!clickThrough) {
-    win.setIgnoreMouseEvents(false);
-    return;
-  }
-  const c = cornerRect;
-  const { x, y } = screen.getCursorScreenPoint();
-  const [wx, wy] = win.getPosition();
-  const px = x - wx;
-  const py = y - wy;
-  const overCorner = c !== null && px >= c.x && px <= c.x + c.w && py >= c.y && py <= c.y + c.h;
-  // forward:true 让页面仍能收到 mousemove，靠它得知光标有没有滑到角落
-  win.setIgnoreMouseEvents(!overCorner, { forward: true });
+  win.setIgnoreMouseEvents(clickThrough, { forward: clickThrough });
 }
 
 /** 只在穿透状态下注册全局快捷键，其余时候不占用系统键位 */
@@ -434,10 +418,24 @@ function animateBounds(target) {
     return;
   }
 
+  /*
+   * 缓动曲线用先慢后快的 ease-in-out，不是纯 ease-out。
+   *
+   * 纯缓出（1-(1-t)^3）的起点斜率是 3，也就是"第一帧就冲到 21% 进度"。
+   * 实测：第一帧在 17ms 处把宽度从 132 直接跳到 120——人手的感觉就是
+   * 先顿一下、然后猛动一下，这个"顿"就是用户说的起始卡顿。
+   *
+   * 换成 smoothstep（3t²-2t³）后起点斜率是 0，起步是慢慢加速的，
+   * 和页面 CSS 那边 cubic-bezier(.32,.72,0,1) 的观感一致。
+   */
+  const ease = (t) => t * t * (3 - 2 * t);
+  /*
+   * 第一个 setInterval 回调要等一个完整周期（16ms）才来，这段窗口里窗口
+   * 一点没动，也贡献了一半的"顿"。所以起步先同步跑一帧 t=0，
+   * 让窗口在原位站定，动画时间轴也从这一刻开始算。
+   */
   const start = Date.now();
-  // 缓出：和页面 CSS 的 cubic-bezier(.32,.72,0,1) 手感和频率接近
-  const ease = (t) => 1 - Math.pow(1 - t, 3);
-  boundsTimer = setInterval(() => {
+  const step = () => {
     if (win === null || win.isDestroyed()) {
       if (boundsTimer !== null) { clearInterval(boundsTimer); boundsTimer = null; }
       return;
@@ -450,8 +448,12 @@ function animateBounds(target) {
       width: Math.round(from.width + (to.width - from.width) * k),
       height: Math.round(from.height + (to.height - from.height) * k),
     });
-    if (t >= 1) { clearInterval(boundsTimer); boundsTimer = null; }
-  }, 16);
+    if (t >= 1 && boundsTimer !== null) { clearInterval(boundsTimer); boundsTimer = null; }
+  };
+  // 起步先跑一帧 t=0：让窗口在原位站定，别等 16ms 才第一次 setBounds
+  step();
+  // 第一帧不可能已经到终点（t=0），所以这里必定要装定时器
+  boundsTimer = setInterval(step, 16);
   // 别让这个定时器拖住进程退出
   if (boundsTimer !== null && typeof boundsTimer.unref === 'function') boundsTimer.unref();
 }
@@ -690,16 +692,6 @@ app.whenReady().then(() => {
   createWindow();
 
   ipcMain.on('washer:set-click-through', (_event, on) => setClickThrough(on));
-  ipcMain.on('washer:corner-rect', (_event, rect) => {
-    if (rect === null) { cornerRect = null; }
-    else if (typeof rect.x === 'number' && typeof rect.y === 'number'
-      && typeof rect.w === 'number' && typeof rect.h === 'number') {
-      cornerRect = rect;
-    }
-    applyIgnoreRegions();
-  });
-  // 页面每次 mousemove 调一次，配合 forward:true 判断光标是否进了角落
-  ipcMain.on('washer:pointer', () => applyIgnoreRegions());
   ipcMain.on('washer:reduce-motion', (_event, on) => { reduceMotion = on === true; });
   ipcMain.on('washer:toggle-click-through', () => setClickThrough(!clickThrough));
   ipcMain.handle('washer:state', () => ({

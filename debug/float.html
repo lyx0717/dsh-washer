@@ -19,6 +19,15 @@
     --warn: #f5b93a;
     --bad: #e5484d;
     --run: #3aa0ff;
+    /*
+     * 切档动画的时长和曲线。曲线必须和主进程 animateBounds 的
+     * smoothstep（3t²-2t³）对齐——原来是 .32,.72,0,1，起点斜率很大，
+     * 一上来就冲出去，和窗口那边先慢后快的节奏互相打架，
+     * 两边内容在同一帧里各走各的，看着就是卡。
+     * .32,0,.68,1 是 CSS 里的 ease-in-out，形状和 smoothstep 基本一致。
+     */
+    --size-dur: 220ms;
+    --size-ease: cubic-bezier(.32, 0, .68, 1);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -33,7 +42,7 @@
    * 在 html/body 上写 user-select: none 会让整页的 -webkit-app-region: drag
    * 一起失效 —— Electron 的已知行为，表现为"拖拽区明明在，就是拖不动"。
    */
-  .machine, .bubble, .corner { -webkit-user-select: none; user-select: none; }
+  .machine, .bubble { -webkit-user-select: none; user-select: none; }
 
   .wrap {
     position: relative;
@@ -51,8 +60,8 @@
      * 用户看到的就是"像卡顿"。这里补上过渡，和主进程的窗口动画同频率，
      * 内容是"边缩边挪"而不是先缩完再等着窗口变大。
      */
-    transition: width var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
-                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1));
+    transition: width var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
+                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1));
   }
 
   /* ---- 洗衣机 ---- */
@@ -63,8 +72,8 @@
     display: flex;
     justify-content: center;
     /* 极简/正常切换时机器本体跟着缩，不是瞬间跳变 */
-    transition: width var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
-                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1));
+    transition: width var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
+                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1));
   }
   /* 甩干时整台机器会抖，这是它看起来"在工作"的关键 */
   .machine[data-shake="1"] { animation: shake .18s steps(2, end) infinite; }
@@ -100,15 +109,14 @@
     cursor: grab;
   }
   .grab:active { cursor: grabbing; }
-  /* 拖拽区下面那层必须 no-drag，否则双击落不到机器上 */
-  .washer, .bubble, .corner { -webkit-app-region: no-drag; }
+  /* 拖拽区下面那层必须 no-drag，否则右键菜单落不到机器上 */
+  .bubble { -webkit-app-region: no-drag; }
 
-  /* 水位：数值是 viewBox 用户单位，水层从 y27 铺到 y59 */
-  .px-water { transform: translateY(calc(var(--water, 7) * 1px)); transition: transform .5s cubic-bezier(.32,.86,.3,1); }
-  .px-foam { opacity: var(--foam, 0); transition: opacity .45s ease; }
-  .px-led { fill: var(--led, #7c8896); }
-  .machine[data-blink="1"] .px-led { animation: blink .6s steps(2, end) infinite; }
-  .machine[data-blink="2"] .px-led { animation: blink .35s steps(2, end) infinite; }
+  /*
+   * 水位 / 泡沫 / 指示灯的颜色不再在这里定义 —— 它们和主界面是同一段 CSS
+   * （style.css 的 .dw-px 段落），由 build-float.mjs 打包进造型样式表。
+   * 这里只剩像素滚筒的转动：它只属于浮窗，主界面那个 32px sprite 转不转无所谓。
+   */
   @keyframes blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: .3; } }
 
   /* 滚筒转动：绕玻璃圆心转 */
@@ -133,9 +141,9 @@
     white-space: nowrap;
     /* 气泡进出场：极简态要塌缩，所以 max-height/padding 一起过渡 */
     transition: opacity var(--size-dur, 220ms) ease,
-                max-height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
-                padding var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1)),
-                margin var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32,.72,0,1));
+                max-height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
+                padding var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
+                margin var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1));
     max-height: 30px;
   }
   .bubble .st { font-weight: 600; }
@@ -152,27 +160,12 @@
   .bubble[data-off="1"] { color: var(--dim); }
   .wrap[data-conn="lost"] .bubble { color: var(--bad); }
 
-  /* ---- 右下角：始终可点的实体角落 ---- */
-  /* 穿透开启时只有这里还能接收鼠标，是唯一的退出通道 */
-  .corner {
-    position: absolute;
-    right: 0; bottom: 0;
-    width: 18px; height: 18px;
-    display: grid;
-    place-items: center;
-    border-radius: 6px;
-    color: rgba(255,255,255,.25);
-    font-size: 10px;
-    transition: color .2s, background .2s;
-    -webkit-app-region: no-drag;
-  }
-  .corner:hover { color: rgba(255,255,255,.85); background: rgba(255,255,255,.12); }
-  body[data-through="1"] .corner {
-    color: #fff;
-    background: rgba(58, 160, 255, .85);
-    box-shadow: 0 0 8px rgba(58,160,255,.8);
-  }
-  /* 穿透时整机半透明，但角落保持清晰 */
+  /* ---- 穿透态 ---- */
+  /*
+   * 穿透时整机半透明，提示"现在点不到我"。
+   * 以前右下角还挂一个亮蓝色按钮当退出通道，现在退出走两个地方：
+   * 设置页的开关、⌥⌘W 全局快捷键——按钮就没必要了，而且是穿进机器里的一块异物。
+   */
   body[data-through="1"] .machine,
   body[data-through="1"] .bubble { opacity: .42; }
 
@@ -195,50 +188,25 @@
     overflow: hidden;
     pointer-events: none;
   }
-  /* 极简态没有气泡，状态只能靠机器自己表达：指示灯就是唯一的状态出口，
-     所以放大它并把透视调高，一眼能看出在干什么 */
-  body[data-size="tiny"] .px-led { filter: drop-shadow(0 0 4px var(--led, #7c8896)); }
-  body[data-size="tiny"] .corner { width: 18px; height: 18px; font-size: 10px; right: 0; bottom: 0; }
+  /* 极简态没有气泡，状态全靠机器自己的指示灯表达，给它加点辉光 */
 
 
   /* ---------- 状态灯 ---------- */
-  /* 三套造型共用一颗灯：位置固定在机器右上角，颜色跟状态走。
-     用 box-shadow 做光晕而不是 border——border 会被机器内容挤变形。 */
+  /*
+   * 以前浮窗在机器右上角外挂了一颗独立的圆灯。问题是三套造型本来就
+   * 各自带着自己的指示灯——像素是机身上的 .px-led、精密家电是面板上的
+   * .led、动漫是液晶屏那道发光条——再挂一颗悬在最外层的灯，
+   * 怎么看都是贴在机器身上的异物，而不是机器的一部分。
+   *
+   * 现在只用造型自带的灯：把状态色注入 --led，由各造型的 CSS 自己消化。
+   * 那套皮肤本来就在主界面 dock 里正常工作，浮窗复用同一份样式表，
+   * 所以不需要第二套灯光逻辑。
+   */
   .machine { position: relative; }
-  .lamp {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--lamp, #7c8896);
-    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .35), 0 0 7px 1px var(--lamp, #7c8896);
-    z-index: 20;
-    pointer-events: none;
-    transition: background .3s ease, box-shadow .3s ease;
-  }
   /* 等待确认和故障要闪，其余状态常亮——闪是"需要人看一眼"的信号 */
-  .lamp[data-s="waiting"] { animation: lamp-pulse 1.2s ease-in-out infinite; }
-  .lamp[data-s="error"] { animation: lamp-pulse .55s ease-in-out infinite; }
-  /* 运行中给一点呼吸感，静止状态不呼吸（不动的机器不该在动） */
-  .lamp[data-s="washing"],
-  .lamp[data-s="rinsing"],
-  .lamp[data-s="spinning"],
-  .lamp[data-s="draining"] { animation: lamp-breathe 2s ease-in-out infinite; }
-  body[data-size="tiny"] .lamp { width: 11px; height: 11px; top: 3px; right: 3px; }
-
-  @keyframes lamp-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: .25; }
-  }
-  @keyframes lamp-breathe {
-    0%, 100% { opacity: 1; }
-    50% { opacity: .6; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .lamp { animation: none !important; }
-  }
+  /* 闪烁由各造型自己的 [data-blink] 规则驱动，这里不重复写 */
+  body[data-size="tiny"] .dw-px .px-led { filter: drop-shadow(0 0 4px var(--dw-led, #7c8896)); }
+  body[data-size="tiny"] .dw-pw .led { filter: drop-shadow(0 0 4px var(--dw-sig-run)); }
 
   /* ---------- 造型选择 ---------- */
   /* 三套造型由 float.machines.js 生成 DOM 和 CSS，这里只管摆放。
@@ -264,15 +232,11 @@
        style="--water:7;--foam:0;--led:#7c8896;--spin-dur:0s;--spin-play:paused">
     <div class="grab" id="grab"></div>
     <div class="skin-host washerskin" id="skinHost"></div>
-    <!-- 状态灯：像素图里那个 LED 只有十来个屏幕像素，颜色分不出来，
-         所以浮窗单独放一颗够大的。位置固定在机器右上角，三套造型共用。 -->
-    <span class="lamp" id="lamp" data-s="off"></span>
   </div>
   <div class="bubble" id="bubble">
     <span class="st" id="st" data-s="off">未连接</span>
     <span class="tm" id="tm">--:--</span>
   </div>
-  <div class="corner" id="corner" title="切换鼠标穿透">◱</div>
 </div>
 
 <script src="./float.machines.js"></script>
@@ -308,12 +272,15 @@
    * 红蓝绿在上面根本分不出来。浮窗要承担"状态播报"的职责，所以单独给一个
    * 够大、带光晕的圆点——这不是重复，是把信息从细节里解放出来。
    */
+  /*
+   * 状态色写进机器容器，由造型自己的灯去消化（见上面「状态灯」那段注释）。
+   * 以前这里操作的是外挂的 .lamp 元素，那颗灯已经删了。
+   */
   function paintLamp(s) {
-    var lamp = el('lamp');
-    if (lamp === null) return;
+    var machine = el('machine');
+    if (machine === null) return;
     var v = VISUAL[s] || VISUAL.idle;
-    lamp.dataset.s = s;
-    lamp.style.setProperty('--lamp', v.led);
+    machine.style.setProperty('--led', v.led);
   }
 
   function buildMachine(snap) {
@@ -360,16 +327,10 @@
   }
 
   /*
-   * 穿透切换的入口只剩角落按钮了。
-   *
-   * 原来双击机器本体也能切，但整机现在铺了拖拽区（-webkit-app-region: drag），
-   * Chromium 会吞掉落在拖拽区上的 dblclick —— 留着这段代码只会变成
-   * "双击有时有效有时无效"的玄学。设置页有正式开关，这里不再挂双击。
+   * 穿透的开关全在页面之外：设置页的「鼠标穿透」开关，以及 ⌥⌘W 全局快捷键。
+   * 浮窗自己不再提供任何切换入口——右下角那颗亮蓝按钮已经删掉了，
+   * 它是穿在机器身上的一块异物，而且穿透态本来就有整机半透明在提示。
    */
-  el('corner').addEventListener('click', function (e) {
-    e.stopPropagation();
-    if (host) host.toggleClickThrough();
-  });
   if (host) {
     host.onClickThroughChange(function (on) {
       document.body.dataset.through = on ? '1' : '0';
@@ -379,21 +340,6 @@
       host.showMenu();
     });
 
-    /*
-     * 把角落按钮的位置告诉主进程。穿透时只有这块矩形接收鼠标事件，
-     * 所以它必须在任何缩放下都准确——这里用 getBoundingClientRect 实测，
-     * 不手算。
-     */
-    function reportCorner() {
-      var r = el('corner').getBoundingClientRect();
-      host.setCornerRect({ x: r.left, y: r.top, w: r.width, h: r.height });
-    }
-    reportCorner();
-    window.addEventListener('resize', reportCorner);
-
-
-    /* forward:true 时页面能收到 mousemove，靠它告诉主进程"光标动了，重算穿透" */
-    document.addEventListener('mousemove', function () { host.pointer(); });
   }
 
   /* 断线重连：宿主重启后端口和 token 都会变，所以每次都重新问主进程 */
