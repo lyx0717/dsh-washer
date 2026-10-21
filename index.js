@@ -270,7 +270,13 @@ function persistEndpoint(port, token) {
     const file = endpointFile();
     mkdirSync(dirname(file), { recursive: true });
     // 先写再改权限，避免文件在被 chmod 前的极短窗口里可被他人读
-    writeFileSync(file, JSON.stringify({ port, token, pid: process.pid }), { mode: 0o600 });
+    // url 字段直接给全，省得人从 port/pid 里挑错一个（俩都是五位数，极易混）
+    const url = 'http://127.0.0.1:' + port + '/dsh-washer/state?token=' + token;
+    writeFileSync(
+      file,
+      JSON.stringify({ url, port, token, pid: process.pid }, null, 2),
+      { mode: 0o600 },
+    );
     chmodSync(file, 0o600);
   } catch {
     // 落盘失败不影响服务本身，只是用户得自己从别处拿 token

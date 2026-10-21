@@ -256,6 +256,12 @@ test('端点信息落盘：文件权限 0600，卸载后自动删除', async () 
   assert.equal(info.port, port);
   assert.equal(typeof info.token, 'string');
   assert.ok(info.token.length >= 20, 'token 不能太短');
+  // port 和 pid 都是五位数，人很容易挑错；给个拼好的 url
+  assert.equal(
+    info.url,
+    `http://127.0.0.1:${port}/dsh-washer/state?token=${info.token}`,
+    '要给现成的 url，别让人自己拼',
+  );
 
   ctx.dispose();
   await new Promise((r) => setTimeout(r, 50));
