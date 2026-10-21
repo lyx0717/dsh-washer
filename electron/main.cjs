@@ -70,8 +70,13 @@ function defaultPosition() {
  * 穿透 = 窗口收不到任何鼠标事件，包括双击和右键。
  * 所以一旦开了，靠窗口自己关不回来——必须有一条窗口外的通道。
  * 这里用全局快捷键做救命绳，不依赖任何鼠标操作。
+ *
+ * 选键原则：绝对不用系统已占用的组合。
+ * ⌘W / ⌘⇧W 会关窗口或标签页，⌘Q 会退出应用 —— 这些组合会被系统
+ * 抢先拦下，globalShortcut.register() 还不报错，等于静默失效。
+ * ⌥⌘W 在 macOS 上没有系统含义，且和"W"（washer / window）好记。
  */
-const ESCAPE_ACCELERATOR = 'CommandOrControl+Shift+W';
+const ESCAPE_ACCELERATOR = 'Alt+CommandOrControl+W';
 
 function setClickThrough(on) {
   clickThrough = on === true;
@@ -90,9 +95,15 @@ function updateEscapeShortcut() {
   if (clickThrough) {
     if (!globalShortcut.isRegistered(ESCAPE_ACCELERATOR)) {
       const ok = globalShortcut.register(ESCAPE_ACCELERATOR, () => setClickThrough(false));
-      if (!ok && win !== null && !win.isDestroyed()) {
-        // 注册失败（被别的应用占了）就通知页面，让它提示用户改用右键菜单
-        win.webContents.send('washer:escape-unavailable', ESCAPE_ACCELERATOR);
+      if (!ok) {
+        // 注册失败说明键位被占了。这是致命情况：穿透开出去就关不回来了，
+        // 所以干脆不进入穿透状态，把问题暴露在开的那一刻，而不是关的时候。
+        clickThrough = false;
+        if (win !== null && !win.isDestroyed()) {
+          win.setIgnoreMouseEvents(false, { forward: true });
+          win.setFocusable(true);
+          win.webContents.send('washer:escape-unavailable', ESCAPE_ACCELERATOR);
+        }
       }
     }
   } else {

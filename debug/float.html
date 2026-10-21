@@ -190,9 +190,16 @@
      * 穿透后窗口收不到任何鼠标事件，双击/右键都点不到自己。
      * 所以提示里必须给出窗口外的关闭方式，否则就是个单向门。
      */
-    var accel = '⌘⇧W';
+    var accel = '⌥⌘W';
     host.state().then(function (st) {
-      if (st && st.escapeAccelerator) accel = st.escapeAccelerator.replace('CommandOrControl', '⌘').replace('Shift', '⇧');
+      if (st && st.escapeAccelerator) {
+        accel = st.escapeAccelerator
+          .replace('CommandOrControl', '⌘')
+          .replace('Alt', '⌥')
+          .replace('Shift', '⇧')
+          .replace('Control', '⌃')
+          .replace(/\+/g, '');
+      }
     });
     host.onClickThroughChange(function (on) {
       document.body.dataset.through = on ? '1' : '0';
