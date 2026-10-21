@@ -1,0 +1,27 @@
+# dsh-washer bundle patch
+#
+# 一行 insert 把插件挂进 Web 客户端。`disabled` 表达式防止同一插件被
+# 两个不同 id 重复挂载（宿主会在启动时把两份都实例化，导致重复注册 slot）。
+#
+# config 是默认值的唯一来源。用户在设置页的改动不写回这里，而是存到
+# localStorage（key: dsh-washer:prefs），原因见 src/client.template.js
+# 「偏好持久化」一节：configForms 那套 store 只服务挂在 loader `include`
+# 行下的插件，走 `insert` 的第三方 bundle 拿到的控制器永远是 unavailable。
+- insert:
+    - id: washer
+      name: 'dsh-washer'
+      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === 'dsh-washer' && e.options.id !== 'washer' && !e.disabled)"
+      config:
+        enabled: true
+        mode: dock
+        overlayOnlyWhenBusy: true
+        size: S
+        skin: auto
+        face: false
+        hideWhenIdle: false
+        showCost: false
+        costPerKToken: 0
+        costCurrency: '¥'
+        doneHoldMs: 3000
+        toolHistoryLimit: 6
+        reduceMotion: auto

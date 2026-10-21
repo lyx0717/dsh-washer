@@ -1,0 +1,7 @@
+# 开发残留，不进包
+node_modules/
+.DS_Store
+
+# 构建产物：由 `node build.mjs` 从 src/ 生成，改源码后重新构建
+# （如果你想直接分发已构建的包，把下面这行注释掉）
+client.js

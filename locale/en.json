@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Washer",
+    "description": "A front-load washing machine that shows what the agent is doing: wash = reasoning, rinse = running tools, spin = wrapping up, pause = waiting for you."
+  }
+}
