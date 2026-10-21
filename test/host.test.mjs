@@ -27,7 +27,7 @@ function freshState() {
     partial: null,
     nodes: [],
     callStartedAt: new Map(),
-    turnTimings: {},
+    turnTimings: new Map(),
     running: false,
   };
 }
@@ -44,7 +44,7 @@ test('turn/start 开新轮：清空上一轮的节点与进行中的调用', () 
   assert.equal(s.turn, 2);
   assert.deepEqual(s.runningCalls, [], '新一轮不该继承上一轮的运行中调用');
   assert.deepEqual(s.nodes.map((n) => n.kind), ['turn-start'], '节点只留新一轮的');
-  assert.equal(s.turnTimings[2].start, NOW + 100, '要记下起轮时间');
+  assert.equal(s.turnTimings.get(2).startTime, NOW + 100, '要记下起轮时间');
 });
 
 test('tool/call 后 tool/result 必须消账（否则永远卡在 rinsing）', () => {
@@ -84,7 +84,7 @@ test('turn/end 收口：清空运行中调用并记下结束时间', () => {
   foldEvent(s, ev('turn/end', { turn: 1 }), NOW + 500);
 
   assert.deepEqual(s.runningCalls, []);
-  assert.equal(s.turnTimings[1].end, NOW + 500);
+  assert.equal(s.turnTimings.get(1).endTime, NOW + 500);
 });
 
 test('未知事件不炸，也不改状态', () => {
@@ -367,6 +367,31 @@ test('两个实例交替卸载：后启动的那个的文件不能被先启动�
   ctxB.dispose();
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(existsSync(file), false, 'B 卸载后该删');
+});
+
+test('计时真的会走：turnTimings 必须用 core.js 认的结构', () => {
+  // elapsedOf 读的是 Map.get(turn).startTime，写成普通对象就永远返回 undefined，
+  // 表现为页面上时长一直是 00:00。
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+
+  const started = Date.now();
+  ctx.handlers.get('session/event')({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  let snap = api.snapshot();
+  assert.notEqual(snap.durationText, '--:--', `解析不到时长，durationText=${snap.durationText}`);
+
+  // 制造 100ms 时间差后再取一次，时长应明显变大
+  const spin = Date.now() + 100;
+  while (Date.now() < spin) { /* busy wait，避免引入假定时器 */ }
+  snap = api.snapshot();
+  assert.ok(snap.elapsedMs >= 100, `时长应该走了至少 100ms，实际 ${snap.elapsedMs}`);
+
+  ctx.handlers.get('session/event')({ id: 's1' }, ev('turn/end', { turn: 1 }));
+  snap = api.snapshot();
+  assert.equal(typeof snap.lastEndedAt, 'number', 'lastEndedAt 要有值，否则 UI 判断不了"刚洗完"');
+  assert.ok(snap.lastEndedAt >= started);
+
+  ctx.dispose();
 });
 
 test('apply：卸载后服务关闭，端口释放', async () => {

@@ -60,7 +60,9 @@ function createSessionState() {
     /** callId → { at, name }：tool/result 不带 name/起点时用来补全流水耗时 */
     callStartedAt: new Map(),
     /** { [turn]: { start, end } } */
-    turnTimings: {},
+    // core.js 的 elapsedOf/turnEndTimeOf 要的是 Map<turn, {startTime, endTime}>，
+    // 早期写成普通对象 + {start,end}，导致计时永远 00:00、lastEndedAt 永远 null。
+    turnTimings: new Map(),
     /** 最近一次 agent/status */
     running: false,
   };
@@ -94,7 +96,7 @@ export function foldEvent(state, event, now) {
       state.partial = null;
       state.runningCalls = [];
       state.callStartedAt.clear();
-      state.turnTimings[turn] = { start: now };
+      state.turnTimings.set(turn, { startTime: now });
       // 新 turn 开始，旧节点不再参与「这一步走到哪」的判定
       state.nodes = [];
       pushNode(state, { kind: 'turn-start', turn });
@@ -168,8 +170,8 @@ export function foldEvent(state, event, now) {
       state.runningCalls = [];
       state.callStartedAt.clear();
       state.partial = null;
-      if (state.turnTimings[turn] !== undefined && state.turnTimings[turn].end === undefined) {
-        state.turnTimings[turn].end = now;
+      if (state.turnTimings.has(turn) && state.turnTimings.get(turn).endTime === undefined) {
+        state.turnTimings.get(turn).endTime = now;
       }
       pushNode(state, { kind: 'turn-end', turn });
       return state;
