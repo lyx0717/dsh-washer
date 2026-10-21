@@ -321,6 +321,37 @@ test('tool/result 的 message.isError 要能识别成错误', () => {
   assert.equal(last.isError, true, '错误状态在 message 里，别漏了');
 });
 
+test('两个实例交替卸载：后启动的那个的文件不能被先启动的删掉', async () => {
+  // 插件被热重载时会出现两个实例短暂共存。
+  // 早期用模块级变量记文件路径，旧实例的 disposer 会把新实例写的文件删掉，
+  // 表现为「服务在跑但用户找不到端口和 token」。
+  const { existsSync, readFileSync } = await import('node:fs');
+  const { homedir } = await import('node:os');
+  const { join } = await import('node:path');
+  const file = join(homedir(), '.dsh', 'dsh-washer-overlay.json');
+
+  const ctxA = makeCtx();
+  const a = apply(ctxA, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const portA = await waitForPort(a);
+
+  // 第二个实例覆盖了文件（真实场景里它会拿到另一个端口）
+  const ctxB = makeCtx();
+  const b = apply(ctxB, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const portB = await waitForPort(b);
+  assert.notEqual(portA, portB, '两个实例应该拿到不同端口');
+
+  // A 卸载——不能影响 B 的文件
+  ctxA.dispose();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(existsSync(file), true, 'A 卸载不该删掉 B 的文件');
+  const info = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(info.port, portB, '文件应该还是 B 写的');
+
+  ctxB.dispose();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(existsSync(file), false, 'B 卸载后该删');
+});
+
 test('apply：卸载后服务关闭，端口释放', async () => {
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });

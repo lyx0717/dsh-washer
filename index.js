@@ -16,7 +16,7 @@
  * `?token=` 或 `Authorization: Bearer`，防止本机其它程序偷看会话状态。
  */
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
@@ -242,8 +242,28 @@ function endpointFile() {
   return join(home, '.dsh', 'dsh-washer-overlay.json');
 }
 
-/** @type {string | null} */
-let endpointFilePath = null;
+/**
+ * 删除端点文件时**必须先确认它是自己的**。
+ *
+ * 早期版本用模块级变量记路径，插件被重新加载时新旧两个实例会互相踩：
+ * 旧实例的 disposer 后跑一步，就把新实例刚写的文件删了——服务还在跑，
+ * 但用户找不到端口和 token 了。改成比对文件里的 pid + token。
+ *
+ * @param {number} port
+ * @param {string} token
+ */
+function clearEndpointFile(port, token) {
+  try {
+    const file = endpointFile();
+    if (!existsSync(file)) return;
+    const info = JSON.parse(readFileSync(file, 'utf8'));
+    // 不是自己写的就别动
+    if (info.pid !== process.pid || info.token !== token || info.port !== port) return;
+    rmSync(file, { force: true });
+  } catch {
+    // 尽力而为，删不掉也不该影响卸载流程
+  }
+}
 
 function persistEndpoint(port, token) {
   try {
@@ -252,16 +272,9 @@ function persistEndpoint(port, token) {
     // 先写再改权限，避免文件在被 chmod 前的极短窗口里可被他人读
     writeFileSync(file, JSON.stringify({ port, token, pid: process.pid }), { mode: 0o600 });
     chmodSync(file, 0o600);
-    endpointFilePath = file;
   } catch {
     // 落盘失败不影响服务本身，只是用户得自己从别处拿 token
   }
-}
-
-function clearEndpointFile() {
-  if (endpointFilePath === null) return;
-  try { rmSync(endpointFilePath, { force: true }); } catch { /* 尽力而为 */ }
-  endpointFilePath = null;
 }
 
 export function apply(ctx, config) {
@@ -501,7 +514,7 @@ export function apply(ctx, config) {
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态
   ctx.effect(() => () => {
     if (pushTimer !== null) clearTimeout(pushTimer);
-    clearEndpointFile();
+    clearEndpointFile(port, token);
     for (const socket of clients) {
       try { socket.destroy(); } catch { /* noop */ }
     }
