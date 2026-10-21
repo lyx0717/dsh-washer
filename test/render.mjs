@@ -716,6 +716,66 @@ await test('文案里没有漏翻的 key / 未替换的占位符', async () => {
   assert.ok(!/[{}]/.test(text), '不许留未替换的占位符：' + text);
 });
 
+await test('B2 卸载干净：CSS 归属标记与模块 id 一致（AC12）', async () => {
+  // 宿主卸载时调 removeOwnedStyles(ownerId)，按 style[data-plugin] 精确匹配回收。
+  // 我们必须在标签上写和模块 id 一模一样的名字，否则卸载后 style 会永久留在 <head>。
+  const cl = readFileSync(join(root, 'client.js'), 'utf8');
+  const idMatch = cl.match(/window\.__ModuleLoader__\.load\(\{\s*id:\s*'([^']+)'/);
+  assert.ok(idMatch, 'client.js 必须通过 __ModuleLoader__.load 注册且带字符串 id');
+  const moduleId = idMatch[1];
+
+  // stripClientSuffix: 宿主会把尾部的 "/client" 去掉当 ownerId
+  const ownerId = moduleId.endsWith('/client') ? moduleId.slice(0, -7) : moduleId;
+
+  const pluginTag = cl.match(/dataset\.plugin\s*=\s*'([^']+)'/);
+  assert.ok(pluginTag, '必须给注入的 <style> 打 data-plugin 归属标记');
+  assert.equal(
+    pluginTag[1], ownerId,
+    'style 的 data-plugin 必须等于宿主算出的 ownerId（否则卸载后 CSS 残留）',
+  );
+
+  // data-plugin-css 用作去重 id，也必须在
+  assert.ok(/dataset\.pluginCss\s*=/.test(cl), 'style 必须有 data-plugin-css 去重标记');
+
+  // 不该有自建的第二份 head 注入（会导致重复注入/无法回收）
+  const styleInserts = (cl.match(/head\.appendChild\(/g) || []).length;
+  assert.ok(styleInserts <= 1, '只应有一处 head.appendChild 注入 CSS，实际 ' + styleInserts);
+});
+
+await test('A4 减弱动效：只停装饰运动，不停指示灯和水位（AC11）', async () => {
+  // checklist A4 要求「滚筒不转，但状态文字仍变、指示灯/水位变化仍在」。
+  // 曾经用 `.dsh-washer *` 通配一把梭，把指示灯闪烁和水位过渡也一起停掉了，
+  // 等于同时抹掉「洗衣机在转」和「Agent 在干活」两个信号。
+  const cl = readFileSync(join(root, 'client.js'), 'utf8');
+  const m = cl.match(/const CSS = ("(?:[^"\\]|\\.)*");/);
+  assert.ok(m, 'client.js 里应有内联 CSS 常量');
+  const css = JSON.parse(m[1]);
+
+  // ① 不得再用通配选择器停掉整个子树
+  assert.ok(
+    !/\.dsh-washer\s+\*\s*[,\{]/.test(css),
+    '减弱动效不许用 `.dsh-washer *` 通配——会误伤指示灯和水位',
+  );
+
+  // ② 系统媒体查询块必须存在，且覆盖滚筒
+  const media = css.match(/@media \(prefers-reduced-motion: ?reduce\) \{([\s\S]*?)\n\}/);
+  assert.ok(media, '必须有 @media (prefers-reduced-motion: reduce)');
+  const mediaBody = media[1];
+  assert.ok(/\.dw-pw \.drum/.test(mediaBody), '减弱时必须停掉精密家电滚筒');
+  assert.ok(/\.dw-aw-drum/.test(mediaBody), '减弱时必须停掉动漫滚筒');
+
+  // ③ 配置态兜底（data-reduce-motion='1'）同样只停装饰运动
+  const flagRule = css.match(/\.dsh-washer\[data-reduce-motion='1'\][\s\S]*?\{[^}]*\}/);
+  assert.ok(flagRule, '必须有 data-reduce-motion=1 的兜底规则');
+  assert.ok(/\.dw-pw \.drum/.test(flagRule[0]), 'always 档也要停滚筒');
+
+  // ④ 指示灯与水位必须**不在**停用名单里
+  for (const keep of ['led', 'dw-dot', 'px-led', '.water', 'bar']) {
+    const mentioned = new RegExp('\\.' + keep.replace('.', '\\.') + '\\b');
+    assert.ok(!mentioned.test(mediaBody), '减弱动效不该停掉表示状态的 ' + keep + '（信息不该被关掉）');
+  }
+});
+
 await test('所有 animation 名都能找到 @keyframes（滚筒真的会转）', async () => {
   // 回归保护：skin-precision.css / skin-anime.css 曾整段丢失 @keyframes，
   // 浏览器对未定义的动画名静默忽略，测试全绿但滚筒是静止的。

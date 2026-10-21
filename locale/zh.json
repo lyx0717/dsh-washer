@@ -2,5 +2,10 @@
   "meta": {
     "title": "洗衣机",
     "description": "用一台滚筒洗衣机的运转状态显示 Agent 在干什么：洗涤=推理、漂洗=跑工具、脱水=收尾、暂停=等你批准。"
-  }
+  },
+  "set.reduceMotion": "减少动态效果",
+  "reduce.auto": "跟随系统",
+  "reduce.always": "始终减弱",
+  "reduce.never": "不减弱",
+  "label.reduceMotionHint": "跟随系统时由系统开关决定；选「始终减弱」只停滚筒、衣物、气泡这类装饰运动，指示灯与水位变化照常（它们表示状态）。"
 }

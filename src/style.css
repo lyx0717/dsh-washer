@@ -357,22 +357,40 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* 降级：尊重系统「减少动态效果」，同时支持插件配置 reduceMotion='always' */
+/* 降级：尊重系统「减少动态效果」，同时支持插件配置 reduceMotion
+ *
+ * 这里**不能**用 `.dsh-washer *` 一把梭哈：
+ * checklist A4 明确要求「滚筒不转，但状态文字仍在变、指示灯和水位变化仍在」——
+ * 指示灯闪烁、水位/进度条过渡是**状态信息**，不是装饰；通配停掉它们等于
+ * 把「洗衣机在转」和「Agent 在干活」两个信号一起抹了，用户反而看不出状态。
+ *
+ * 所以只停「装饰性运动」：滚筒旋转、衣物翻滚、气泡上浮、整机抖动、卡片入场。
+ * 这些在减弱动态效果时是会引发不适的连续运动，停掉无信息损失。
+ * 指示灯（led/dw-dot/px-led）与水位、进度条**故意不列**，让它们继续动。
+ */
 @media (prefers-reduced-motion: reduce) {
-  .dsh-washer *,
-  .dsh-washer *::before,
-  .dsh-washer *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+  .dsh-washer .dw-pw .drum,
+  .dsh-washer .dw-pw .clothes,
+  .dsh-washer .dw-pw .door::before,
+  .dsh-washer .dw-pw .bubbles b,
+  .dsh-washer .dw-pw[data-state='spinning'],
+  .dsh-washer .dw-aw-drum,
+  .dsh-washer .dw-aw-ring::after,
+  .dsh-washer .dw-aw-clothes i,
+  .dsh-washer .dw-card {
+    animation: none !important;
   }
 }
-.dsh-washer[data-reduce-motion='1'] *,
-.dsh-washer[data-reduce-motion='1'] *::before,
-.dsh-washer[data-reduce-motion='1'] *::after {
-  animation-duration: 0.001ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 0.001ms !important;
+.dsh-washer[data-reduce-motion='1'] .dw-pw .drum,
+.dsh-washer[data-reduce-motion='1'] .dw-pw .clothes,
+.dsh-washer[data-reduce-motion='1'] .dw-pw .door::before,
+.dsh-washer[data-reduce-motion='1'] .dw-pw .bubbles b,
+.dsh-washer[data-reduce-motion='1'] .dw-pw[data-state='spinning'],
+.dsh-washer[data-reduce-motion='1'] .dw-aw-drum,
+.dsh-washer[data-reduce-motion='1'] .dw-aw-ring::after,
+.dsh-washer[data-reduce-motion='1'] .dw-aw-clothes i,
+.dsh-washer[data-reduce-motion='1'] .dw-card {
+  animation: none !important;
 }
 
 /* ---------- 32px 像素 sprite 的三个可动图层 ---------- */

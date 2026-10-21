@@ -2,5 +2,10 @@
   "meta": {
     "title": "Washer",
     "description": "A front-load washing machine that shows what the agent is doing: wash = reasoning, rinse = running tools, spin = wrapping up, pause = waiting for you."
-  }
+  },
+  "set.reduceMotion": "Reduced motion",
+  "reduce.auto": "Follow system",
+  "reduce.always": "Always reduce",
+  "reduce.never": "Never reduce",
+  "label.reduceMotionHint": "Follow system respects your OS setting. Reducing only stops decorative motion (drum, clothes, bubbles); status indicators keep animating."
 }

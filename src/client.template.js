@@ -66,6 +66,11 @@ window.__ModuleLoader__.load({
       'set.hideIdle': '空闲时隐藏',
       'set.size': '默认档位',
       'set.restartHint': '档位和外观改完不用重启；成本需要先配好单价才会显示金额。',
+      'set.reduceMotion': '减少动态效果',
+      'reduce.auto': '跟随系统',
+      'reduce.always': '始终减弱',
+      'reduce.never': '不减弱',
+      'label.reduceMotionHint': '「跟随系统」由系统辅助功能开关决定；减弱只停滚筒、衣物、气泡这类装饰运动，指示灯和水位照常变化——它们表示状态。',
       'err.e00.title': '出了点问题',
       'err.e00.hint': '原因不明，可以重试一次',
       'err.e10.title': '账号或服务不可用',
@@ -130,6 +135,11 @@ window.__ModuleLoader__.load({
       'set.hideIdle': 'Hide when idle',
       'set.size': 'Default size',
       'set.restartHint': 'Skin and size apply instantly; cost only shows once a unit price is configured.',
+      'set.reduceMotion': 'Reduced motion',
+      'reduce.auto': 'Follow system',
+      'reduce.always': 'Always reduce',
+      'reduce.never': 'Never reduce',
+      'label.reduceMotionHint': '"Follow system" respects your OS accessibility setting. Reducing stops only decorative motion (drum, clothes, bubbles); status indicators keep animating.',
       'err.e00.title': 'Something went wrong',
       'err.e00.hint': 'Unknown cause - try again',
       'err.e10.title': 'Account or service unavailable',
@@ -225,10 +235,29 @@ window.__ModuleLoader__.load({
       return mapped === 'precision' || mapped === 'anime' || mapped === 'pixel' ? mapped : 'pixel';
     }
 
+    /**
+     * reduceMotion 三态：
+     *   'always' 强制减弱（用户手动关动画）
+     *   'never'  强制不减弱（哪怕系统开着）
+     *   'auto'   跟随系统 —— 之前这里直接 return '0'，等于把系统开关当空气
+     *
+     * 只读一次系统偏好即可，不需要挂 matchMedia 变更监听：
+     * 系统的实时变化由 CSS 的 @media 自己兜底，这里只负责配置态的初值。
+     */
+    function systemPrefersReducedMotion() {
+      try {
+        return typeof window !== 'undefined'
+          && typeof window.matchMedia === 'function'
+          && window.matchMedia('(prefers-reduced-motion: reduce)').matches === true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
     function reduceMotionFlag(cfg) {
       if (cfg.reduceMotion === 'always') return '1';
       if (cfg.reduceMotion === 'never') return '0';
-      return '0';
+      return systemPrefersReducedMotion() ? '1' : '0';
     }
 
     /* ------------------------------------------------------------------ *
@@ -826,6 +855,14 @@ window.__ModuleLoader__.load({
         row('set.size', seg(tr('set.size'), [
           ['S', 'S'], ['M', 'M'], ['L', 'L'],
         ], cfg.size, (value) => setPref('size', value))),
+
+        row('set.reduceMotion', seg(tr('set.reduceMotion'), [
+          ['auto', tr('reduce.auto')],
+          ['always', tr('reduce.always')],
+          ['never', tr('reduce.never')],
+        ], cfg.reduceMotion === undefined ? 'auto' : cfg.reduceMotion,
+        (value) => setPref('reduceMotion', value))),
+        h('p', { className: 'dw-set-hint' }, tr('label.reduceMotionHint')),
 
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));
     }
