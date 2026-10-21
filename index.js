@@ -515,7 +515,10 @@ export function apply(ctx, config) {
       port = server.address().port;
       // token 随机、只在内存里，宿主日志又不落盘 —— 光打印的话用户根本拿不到，
       // 调试页等于打不开。落地一个 0600 的运行时文件，进程退出时删掉。
-      persistEndpoint(port, token);
+      // 只在服务确实 listen 起来之后才落盘。
+      // 早期写法在 listen 回调外调用，port 还可能是探活阶段的临时值，
+      // 结果文件里记着一个没人监听的端口——悬浮窗连上去永远是"未连接"。
+      if (server.listening && port > 0) persistEndpoint(port, token);
       // 把带 token 的调试地址打出来，否则用户拿不到 token，也就打不开调试页。
       // token 只进本机日志，不进任何网络响应。
       ctx.logger?.info?.(`[dsh-washer] overlay: http://127.0.0.1:${port}/dsh-washer/state?token=${token}`);

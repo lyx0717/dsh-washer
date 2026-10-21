@@ -406,6 +406,27 @@ test('计时真的会走：turnTimings 必须用 core.js 认的结构', () => {
   ctx.dispose();
 });
 
+test('端点文件里记的端口必须是真正 listen 的那个', async () => {
+  // 早期在 listen 回调外落盘，port 可能还是探活阶段的临时值，
+  // 文件里记着一个没人监听的端口，悬浮窗连上去永远"未连接"。实测踩过一次。
+  process.env.DSH_WASHER_ENDPOINT_FILE = '/tmp/dsh-washer-test-endpoint2.json';
+  const file = process.env.DSH_WASHER_ENDPOINT_FILE;
+  const { rmSync, readFileSync } = await import('node:fs');
+  rmSync(file, { force: true });
+
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const livePort = await waitForPort(api);
+
+  const info = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(info.port, livePort, '文件记的端口必须和真正 listen 的一致');
+  // 拿文件里的端口真去访问一次，能通才说明这个端口是对的
+  const res = await fetch(`http://127.0.0.1:${info.port}/dsh-washer/health?token=${info.token}`);
+  assert.equal(res.status, 200, '文件里的 port 必须能真的连上');
+  ctx.dispose();
+  rmSync(file, { force: true });
+});
+
 test('端点文件只由自己的进程删（pid/token/port 三项都要对上）', () => {
   // 这个文件是悬浮窗和用户找端口/token 的唯一入口。
   // 早期实现用模块级变量记住路径，插件重载时新旧实例互相踩，

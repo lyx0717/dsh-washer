@@ -32,12 +32,31 @@ let win = null;
 let cornerRect = null;
 let clickThrough = false;
 
+/**
+ * 读端点文件，并且**确认写它的进程还活着**。
+ *
+ * 文件是插件卸载时故意留下的（见 index.js 的注释），所以里面可能是一份
+ * 上一代宿主的记录，端口早就不通了。光看文件会把悬浮窗送到死端口上，
+ * 表现就是永远"未连接"——这个坑实测踩过一次。
+ * 用 process.kill(pid, 0) 探活：不杀进程，只是问"这个 pid 存在吗"。
+ */
 function readEndpoint() {
+  let info = null;
   try {
-    return JSON.parse(readFileSync(ENDPOINT_FILE, 'utf8'));
+    info = JSON.parse(readFileSync(ENDPOINT_FILE, 'utf8'));
   } catch {
     return null;
   }
+  if (info === null || typeof info.port !== 'number' || typeof info.token !== 'string') return null;
+  if (typeof info.pid === 'number') {
+    try {
+      process.kill(info.pid, 0);
+    } catch (err) {
+      // ESRCH = 没这个进程；EPERM = 有但没权限（也算活着）
+      if (err.code === 'ESRCH') return null;
+    }
+  }
+  return info;
 }
 
 function readPosition() {
