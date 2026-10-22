@@ -1369,45 +1369,44 @@ for (const { name, level, html } of cells) {
 console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
 
-await test('停靠条三档：CSS 里三档阈值都在，且容器查询写在基础规则之后', () => {
+await test('停靠条三档：用 @media 查窗口宽度，不用 @container（自激循环）', () => {
   /*
    * 用户要求「按三档做，根据窗口宽度自动变换」。
    *
-   * 两个容易出错的点被这条测试锁住：
-   *   ① 阈值必须按输入框宽度定（正常窗口 476~1116px），不是窗口宽度。
-   *      阈值定成 240/140 那种小数字，实际永远落在紧凑档，等于没做。
-   *   ② @container **不提升优先级**。它和 .dw-t1 同优先级，
-   *      谁在后面谁赢。基础规则写在后面就会把三档全部覆盖掉——
-   *      实测就是这样：高度生效了（.dw-strip 没有后写的同属性规则），
-   *      字号和 flex-direction 却纹丝不动。
+   * 这条测试锁住一个踩过的坑：最初用 @container 按容器宽度分档，
+   * 结果界面上只剩一台洗衣机图标——什么信息都不显示。
+   *
+   * 根因是宿主给 composer.dock 的父容器是 fit-content（宽度由内容决定）。
+   * 锚点设 width:100% 时形成循环：100% 的父级宽度由子内容决定 →
+   * 浏览器把百分比容器塌缩 → 触发极简档 → 文字隐藏 → 内容更少 →
+   * 容器更窄 → 更确定极简档。自激锁死。
+   *
+   * 改成 @media 查窗口宽度：不依赖任何祖先尺寸，不会循环。
    */
   const c = CSS_TEXT;
-  const mini = c.indexOf('@container dw-dock (max-width: 519px)');
-  const tiny = c.indexOf('@container dw-dock (max-width: 379px)');
-  assert.ok(mini > -1, '要有迷你档容器查询');
-  assert.ok(tiny > -1, '要有极简档容器查询');
-  assert.ok(mini < tiny, '迷你档应排在极简档之前（外层宽度更大）');
+  assert.ok(!c.includes('@container'), '不该再用 @container（在 fit-content 父容器下会自激）');
+  assert.ok(!/container-type:\s*inline-size/.test(c), '不该再把 dock 根节点设成容器查询锚点');
 
-  // 容器查询必须排在 .dw-t1 / .dw-t2 基础规则之后，否则被覆盖
+  const mini = c.indexOf('@media (max-width: 719px)');
+  const tiny = c.indexOf('@media (max-width: 519px)');
+  assert.ok(mini > -1, '要有迷你档 @media');
+  assert.ok(tiny > -1, '要有极简档 @media');
+  assert.ok(mini < tiny, '迷你档应排在极简档之前（窗口更宽）');
+});
+
+await test('停靠条三档：@media 规则要写在 .dw-t1 / .dw-t2 基础规则之后', () => {
+  /*
+   * @media 和 @container 一样**不提升优先级**，只加条件。同优先级下
+   * 后来者赢，所以三档规则必须写在基础规则之后，否则基础的字号/布局
+   * 会把三档覆盖掉（实测过：高度生效、字号纹丝不动）。
+   */
+  const c = CSS_TEXT;
+  const mini = c.indexOf('@media (max-width: 719px)');
   const t1 = c.indexOf('.dw-t1 {');
   const t2 = c.indexOf('.dw-t2 {');
   assert.ok(t1 > -1 && t2 > -1, '应有 .dw-t1 / .dw-t2 基础规则');
   assert.ok(mini > t1, '迷你档必须写在 .dw-t1 之后，否则字号不生效');
   assert.ok(mini > t2, '迷你档必须写在 .dw-t2 之后，否则副标题规则不生效');
-});
-
-await test('停靠条三档：容器锚点存在，三档靠宽度而非 JS 切换', () => {
-  /*
-   * 容器查询要求祖先元素有 container-type，而这个容器是宿主的 DOM，
-   * 改不了。所以锚点是我们自己的 .dsh-washer[data-variant='dock']。
-   * 同时它必须是 width:100%：用 width:max-content 的话容器被内容撑开、
-   * 内容又按容器换档，会自激抖动。
-   */
-  const c = CSS_TEXT;
-  assert.ok(/\.dsh-washer\[data-variant='dock'\][\s\S]*?container-type:\s*inline-size/.test(c),
-    'dock 根节点要设 container-type: inline-size');
-  assert.ok(/\.dsh-washer\[data-variant='dock'\][\s\S]{0,120}?width:\s*100%/.test(c),
-    'dock 根节点要 width:100%，不能是 max-content');
 });
 
 await test('停靠条三档：渲染出的结构能让三档生效（无 dw-dot，t2 带 compact 标记）', async () => {

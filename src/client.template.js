@@ -603,7 +603,8 @@ window.__ModuleLoader__.load({
        * 所以按 skin 直接选；老配置里的 'auto' 由 pickSkin 兜底成 pixel。
        */
       /*
-       * 三档自适应靠 CSS 容器查询（见 style.css 的 @container dw-dock）。
+       * 三档自适应靠 CSS @media 窗口宽度查询（见 style.css，别用 @container——
+       * 宿主父容器是 fit-content，容器查询会自激锁死在极简档）。
        * 这里只管把三份信息都吐出去，由宽度决定露多少：
        *   紧凑 —— 机器 + 状态 + 计时/件数（两行）
        *   迷你 —— 机器 + 状态 + 计时（一行）
