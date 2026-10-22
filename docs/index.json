@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "title": {
+    "en": "Dogdan plugins",
+    "zh": "狗蛋儿的插件"
+  },
+  "plugins": [
+    {
+      "name": "dsh-washer",
+      "title": {
+        "en": "Washer · Agent status machine",
+        "zh": "滚筒洗衣机"
+      },
+      "description": {
+        "en": "Show what the Agent is doing as a front-loading washing machine: wash = streaming, rinse = tool running, spin = wrapping up, pause = waiting for your approval.",
+        "zh": "用一台滚筒洗衣机的运转状态实时显示 Agent 在干什么：洗涤=出字、漂洗=工具在跑、脱水=收尾、暂停=等你批准。"
+      },
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImRzaC13YXNoZXIiPiA8ZGVmcz4gPGxpbmVhckdyYWRpZW50IGlkPSJib2R5IiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+IDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI0ZGRkZGRiIvPiA8c3RvcCBvZmZzZXQ9IjAuNTUiIHN0b3AtY29sb3I9IiNFRUYzRjgiLz4gPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRDZFMEVBIi8+IDwvbGluZWFyR3JhZGllbnQ+IDxyYWRpYWxHcmFkaWVudCBpZD0iZ2xhc3MiIGN4PSIwLjM0IiBjeT0iMC4yOCIgcj0iMC43OCI+IDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzhGQzlFQyIvPiA8c3RvcCBvZmZzZXQ9IjAuNDUiIHN0b3AtY29sb3I9IiMzRTdGQTgiLz4gPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTIzMDQ3Ii8+IDwvcmFkaWFsR3JhZGllbnQ+IDxsaW5lYXJHcmFkaWVudCBpZD0id2F0ZXIiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj4gPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjOUFEQ0Y1Ii8+IDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzJDODJBRSIvPiA8L2xpbmVhckdyYWRpZW50PiA8Y2xpcFBhdGggaWQ9ImJvd2wiPiA8Y2lyY2xlIGN4PSIzMiIgY3k9IjM3IiByPSIxNC41Ii8+IDwvY2xpcFBhdGg+IDwvZGVmcz4gPHJlY3QgeD0iNiIgeT0iNSIgd2lkdGg9IjUyIiBoZWlnaHQ9IjU0IiByeD0iOSIgZmlsbD0idXJsKCNib2R5KSIgc3Ryb2tlPSIjMzM0NjVGIiBzdHJva2Utd2lkdGg9IjIuNiIvPiA8cmVjdCB4PSIxMiIgeT0iMTEiIHdpZHRoPSIyNiIgaGVpZ2h0PSI1IiByeD0iMi41IiBmaWxsPSIjRkZGRkZGIiBzdHJva2U9IiMzMzQ2NUYiIHN0cm9rZS13aWR0aD0iMS44Ii8+IDxjaXJjbGUgY3g9IjQ3LjUiIGN5PSIxMy41IiByPSI0LjYiIGZpbGw9IiNFQUYyRkEiIHN0cm9rZT0iIzMzNDY1RiIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4gPHBhdGggZD0iTTQ3LjUgMTAuNHYzLjIiIHN0cm9rZT0iIzRBN0JBNiIgc3Ryb2tlLXdpZHRoPSIxLjYiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPiA8Y2lyY2xlIGN4PSIzMiIgY3k9IjM3IiByPSIxNy41IiBmaWxsPSIjQ0ZFOEZBIiBzdHJva2U9IiMzMzQ2NUYiIHN0cm9rZS13aWR0aD0iMi40Ii8+IDxjaXJjbGUgY3g9IjMyIiBjeT0iMzciIHI9IjE0LjUiIGZpbGw9InVybCgjZ2xhc3MpIi8+IDxnIGNsaXAtcGF0aD0idXJsKCNib3dsKSI+IDxwYXRoIGQ9Ik0xNy41IDQyLjVjNC0yLjQgOC0yLjQgMTIgMHM4IDIuNCAxMiAwdjExaC0yNHoiIGZpbGw9InVybCgjd2F0ZXIpIi8+IDxjaXJjbGUgY3g9IjI1LjUiIGN5PSIzMy41IiByPSIyLjIiIGZpbGw9IiNFN0Y4RkYiIG9wYWNpdHk9IjAuOSIvPiA8Y2lyY2xlIGN4PSIzNyIgY3k9IjMwLjUiIHI9IjEuNSIgZmlsbD0iI0U3RjhGRiIgb3BhY2l0eT0iMC43Ii8+IDxwYXRoIGQ9Ik0yNCA0Ny41YzQuNi0yLjYgOS40LTIuNiAxNCAwIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iMS40IiBzdHJva2UtbGluZWNhcD0icm91bmQiIGZpbGw9Im5vbmUiIG9wYWNpdHk9IjAuNTUiLz4gPC9nPiA8cGF0aCBkPSJNMjUgMjcuMmE5LjUgOS41IDAgMCAxIDktNC4zIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iMi4yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIGZpbGw9Im5vbmUiIG9wYWNpdHk9IjAuOCIvPiA8Y2lyY2xlIGN4PSI1NS41IiBjeT0iNTUuNSIgcj0iMi40IiBmaWxsPSIjMkVFMDZBIi8+IDwvc3ZnPg==",
+      "author": "李永轩",
+      "homepage": "https://github.com/lyx0717/dsh-washer#readme",
+      "repository": {
+        "url": "https://github.com/lyx0717/dsh-washer"
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1792646575,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/lyx0717/dsh-washer",
+            "commit": "980aae96102fddcb959ded436a7855503c201cab",
+            "path": "."
+          }
+        }
+      ]
+    }
+  ]
+}
