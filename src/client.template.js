@@ -602,11 +602,20 @@ window.__ModuleLoader__.load({
        * 停靠条里机器只占 30px 宽，三套造型在这个尺寸下都还能认出来，
        * 所以按 skin 直接选；老配置里的 'auto' 由 pickSkin 兜底成 pixel。
        */
+      /*
+       * 三档自适应靠 CSS 容器查询（见 style.css 的 @container dw-dock）。
+       * 这里只管把三份信息都吐出去，由宽度决定露多少：
+       *   紧凑 —— 机器 + 状态 + 计时/件数（两行）
+       *   迷你 —— 机器 + 状态 + 计时（一行）
+       *   极简 —— 只留机器
+       *
+       * dw-dot 已删除：机器造型、水位、指示灯都在表达状态，
+       * 再挂一颗圆点是同一件事说三遍，而且窄档位里它是最先该让位的。
+       */
       MachineStrip(mergedCfg.skin, state, dur),
       h('span', { className: 'dw-text' },
         h('span', { className: 'dw-t1', 'data-tone': tone }, title),
-        h('span', { className: 'dw-t2' }, sub)),
-      h('span', { className: 'dw-dot' }));
+        h('span', { className: 'dw-t2', 'data-hide': 'compact' }, sub)));
 
       return h('div', {
         className: 'dsh-washer',
@@ -826,8 +835,7 @@ window.__ModuleLoader__.load({
       PixelSprite(state),
       h('span', { className: 'dw-text' },
         h('span', { className: 'dw-t1' }, title),
-        h('span', { className: 'dw-t2' }, sub)),
-      h('span', { className: 'dw-dot' })));
+        h('span', { className: 'dw-t2' }, sub))));
     }
 
     /* ------------------------------------------------------------------ *

@@ -110,13 +110,29 @@
   width: 100%;
 }
 
+/*
+ * 停靠条三档（紧凑 / 迷你 / 极简），按容器宽度自动切换。
+ *
+ * 用 CSS 容器查询而不是 JS：容器宽度一变浏览器自己重算，没有监听器、
+ * 没有防抖、没有"首次测量晚一帧"的闪烁。代价是容器必须有一个确定的宽度，
+ * 所以 dock 座位把 .dsh-washer 改成 width:100%（见下方 data-variant='dock'）。
+ * 如果继续用 width:max-content，容器会被内容撑开、内容又按容器换档，
+ * 直接死循环抖成一团。
+ *
+ * 三档阈值按"能不能放下这一档的内容"定。注意容器宽度不是窗口宽度，
+ * 而是输入框宽度——实测正常窗口下是 476~1116px，所以阈值必须按这个量级：
+ *   >= 520px  紧凑：机器 + 状态 + 计时（两行，默认档，信息最全）
+ *   >= 380px  迷你：机器 + 单行「状态 计时」
+ *   <  380px  极简：只有机器，信息进 tooltip
+ */
 .dw-strip {
   display: flex;
   align-items: center;
   gap: 10px;
   box-sizing: border-box;
-  width: 322px;
-  max-width: 100%;
+  /* 宽度跟着容器走：撑满可用宽度，但不超过 322px 的舒适上限 */
+  width: 100%;
+  max-width: 322px;
   height: 52px;
   padding: 6px 13px 6px 8px;
   border: 1px solid var(--dw-line);
@@ -127,6 +143,14 @@
   font: inherit;
   text-align: left;
 }
+/* dock 座位的根节点要当容器查询的锚点。inline-size 只关心横向尺寸，
+   不影响高度，所以 52px 的条高不受影响。 */
+.dsh-washer[data-variant='dock'] {
+  width: 100%;
+  container-type: inline-size;
+  container-name: dw-dock;
+}
+
 
 
 .dw-sprite {
@@ -177,20 +201,30 @@
   font-variant-numeric: tabular-nums;
 }
 
-.dw-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--dw-sig);
+/*
+ * 档位 2 · 迷你（容器 < 520px）
+ * 两行文字压成一行，副标题让位——宽度不够时"状态"比"第几件"更该留。
+ */
+@container dw-dock (max-width: 519px) {
+  /*
+   * 两行压成一行：状态在左、计时在右，都是同一行里最该留的两样。
+   * 不隐藏副标题——计时正是"洗到哪了"的核心信息，砍掉它等于本末倒置。
+   * 副标题里"· 第 N 件"这类次要信息靠 text-overflow 自然截断。
+   */
+  .dw-strip { height: 44px; padding: 5px 10px 5px 7px; gap: 8px; }
+  .dw-text { flex-direction: row; align-items: baseline; gap: 6px; overflow: hidden; }
+  .dw-t1 { font-size: 11px; flex: none; }
+  .dw-t2 { font-size: 10px; flex: 0 1 auto; min-width: 0; }
 }
-.dsh-washer[data-state='waiting'] .dw-dot,
-.dsh-washer[data-state='starting'] .dw-dot,
-.dsh-washer[data-state='washing'] .dw-dot,
-.dsh-washer[data-state='rinsing'] .dw-dot,
-.dsh-washer[data-state='spinning'] .dw-dot,
-.dsh-washer[data-state='draining'] .dw-dot {
-  animation: dw-pulse 1.6s ease-in-out infinite;
+
+/*
+ * 档位 3 · 极简（容器 < 380px）
+ * 只剩机器。文字全部让位，但状态没有丢——机器造型、水位、指示灯都还在表达，
+ * 完整信息在 aria-label / title 上，鼠标悬停或读屏仍能拿到。
+ */
+@container dw-dock (max-width: 379px) {
+  .dw-strip { height: 40px; padding: 0; gap: 0; justify-content: center; max-width: 52px; }
+  .dw-text { display: none; }
 }
 
 @keyframes dw-blink {
@@ -210,7 +244,7 @@
  * 把「洗衣机在转」和「Agent 在干活」两个信号一起抹了，用户反而看不出状态。
  *
  * 所以只停「装饰性运动」：滚筒旋转、衣物翻滚、气泡上浮、整机抖动。
- * 指示灯（led/dw-dot/px-led）与水位**故意不列**，让它们继续动。
+ * 指示灯（led/px-led）与水位**故意不列**，让它们继续动。
  *
  * 说明：原先还有插件配置 reduceMotion 的三态（始终/从不/跟随系统），
  * 已按用户要求整体删除窗口——「从不」会让无视系统无障碍设置的人难受，
@@ -340,7 +374,7 @@
 
 
 
-/* ---------- 设置页 ---------- */
+/* ---------- 设置页 ----------
  *
  * 这一整段以前根本不存在：设置页只内联了开关和胶囊按钮的样式，
  * 容器/行/标签全是裸 div，浏览器按默认块级元素往下堆——用户看到的就是

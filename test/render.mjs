@@ -811,7 +811,8 @@ await test('A4 减弱动效：只停装饰运动，不停指示灯和水位（AC
   assert.ok(/\.dw-pw \.drum/.test(flagRule[0]), 'always 档也要停滚筒');
 
   // ④ 指示灯与水位必须**不在**停用名单里
-  for (const keep of ['led', 'dw-dot', 'px-led', '.water', 'bar']) {
+  // （dw-dot 已删除，状态改由机器造型/水位/指示灯表达）
+  for (const keep of ['led', 'px-led', '.water', 'bar']) {
     const mentioned = new RegExp('\\.' + keep.replace('.', '\\.') + '\\b');
     assert.ok(!mentioned.test(mediaBody), '减弱动效不该停掉表示状态的 ' + keep + '（信息不该被关掉）');
   }
@@ -1367,6 +1368,64 @@ for (const { name, level, html } of cells) {
 
 console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
+
+await test('停靠条三档：CSS 里三档阈值都在，且容器查询写在基础规则之后', () => {
+  /*
+   * 用户要求「按三档做，根据窗口宽度自动变换」。
+   *
+   * 两个容易出错的点被这条测试锁住：
+   *   ① 阈值必须按输入框宽度定（正常窗口 476~1116px），不是窗口宽度。
+   *      阈值定成 240/140 那种小数字，实际永远落在紧凑档，等于没做。
+   *   ② @container **不提升优先级**。它和 .dw-t1 同优先级，
+   *      谁在后面谁赢。基础规则写在后面就会把三档全部覆盖掉——
+   *      实测就是这样：高度生效了（.dw-strip 没有后写的同属性规则），
+   *      字号和 flex-direction 却纹丝不动。
+   */
+  const c = CSS_TEXT;
+  const mini = c.indexOf('@container dw-dock (max-width: 519px)');
+  const tiny = c.indexOf('@container dw-dock (max-width: 379px)');
+  assert.ok(mini > -1, '要有迷你档容器查询');
+  assert.ok(tiny > -1, '要有极简档容器查询');
+  assert.ok(mini < tiny, '迷你档应排在极简档之前（外层宽度更大）');
+
+  // 容器查询必须排在 .dw-t1 / .dw-t2 基础规则之后，否则被覆盖
+  const t1 = c.indexOf('.dw-t1 {');
+  const t2 = c.indexOf('.dw-t2 {');
+  assert.ok(t1 > -1 && t2 > -1, '应有 .dw-t1 / .dw-t2 基础规则');
+  assert.ok(mini > t1, '迷你档必须写在 .dw-t1 之后，否则字号不生效');
+  assert.ok(mini > t2, '迷你档必须写在 .dw-t2 之后，否则副标题规则不生效');
+});
+
+await test('停靠条三档：容器锚点存在，三档靠宽度而非 JS 切换', () => {
+  /*
+   * 容器查询要求祖先元素有 container-type，而这个容器是宿主的 DOM，
+   * 改不了。所以锚点是我们自己的 .dsh-washer[data-variant='dock']。
+   * 同时它必须是 width:100%：用 width:max-content 的话容器被内容撑开、
+   * 内容又按容器换档，会自激抖动。
+   */
+  const c = CSS_TEXT;
+  assert.ok(/\.dsh-washer\[data-variant='dock'\][\s\S]*?container-type:\s*inline-size/.test(c),
+    'dock 根节点要设 container-type: inline-size');
+  assert.ok(/\.dsh-washer\[data-variant='dock'\][\s\S]{0,120}?width:\s*100%/.test(c),
+    'dock 根节点要 width:100%，不能是 max-content');
+});
+
+await test('停靠条三档：渲染出的结构能让三档生效（无 dw-dot，t2 带 compact 标记）', async () => {
+  /*
+   * 三档全靠 CSS 换档，DOM 必须一次吐全：
+   *   - dw-t2 要能整条保留（迷你档是一行显示，不是隐藏）
+   *   - dw-dot 已删除：机器造型/水位/指示灯都在表达状态，再挂圆点是同一件事说三遍
+   */
+  const m = mount(streaming({ config: baseConfig() }));
+  await m.settle(420);
+  assert.ok(m.html.includes('dw-strip'), '应渲染停靠条');
+  assert.ok(m.html.includes('dw-text'), '应有文字容器');
+  assert.ok(m.html.includes('dw-t1'), '应有状态标题');
+  assert.ok(m.html.includes('dw-t2'), '应有副标题（迷你档靠它显示计时）');
+  assert.ok(!m.html.includes('dw-dot'), 'dw-dot 已删除，不该再出现');
+  m.unmount();
+});
+
 
 await test('造型自己的指示灯能拿到状态色（不是写死在 SVG 里的绿）', () => {
   /*
