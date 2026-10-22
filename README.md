@@ -120,6 +120,10 @@ node debug/e2e.mjs               # 端到端：起真服务 + 模拟事件流，
 - `src/client.template.js` 组件源码，`build.mjs` 把 core/CSS/SVG 内联成单文件 `client.js`。
 - `test/render.mjs` 是最小 React hooks 运行时：真跑 hooks、真 re-render，能测到时间轴行为。
 
+### 发布到插件市场
+
+改代码 → 刷新索引 → push，一步别少：`node scripts/refresh-market.mjs && git add docs/index.json && git commit -m "docs: 刷新市场索引" && git push`（索引钉当前 commit/版本，push 到 `main` 后 GitHub Pages 自动更新；pre-push 钩子会在"代码变了但索引没刷"时拦下并自动重写 `docs/index.json`）。
+
 ### 宿主半（`index.js`）：P1b 数据管道
 
 Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌面窗口（Electron）拿不到那些东西。所以宿主半在 Node 侧监听同一批事件、喂给**同一个** `src/core.js`，再通过本地 HTTP+WS 把快照推出去——两边判定只有一份实现，不会各写一套然后对不上。
