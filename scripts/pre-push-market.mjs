@@ -59,7 +59,7 @@ function buildIndex(publishTimestamp) {
           {
             version,
             publishTimestamp: 0, // 比对时忽略
-            source: { type: 'git', url: 'https://github.com/lyx0717/dsh-washer', commit, path: '.' },
+            source: { type: 'git', url: 'https://github.com/lyx0717/dsh-washer', commit },
           },
         ],
       },

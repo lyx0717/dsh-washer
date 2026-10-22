@@ -74,7 +74,7 @@ const index = {
             type: 'git',
             url: 'https://github.com/lyx0717/dsh-washer',
             commit,
-            path: '.',
+            // 插件在仓库根目录：省略 path（市场不接受 "."，缺省即根）
           },
         },
       ],
@@ -100,6 +100,14 @@ function validate(obj) {
       else if (s.type === 'git') {
         if (!/^https:/.test(s.url)) errs.push(`${p.name}: git url 必须 https`);
         if (!hex40.test(s.commit)) errs.push(`${p.name}: commit 必须是 40 位 hex`);
+        // path 必须是相对目录，且每段只允许 字母/数字/._@+-，不许 . 或 .. 段；
+        // 插件在仓库根目录时应省略 path（不能写 "."）。
+        if (s.path !== undefined) {
+          const segs = String(s.path).split('/');
+          const bad = s.path === '' || s.path.startsWith('/') ||
+            segs.some((seg) => seg === '.' || seg === '..' || !/^[A-Za-z0-9._@+-]+$/.test(seg));
+          if (bad) errs.push(`${p.name}: source.path 非法（相对目录，段只允许 字母/数字/._@+-，不能含 . 或 ..）: ${JSON.stringify(s.path)}`);
+        }
       } else if (s.type !== 'npm') errs.push(`${p.name}: 非法 source.type`);
     }
   }
