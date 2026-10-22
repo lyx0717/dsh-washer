@@ -305,6 +305,17 @@ const OverlayComponent = overlaySlots[0].Component;
 const sessionEntries = registrations.filter((r) => r.entry.name.startsWith('conversation.'));
 const entry = sessionEntries[0].entry;
 assert.equal(entry.name, 'conversation.composer.dock', '默认挂 conversation.composer.dock（AC20）');
+/*
+ * order 必须排在宿主两个药丸之前。
+ *
+ * conversation.composer.dock 这一行里宿主自己注册了两个药丸：
+ *   activity「性能与用量」(order 0)、usage「上下文使用量」(order 1)。
+ * 我们原先写 order:10，结果洗衣机永远显示在他俩右边。用户要求放在
+ * 「性能与用量」左侧，所以 order 必须 < 0。写成负数是刻意的。
+ */
+assert.ok(typeof entry.order === 'number' && entry.order < 0,
+  '停靠条 order 必须 < 0 才能排到「性能与用量」(order 0) 左侧，实际=' + entry.order);
+
 const headerEntry = sessionEntries[1].entry;
 assert.equal(headerEntry.name, 'conversation.session.header.utilities', 'waiting 替补挂在会话标题栏');
 assert.equal(entry.locale, 'washer', 'locale 命名空间要传给渲染器，否则组件拿不到 t');
@@ -1369,20 +1380,24 @@ for (const { name, level, html } of cells) {
 console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
 
-await test('停靠条贴左：dock 座位在任何父行布局下都靠左', () => {
+await test('停靠条位置：靠 order 排到宿主药丸之前，不用 auto 边距（会打乱居中布局）', () => {
   /*
-   * 用户要求「将 dock 放在这行的最左侧」。
+   * 用户要求「把 dock 放到性能与用量的左侧」。
    *
-   * 宿主给 composer.dock 的行布局不确定（可能 center / stretch / space-between），
-   * 光靠 justify-content 管不了。唯一在三种情况下都成立的是 margin-right:auto
-   * ——它把元素压向起始边。
+   * 先前我误判成"贴左"，写了 margin-right:auto。但真实那一行是
+   * justify-content:center，里面还有宿主自己的两个药丸（性能与用量、
+   * 上下文使用量）。auto 边距会把洗衣机与药丸硬拆到两端，打乱原有布局。
+   *
+   * 正解是 order 排到最前（order < 0，见上方 entry.order 断言），
+   * 这一行继续居中排布，洗衣机自然落在最左。所以这里断言**没有** auto 边距。
    */
   const c = CSS_TEXT;
   const m = c.match(/\.dsh-washer\[data-variant='dock'\]\s*\{([^}]*)\}/);
   assert.ok(m, '要有 dock 座位的对齐规则');
   const body = m[1];
-  assert.ok(/margin-right:\s*auto/.test(body), 'dock 座位要 margin-right:auto 才能在任何父行布局下贴左');
-  assert.ok(/margin-left:\s*0/.test(body), 'dock 座位不该有左边距');
+  assert.ok(!/margin-right:\s*auto/.test(body), 'dock 不该用 margin-right:auto——会打乱父行的居中排布');
+  assert.ok(!/margin-left:\s*auto/.test(body), 'dock 不该用 margin-left:auto');
+  assert.ok(/flex:\s*0 0 auto/.test(body), 'dock 座位不参与伸缩');
 });
 
 await test('停靠条三档：用 @media 查窗口宽度，不用 @container（自激循环）', () => {

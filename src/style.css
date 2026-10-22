@@ -335,11 +335,17 @@
  * 该座位位于会话标题栏右侧，高度受限：只出 52px 的停靠条，不展开卡片。
  * ------------------------------------------------------------------ */
 .dsh-washer[data-variant='dock'] {
-  /* 行内贴左：不抢剩余空间、不居中 */
+  /*
+   * 位置靠 order:-10 排在「性能与用量」「上下文使用量」两个药丸之前（见
+   * client.template.js 的 slot 注册）。这里只管尺寸：不参与伸缩，避免被
+   * 父行的 justify-content:center 拉伸或压缩。
+   *
+   * 曾经想用自动右外边距把它顶到行首——那是错的：这行是
+   * justify-content:center，自动边距会把它和其余药丸硬拆到两端，
+   * 打乱宿主原有布局。既然靠 order 排到最前，就不需要任何自动边距。
+   */
   flex: 0 0 auto;
-  align-self: flex-start;
-  margin-left: 0;
-  margin-right: auto;
+  align-self: center;
 }
 
 .dsh-washer[data-variant='header'] {

@@ -242,7 +242,14 @@ function defaultPosition() {
 const ESCAPE_ACCELERATOR = 'Alt+CommandOrControl+W';
 
 function setClickThrough(on) {
+  const changed = clickThrough !== (on === true);
   clickThrough = on === true;
+  /*
+   * 穿透开关在设置页也有镜像，改完必须回传宿主。
+   * 不回传的话：菜单里打开穿透 → 设置页开关还停在"关"，用户会以为没生效。
+   * （"退出悬浮窗"忘记回传是同一个毛病。）
+   */
+  if (changed) { writeFloatPrefs({ clickThrough }); notifyHost({ clickThrough }); }
   if (win === null || win.isDestroyed()) return;
   win.webContents.send('washer:click-through', clickThrough);
   updateEscapeShortcut();
@@ -604,7 +611,13 @@ function showMenu() {
       },
     },
     { type: 'separator' },
-    { label: '退出悬浮窗', click: () => app.quit() },
+    /*
+     * 退出前先把 show 关掉再退。
+     * 否则：点菜单退出 → 窗口没了，但设置页的「显示悬浮窗」还亮着"开"，
+     * 两边状态分叉，用户以为开关失灵。
+     * 先 setVisible(false)（它会写偏好文件 + 通知宿主），再退出进程。
+     */
+    { label: '退出悬浮窗', click: () => { setVisible(false); app.quit(); } },
   ]);
   menu.popup({ window: win });
 }
@@ -708,10 +721,20 @@ app.whenReady().then(() => {
   ipcMain.on('washer:show-menu', () => showMenu());
   ipcMain.on('washer:open-detail', () => openDetail());
   ipcMain.on('washer:close-detail', () => closeDetail());
-  ipcMain.on('washer:quit', () => app.quit());
+  /*
+   * 退出前先关 show：这条路径同样不能只退进程。
+   * 用 setVisible(false) 而不是裸 app.quit()，让它走"写偏好 + 通知宿主 + 隐藏"这套。
+   */
+  ipcMain.on('washer:quit', () => { setVisible(false); app.quit(); });
 });
 
 app.on('will-quit', () => {
+  /*
+   * 兜底：⌘Q / dock 右键退出 / 系统关机等路径不经过菜单，不会调 setVisible。
+   * 进程都要没了，此时窗口对用户而言就是"关了"，所以补一次 show:false 回传，
+   * 免得设置页留着个"开"的假象。
+   */
+  if (visible) notifyHost({ show: false });
   if (prefWatcher !== null) { require('node:fs').unwatchFile(PREFS_FILE); prefWatcher = null; }
   globalShortcut.unregisterAll();
   closeDetail();

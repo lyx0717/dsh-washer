@@ -1124,7 +1124,13 @@ window.__ModuleLoader__.load({
         const offDock = ctx.slots.inject(slotName, () => ctx.slots.register({
           name: slotName,
           id: ENTRY_ID,
-          order: 10,
+          /*
+           * order 用负数：这一行（conversation.composer.dock）里宿主自己还注册了两个
+           * 药丸——activity「性能与用量」(order 0) 和 usage「上下文使用量」(order 1)。
+           * 我们原先写 order:10，于是永远排在他俩右边。用户要求放在「性能与用量」左侧，
+           * 必须排到所有宿主药丸之前，所以用 -10（留给未来宿主加负数项的空间）。
+           */
+          order: -10,
           locale: LOCALE_NS,
           registrant: 'dsh-washer',
           inject: () => ({ washerGetConfig: liveConfig, washerVariant: 'dock', washerSetPref: writePref, washerSubscribePrefs: subscribePrefs }),

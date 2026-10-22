@@ -722,6 +722,33 @@ test('偏好双向同步：POST 进来的偏好要能通过 GET 读回（浮窗 
   ctx.dispose();
 });
 
+test('偏好双向同步：鼠标穿透状态也要能往返（浮窗菜单 ←→ 设置页）', async () => {
+  /*
+   * 用户报：「点悬浮窗菜单里的功能，设置页对应开关不同步」。
+   * 穿透开关在设置页有镜像，所以浮窗菜单改完必须回传宿主，否则两边分叉。
+   * 这条锁住 clickThrough 这个字段的往返——之前 setClickThrough 只改内存，
+   * 既没写本地文件也没通知宿主，两边永远对不上。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+
+  const saved = api.syncOverlayPrefs({ clickThrough: true });
+  assert.equal(saved.clickThrough, true, '穿透开要存下来');
+
+  const { readOverlayPrefs } = await import('../index.js');
+  assert.equal(readOverlayPrefs().clickThrough, true, '设置页读回来也应是开');
+
+  api.syncOverlayPrefs({ clickThrough: false });
+  assert.equal(readOverlayPrefs().clickThrough, false, '关也要能存下来');
+
+  // 脏值不该覆盖
+  api.syncOverlayPrefs({ clickThrough: 'yes' });
+  assert.equal(readOverlayPrefs().clickThrough, false, '非布尔值不该改掉合法值');
+
+  ctx.dispose();
+});
+
 test('偏好双向同步：非法值写不进去，读回来的仍是上一个合法值', async () => {
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
