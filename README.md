@@ -65,7 +65,7 @@ dsh plugin --profile desktop add /path/to/dsh-washer
 
 > 为什么不走宿主统一的设置持久化（`ctx.configForms`）：那套 store 只服务挂在 loader `include` 行下的插件，第三方 bundle 走 `- insert:` 拿到的控制器永远是 `unavailable`（写进去读不回来）。已装的 `dsh-better-sidebar` 同样绕开它、自存 `localStorage`。
 >
-> 代价：桌面悬浮窗（规划中）读不到 `localStorage`，到时要让 Host 半读 profile 配置或走 RPC。
+> 代价：桌面悬浮窗读不到浏览器 `localStorage`。浮窗的偏好因此走宿主写到 `~/.dsh/dsh-washer-float-prefs.json` 的文件，并通过 `/dsh-washer/prefs`（JSON 文件）与设置页双向同步——详见下方「悬浮窗（P1b）」。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -109,10 +109,10 @@ dsh plugin --profile desktop add /path/to/dsh-washer
 ## 开发
 
 ```bash
-node build.mjs                   # src/ → client.js（内联 core/css/svg，约 126KB）
+node build.mjs                   # src/ → client.js（内联 core/css/svg，约 128KB）
 node --test test/core.test.mjs   # 状态机单测（29 条）
-node --test test/host.test.mjs   # 宿主半单测（15 条）
-node test/render.mjs             # 行为测试（30 条）+ 生成 /tmp/washer-render 截图素材
+node --test test/host.test.mjs   # 宿主半单测（42 条；会起本地服务，按需手动跑）
+node test/render.mjs             # 行为测试（41 条）+ 生成 /tmp/washer-render 截图素材
 node debug/e2e.mjs               # 端到端：起真服务 + 模拟事件流，逐行打印状态迁移
 ```
 
@@ -171,4 +171,4 @@ desktopOverlayPort: 0        # 0 = 系统分配，日志里打印实际地址
 
 ## 许可
 
-个人项目，未发布。图标与像素 sprite 均为原创（脚本生成，见 `src/machine.svg`、`src/sprite.svg`）。
+MIT。图标与像素 sprite 均为原创（脚本生成，见 `src/machine.svg`、`src/sprite.svg`）。
