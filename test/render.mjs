@@ -1369,6 +1369,22 @@ for (const { name, level, html } of cells) {
 console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
 
+await test('停靠条贴左：dock 座位在任何父行布局下都靠左', () => {
+  /*
+   * 用户要求「将 dock 放在这行的最左侧」。
+   *
+   * 宿主给 composer.dock 的行布局不确定（可能 center / stretch / space-between），
+   * 光靠 justify-content 管不了。唯一在三种情况下都成立的是 margin-right:auto
+   * ——它把元素压向起始边。
+   */
+  const c = CSS_TEXT;
+  const m = c.match(/\.dsh-washer\[data-variant='dock'\]\s*\{([^}]*)\}/);
+  assert.ok(m, '要有 dock 座位的对齐规则');
+  const body = m[1];
+  assert.ok(/margin-right:\s*auto/.test(body), 'dock 座位要 margin-right:auto 才能在任何父行布局下贴左');
+  assert.ok(/margin-left:\s*0/.test(body), 'dock 座位不该有左边距');
+});
+
 await test('停靠条三档：用 @media 查窗口宽度，不用 @container（自激循环）', () => {
   /*
    * 用户要求「按三档做，根据窗口宽度自动变换」。

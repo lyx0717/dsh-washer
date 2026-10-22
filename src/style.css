@@ -11,6 +11,11 @@
      width:100% 会让 hover 区、焦点环、点击热区都比可见内容大一截。 */
   width: max-content;
   max-width: 100%;
+  /*
+   * 贴左：dock 座位挂在宿主的 composer.dock 行里，那一行默认可能居中或拉伸。
+   * 这里把自己的外边距吃掉并把自身靠左对齐，保证停靠条永远贴着这一行的最左侧。
+   * 只对 dock 座位生效——header 座位在右上角、overlay 座位是浮层，各有各的位置。
+   */
   --dw-card: var(--dsw-alias-bg-layer-1, #ffffff);
   --dw-line: var(--dsw-alias-border-l1, #d8dfe7);
   --dw-t1: var(--dsw-alias-label-primary, #1b2430);
@@ -329,6 +334,14 @@
  * 洗衣机在「最该看见」的一刻消失。header 座位在同一时刻顶上来。
  * 该座位位于会话标题栏右侧，高度受限：只出 52px 的停靠条，不展开卡片。
  * ------------------------------------------------------------------ */
+.dsh-washer[data-variant='dock'] {
+  /* 行内贴左：不抢剩余空间、不居中 */
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-left: 0;
+  margin-right: auto;
+}
+
 .dsh-washer[data-variant='header'] {
   align-items: center;
   flex: 0 0 auto;
