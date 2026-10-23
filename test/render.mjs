@@ -189,14 +189,28 @@ globalThis.document = {
   documentElement: { nodeName: 'HTML' },
 };
 /*
- * getComputedStyle 桩：只回 --dsw-alias-bg-layer-1 一个变量，
- * 值由 __themeBg 控制（用例里改成暗色来断言推送的 dark 值）。
+ * getComputedStyle 桩：回 backgroundColor 和 --dsw-alias-bg-layer-1 两个值，
+ * 分别由 __setHostBgColor / __setThemeBg 控制（用例里改成暗色来断言推送的 dark 值）。
+ * backgroundColor 默认给 rgba(0,0,0,0)——getComputedStyle 对没画背景的元素
+ * 就回这个"透明黑"，真实宿主里也存在，探测必须把它当成"没颜色"而不是黑。
  */
 let THEME_BG = 'rgb(255, 255, 255)';
+let HOST_BG_COLOR = 'rgba(0, 0, 0, 0)';
 globalThis.__setThemeBg = (value) => { THEME_BG = value; };
+globalThis.__setHostBgColor = (value) => { HOST_BG_COLOR = value; };
 globalThis.getComputedStyle = () => ({
+  backgroundColor: HOST_BG_COLOR,
   getPropertyValue: (name) => (name === '--dsw-alias-bg-layer-1' ? THEME_BG : ''),
 });
+/* body 桩：默认 null（模拟"插件跑在没有宿主开关的表面里"），
+ * 主题用例里可以临时塞进去模拟 body[data-ds-dark-theme]。 */
+let BODY_STUB = null;
+Object.defineProperty(globalThis.document, 'body', {
+  configurable: true,
+  get: () => BODY_STUB,
+  set: (v) => { BODY_STUB = v; },
+});
+globalThis.__setBodyStub = (value) => { BODY_STUB = value; };
 globalThis.__docListeners = docListeners;
 
 /*
@@ -1653,6 +1667,63 @@ await test('浮窗明暗：按宿主实际背景色亮度判断，暗色时推�
   assert.ok(!junkBodies.some((b) => typeof b.dark === 'boolean'),
     '读不到有效背景色时不该乱推 dark，实际发出的：' + JSON.stringify(junkBodies));
 
+  globalThis.__setThemeBg('rgb(255, 255, 255)');
+});
+
+await test('浮窗明暗：宿主开关在 body 上（data-ds-dark-theme）优先级最高', () => {
+  /*
+   * 宿主的暗色选择器是 body[data-ds-dark-theme]，token 和开关全挂在 body 上，
+   * html 上什么都没有（0.2.1 在 documentElement 上找属性、0.2.2/0.2.3 先读
+   * html 的 token，都栽在这）。这条断言：body 挂上开关后，即使颜色全读不到
+   * （模拟插件跑在没有宿主样式表的表面里），也能正确推 dark:true。
+   */
+  globalThis.__setThemeBg('not-a-color');
+  globalThis.__setBodyStub({ hasAttribute: (n) => n === 'data-ds-dark-theme' });
+  FETCH_CALLS.length = 0;
+  const localRegs = [];
+  const localCtx = Object.assign({}, ctx, {
+    slots: {
+      inject(name, run) { run(); },
+      register(entry, Component) { localRegs.push({ entry, Component }); return () => {}; },
+    },
+  });
+  plugin.apply(localCtx, {});
+  const bodies = FETCH_CALLS
+    .filter((c) => c.method === 'POST' && c.body !== null)
+    .map((c) => JSON.parse(c.body));
+  assert.ok(bodies.some((b) => b.dark === true),
+    'body 带 data-ds-dark-theme 时应推送 dark:true，实际发出的：' + JSON.stringify(bodies));
+  assert.ok(bodies.some((b) => typeof b.darkProbe === 'string' && b.darkProbe.startsWith('attr:body')),
+    '诊断字段应如实记录是属性命中的，实际：' + JSON.stringify(bodies));
+  // 还原：别污染后面的用例
+  globalThis.__setBodyStub(null);
+  globalThis.__setThemeBg('rgb(255, 255, 255)');
+  globalThis.__setHostBgColor('rgba(0, 0, 0, 0)');
+});
+
+await test('浮窗明暗：透明背景（rgba alpha=0）不算黑，落到 token 判断', () => {
+  /*
+   * getComputedStyle 对没画背景的元素回 rgba(0, 0, 0, 0)——这是"透明"不是
+   * "黑色"。旧解析忽略 alpha，会把"没画背景"当成纯黑（亮度 0）误判成暗色。
+   */
+  globalThis.__setHostBgColor('rgba(0, 0, 0, 0)'); // 透明黑
+  globalThis.__setThemeBg('rgb(255, 255, 255)');   // token 是白的
+  FETCH_CALLS.length = 0;
+  const localRegs = [];
+  const localCtx = Object.assign({}, ctx, {
+    slots: {
+      inject(name, run) { run(); },
+      register(entry, Component) { localRegs.push({ entry, Component }); return () => {}; },
+    },
+  });
+  plugin.apply(localCtx, {});
+  const bodies = FETCH_CALLS
+    .filter((c) => c.method === 'POST' && c.body !== null)
+    .map((c) => JSON.parse(c.body))
+    .filter((b) => typeof b.dark === 'boolean');
+  assert.ok(bodies.some((b) => b.dark === false),
+    '透明背景应被忽略、落到白色 token 判为浅色，实际发出的：' + JSON.stringify(bodies));
+  globalThis.__setHostBgColor('rgba(0, 0, 0, 0)');
   globalThis.__setThemeBg('rgb(255, 255, 255)');
 });
 

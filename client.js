@@ -1497,35 +1497,54 @@ function shouldSwitch(from, to, heldMs) {
          *
          * 目的：浮窗（独立 Electron 页面）的明暗要和 dock 一样，跟随宿主 GUI。
          *
-         * 走过一次弯路：最初靠 document.documentElement 上有没有
-         * data-ds-dark-theme 属性来判断，实测不生效——宿主换主题时未必动
-         * 这个属性（不同版本/来源用属性、class、或 prefers-color-scheme），
-         * 猜属性名就是猜宿主内部实现。
+         * 走过两次弯路（都有真机证据）：
+         *   1) 靠 documentElement 上有没有 data-ds-dark-theme 属性——不生效。
+         *   2) 只从 html/documentElement 读设计 token——拿到空串，一次都推不出去。
          *
-         * 现在改成读**实际算出来的背景色**：宿主的卡片底色 token
-         * --dsw-alias-bg-layer-1 在明暗主题下必然不同（浅色近白、暗色近黑），
-         * 用 getComputedStyle 拿它的值算相对亮度即可。不管宿主用什么机制
-         * 切主题，只要换色就能读出来，不依赖任何私有属性名。
+         * 根因（从宿主 app.asar 里的 design_platform_css 读到的铁证）：
+         * 宿主的设计 token 和暗色开关**全挂在 body 上**，html 上什么都没有：
+         *   body{--dsw-alias-bg-layer-1:...; background-color:var(--dsw-alias-bg-base)}
+         *   body[data-ds-dark-theme]{--dsw-alias-bg-layer-1:...暗色值}
+         *
+         * 所以探测按可靠度从高到低：
+         *   1) body[data-ds-dark-theme] —— 宿主自己的暗色开关（它的 CSS 选择器
+         *      用的就是这个属性），最权威；
+         *   2) body 计算后的 background-color —— 宿主直接写好了绝对色；
+         *   3) 设计 token --dsw-alias-bg-layer-1 / --dsw-alias-bg-base。
+         * 插件也可能跑在没有宿主样式的表面里（读不到任何东西），此时返回
+         * null——宁可不改浮窗，也不瞎猜。
          *
          * 触发时机有三条，覆盖全部换主题路径：
          *   1) 挂载时读一次；
-         *   2) MutationObserver 盯 documentElement 的 class/style/属性变化；
+         *   2) MutationObserver 盯 documentElement / body 的 class/style/属性变化；
          *   3) prefers-color-scheme 媒体查询变化（跟随系统主题的场景）。
          * 三条都只调同一个 pushTheme，重复推送是幂等的（宿主侧比对后不重复写）。
          */
         const THEME_BG_TOKEN = '--dsw-alias-bg-layer-1';
+        const THEME_BG_TOKEN_ALT = '--dsw-alias-bg-base';
+
+        /** body / html 上有没有宿主的暗色开关属性；没有该方法或不支持时返回 false。 */
+        const hasDarkAttr = (el) => {
+          if (el === null || el === undefined || typeof el.hasAttribute !== 'function') return false;
+          try { return el.hasAttribute('data-ds-dark-theme') === true; } catch { return false; }
+        };
 
         /**
-         * 把 "rgb(r, g, b)" / "#rgb" / "#rrggbb" 解析成亮度 0..1，解析不了返回 null。
+         * 把 "rgb(r, g, b)" / "rgba(...)" / "#rgb" / "#rrggbb" 解析成亮度 0..1。
+         * 解析不了、或 alpha < 0.5（比如 getComputedStyle 的默认透明黑
+         * rgba(0,0,0,0)——它不是"黑"，是"没画"）返回 null。
          * 用相对的感知亮度（sRGB 加权），比简单平均更贴近人眼对明暗的判断。
          */
         const parseBrightness = (color) => {
           if (typeof color !== 'string') return null;
           const text = color.trim();
-          let r, g, b;
-          let m = text.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+          let r, g, b, a = 1;
+          let m = text.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)$/i);
           if (m !== null) {
             r = Number(m[1]); g = Number(m[2]); b = Number(m[3]);
+            if (m[4] !== undefined) {
+              a = m[4].endsWith('%') ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
+            }
           } else if ((m = text.match(/^#([0-9a-f]{3})$/i)) !== null) {
             const h = m[1];
             r = parseInt(h[0] + h[0], 16); g = parseInt(h[1] + h[1], 16); b = parseInt(h[2] + h[2], 16);
@@ -1534,78 +1553,87 @@ function shouldSwitch(from, to, heldMs) {
           } else {
             return null;
           }
-          if (![r, g, b].every((v) => Number.isFinite(v))) return null;
+          if (![r, g, b, a].every((v) => Number.isFinite(v))) return null;
+          if (a < 0.5) return null; // 透明色不算数，避免把"没画背景"误判成纯黑
           return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
         };
 
-        /**
-         * 宿主是不是暗色。
-         *
-         * 从多个元素上试读 --dsw-alias-bg-layer-1，**取第一个能解析出颜色的**：
-         * 自定义属性可能定义在 :root，也可能定义在某个主题容器上；只读
-         * documentElement 时拿到空串，就会永远判不出结果（实测踩过：
-         * 一次都没推出去，浮窗纹丝不动）。
-         *
-         * 全试完都拿不到有效颜色时返回 null——宁可不改浮窗，也不瞎猜。
-         */
-        const THEME_PROBE_TARGETS = () => {
-          const list = [];
-          const pushEl = (el) => { if (el !== null && el !== undefined) list.push(el); };
-          pushEl(typeof document !== 'undefined' ? document.documentElement : null);
-          pushEl(typeof document !== 'undefined' ? document.body : null);
+        /** 单个元素上取亮度：先算好的背景色，再设计 token；拿不到返回 null。 */
+        const readBrightnessFrom = (el) => {
+          if (el === null || el === undefined || typeof getComputedStyle !== 'function') return null;
           try {
-            // 主题容器：宿主把 class/属性挂在哪个 div 上都可能，找第一个带背景的
-            if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
-              pushEl(document.querySelector('[data-ds-dark-theme], .theme-with-dark-background, [class*="theme"]'));
+            const style = getComputedStyle(el);
+            const bg = parseBrightness(style.backgroundColor);
+            if (bg !== null) return bg;
+            for (const token of [THEME_BG_TOKEN, THEME_BG_TOKEN_ALT]) {
+              const v = parseBrightness(style.getPropertyValue(token));
+              if (v !== null) return v;
             }
-          } catch { /* 选择器不支持就算了 */ }
-          return list;
+          } catch { /* 这个元素读不了，换下一个 */ }
+          return null;
         };
 
+        /** 宿主现在是不是暗色；环境里读不出主题（无属性也无颜色）时返回 null。 */
         const readIsDark = () => {
           try {
-            if (typeof getComputedStyle !== 'function') return null;
-            for (const el of THEME_PROBE_TARGETS()) {
-              const value = getComputedStyle(el).getPropertyValue(THEME_BG_TOKEN);
-              const brightness = parseBrightness(value);
-              if (brightness !== null) return brightness < 0.5;
-            }
+            const body = typeof document !== 'undefined' ? document.body : null;
+            const rootEl = typeof document !== 'undefined' ? document.documentElement : null;
+            // 1) 宿主自己的暗色开关（body[data-ds-dark-theme] 用的就是它）
+            if (hasDarkAttr(body) || hasDarkAttr(rootEl)) return true;
+            // 2) 没挂开关就看颜色：token 和背景色全挂在 body 上，先试 body
+            const fromBody = readBrightnessFrom(body);
+            if (fromBody !== null) return fromBody < 0.5;
+            const fromRoot = readBrightnessFrom(rootEl);
+            if (fromRoot !== null) return fromRoot < 0.5;
             return null;
           } catch { return null; }
         };
 
         /* 上一次推过的值：避免观察器在每次无关的 DOM 变化上都发请求 */
         let lastPushedDark = null;
-        const pushTheme = () => {
-          const dark = readIsDark();
-          /*
-           * 诊断：把读到的原始颜色一起发出去（darkProbe）。
-           *
-           * 这一条是排查"切了主题浮窗不动"时加的——只看 dark 布尔值无法区分
-           * "读到了浅色"和"根本没读到颜色"。落盘后一眼能看出断在哪。
-           * 每次探测都带同一个颜色字符串，去重仍按 dark 值走。
-           */
-          let probe = '';
+        let lastPushedProbe = null;
+
+        /**
+         * 诊断用：描述"这次探测到底看见了什么"，随 dark 一起落盘。
+         *
+         * 排查"切了主题浮窗不动"时，只看 dark 布尔值无法区分"读到了浅色"
+         * 和"根本没读到东西"——曾经因为这个把"探测正常工作"误判成
+         * "残留旧值"，白白多折腾一轮。这个字段必须和 readIsDark 看同一批
+         * 信源，否则又是撒谎的诊断。
+         */
+        const describeProbe = () => {
           try {
+            const body = typeof document !== 'undefined' ? document.body : null;
+            const rootEl = typeof document !== 'undefined' ? document.documentElement : null;
+            if (hasDarkAttr(body)) return 'attr:body[data-ds-dark-theme]';
+            if (hasDarkAttr(rootEl)) return 'attr:html[data-ds-dark-theme]';
             if (typeof getComputedStyle === 'function') {
-              const el = typeof document !== 'undefined' ? document.documentElement : null;
-              if (el !== null && el !== undefined) {
-                probe = String(getComputedStyle(el).getPropertyValue(THEME_BG_TOKEN) || '').trim();
+              if (body !== null && body !== undefined) {
+                const style = getComputedStyle(body);
+                const bg = String(style.backgroundColor || '').trim();
+                if (parseBrightness(bg) !== null) return 'body.bg=' + bg;
+                const token = String(style.getPropertyValue(THEME_BG_TOKEN) || '').trim();
+                if (token !== '') return 'body' + THEME_BG_TOKEN + '=' + token;
+              }
+              if (rootEl !== null && rootEl !== undefined) {
+                const token = String(getComputedStyle(rootEl).getPropertyValue(THEME_BG_TOKEN) || '').trim();
+                if (token !== '') return 'html' + THEME_BG_TOKEN + '=' + token;
               }
             }
-          } catch { probe = ''; }
+            return '(no attr, no color)';
+          } catch { return '(probe error)'; }
+        };
+
+        const pushTheme = () => {
+          const dark = readIsDark();
+          const probe = describeProbe();
+          // 去重：同结果只发一次；读到 null 时跟着 probe 的变化走
           if (dark !== null && dark === lastPushedDark) return;
-          if (dark === null) {
-            // 读不到颜色：仍把探测结果报一次，方便定位是"读不到"还是"判错"
-            if (probe === lastPushedProbe) return;
-            lastPushedProbe = probe;
-          }
-          if (dark !== null) {
-            lastPushedDark = dark;
-            lastPushedProbe = probe;
-          }
+          if (dark === null && probe === lastPushedProbe) return;
+          lastPushedDark = dark;
+          lastPushedProbe = probe;
           try {
-            const payload = dark === null ? { darkProbe: probe || '(empty)' } : { dark, darkProbe: probe || '(empty)' };
+            const payload = dark === null ? { darkProbe: probe } : { dark, darkProbe: probe };
             fetch(OVERLAY_PREFS_PATH, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
@@ -1613,7 +1641,6 @@ function shouldSwitch(from, to, heldMs) {
             }).catch(() => { lastPushedDark = null; lastPushedProbe = null; /* 失败下次重试 */ });
           } catch { lastPushedDark = null; lastPushedProbe = null; }
         };
-        let lastPushedProbe = null;
 
         ctx.effect(() => {
           pushTheme();
