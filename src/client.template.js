@@ -1070,43 +1070,110 @@ window.__ModuleLoader__.load({
         /*
          * ---------------- 明暗主题 → 悬浮窗 ----------------
          *
-         * 宿主 GUI 的主题靠 documentElement 上的 data-ds-dark-theme 属性表达
-         * （CSS 据此换色，没有任何 JS API）。浮窗是独立 Electron 页面，读不到
-         * 宿主的 DOM 属性，所以由这边量一次、POST 给宿主，宿主再推给浮窗——
-         * 这样浮窗的浅/深就和 dock 用的是同一份判定，不会各猜一套。
+         * 目的：浮窗（独立 Electron 页面）的明暗要和 dock 一样，跟随宿主 GUI。
          *
-         * 用户可能在设置里切主题，属性会变；用 MutationObserver 盯属性变化，
-         * 一变就重推。只观察 attributeFilter，代价极小。
+         * 走过一次弯路：最初靠 document.documentElement 上有没有
+         * data-ds-dark-theme 属性来判断，实测不生效——宿主换主题时未必动
+         * 这个属性（不同版本/来源用属性、class、或 prefers-color-scheme），
+         * 猜属性名就是猜宿主内部实现。
+         *
+         * 现在改成读**实际算出来的背景色**：宿主的卡片底色 token
+         * --dsw-alias-bg-layer-1 在明暗主题下必然不同（浅色近白、暗色近黑），
+         * 用 getComputedStyle 拿它的值算相对亮度即可。不管宿主用什么机制
+         * 切主题，只要换色就能读出来，不依赖任何私有属性名。
+         *
+         * 触发时机有三条，覆盖全部换主题路径：
+         *   1) 挂载时读一次；
+         *   2) MutationObserver 盯 documentElement 的 class/style/属性变化；
+         *   3) prefers-color-scheme 媒体查询变化（跟随系统主题的场景）。
+         * 三条都只调同一个 pushTheme，重复推送是幂等的（宿主侧比对后不重复写）。
          */
+        const THEME_BG_TOKEN = '--dsw-alias-bg-layer-1';
+
+        /**
+         * 把 "rgb(r, g, b)" / "#rgb" / "#rrggbb" 解析成亮度 0..1，解析不了返回 null。
+         * 用相对的感知亮度（sRGB 加权），比简单平均更贴近人眼对明暗的判断。
+         */
+        const parseBrightness = (color) => {
+          if (typeof color !== 'string') return null;
+          const text = color.trim();
+          let r, g, b;
+          let m = text.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+          if (m !== null) {
+            r = Number(m[1]); g = Number(m[2]); b = Number(m[3]);
+          } else if ((m = text.match(/^#([0-9a-f]{3})$/i)) !== null) {
+            const h = m[1];
+            r = parseInt(h[0] + h[0], 16); g = parseInt(h[1] + h[1], 16); b = parseInt(h[2] + h[2], 16);
+          } else if ((m = text.match(/^#([0-9a-f]{6})$/i)) !== null) {
+            r = parseInt(m[1].slice(0, 2), 16); g = parseInt(m[1].slice(2, 4), 16); b = parseInt(m[1].slice(4, 6), 16);
+          } else {
+            return null;
+          }
+          if (![r, g, b].every((v) => Number.isFinite(v))) return null;
+          return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        };
+
+        /** 当前宿主是不是暗色；拿不到有效颜色时返回 null（不猜、不改浮窗）。 */
         const readIsDark = () => {
           try {
             const el = document.documentElement;
-            if (el === null) return null;
-            return el.hasAttribute('data-ds-dark-theme');
+            if (el === null || typeof getComputedStyle !== 'function') return null;
+            const value = getComputedStyle(el).getPropertyValue(THEME_BG_TOKEN);
+            const brightness = parseBrightness(value);
+            if (brightness === null) return null;
+            return brightness < 0.5;
           } catch { return null; }
         };
+
+        /* 上一次推过的值：避免观察器在每次无关的 DOM 变化上都发请求 */
+        let lastPushedDark = null;
         const pushTheme = () => {
           const dark = readIsDark();
           if (dark === null) return;
+          if (dark === lastPushedDark) return;
+          lastPushedDark = dark;
           try {
             fetch(OVERLAY_PREFS_PATH, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ dark }),
-            }).catch(() => { /* 宿主没接这条路就算了 */ });
-          } catch { /* 同上 */ }
+            }).catch(() => { lastPushedDark = null; /* 失败下次重试 */ });
+          } catch { lastPushedDark = null; }
         };
+
         ctx.effect(() => {
           pushTheme();
-          if (typeof MutationObserver === 'undefined') return () => {};
-          let observer = null;
-          try {
-            observer = new MutationObserver(() => pushTheme());
-            observer.observe(document.documentElement, {
-              attributes: true, attributeFilter: ['data-ds-dark-theme'],
-            });
-          } catch { observer = null; }
-          return () => { if (observer !== null) { try { observer.disconnect(); } catch { /* noop */ } } };
+          const disposers = [];
+          if (typeof MutationObserver !== 'undefined') {
+            try {
+              const observer = new MutationObserver(() => pushTheme());
+              observer.observe(document.documentElement, {
+                attributes: true,
+                attributeFilter: ['class', 'style', 'data-ds-dark-theme'],
+              });
+              if (document.body !== null && document.body !== undefined) {
+                observer.observe(document.body, {
+                  attributes: true,
+                  attributeFilter: ['class', 'style', 'data-ds-dark-theme'],
+                });
+              }
+              disposers.push(() => { try { observer.disconnect(); } catch { /* noop */ } });
+            } catch { /* 观察不到就只靠挂载时那一次 */ }
+          }
+          if (typeof matchMedia === 'function') {
+            try {
+              const mq = matchMedia('(prefers-color-scheme: dark)');
+              const onChange = () => pushTheme();
+              if (typeof mq.addEventListener === 'function') {
+                mq.addEventListener('change', onChange);
+                disposers.push(() => { try { mq.removeEventListener('change', onChange); } catch { /* noop */ } });
+              } else if (typeof mq.addListener === 'function') {
+                mq.addListener(onChange);
+                disposers.push(() => { try { mq.removeListener(onChange); } catch { /* noop */ } });
+              }
+            } catch { /* 老浏览器没有 matchMedia 就算了 */ }
+          }
+          return () => { disposers.forEach((off) => { try { off(); } catch { /* noop */ } }); };
         }, 'dsh-washer: theme -> overlay');
 
         // 测试用把手：拉取发生在 apply() 里，比任何用例都早，而且前面几条

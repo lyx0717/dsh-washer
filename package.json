@@ -1,6 +1,6 @@
 {
   "name": "dsh-washer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "滚筒洗衣机 · 用一台洗衣机的运转状态显示 Agent 的工作状态",

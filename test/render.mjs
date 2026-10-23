@@ -182,7 +182,21 @@ globalThis.document = {
     if (i >= 0) docListeners.splice(i, 1);
   },
   get activeElement() { return activeElement; },
+  /*
+   * 主题探测用：client.template.js 读 --dsw-alias-bg-layer-1 的计算值来判断明暗。
+   * 默认给浅色，单条用例可改 __themeBg 再触发重算。
+   */
+  documentElement: { nodeName: 'HTML' },
 };
+/*
+ * getComputedStyle 桩：只回 --dsw-alias-bg-layer-1 一个变量，
+ * 值由 __themeBg 控制（用例里改成暗色来断言推送的 dark 值）。
+ */
+let THEME_BG = 'rgb(255, 255, 255)';
+globalThis.__setThemeBg = (value) => { THEME_BG = value; };
+globalThis.getComputedStyle = () => ({
+  getPropertyValue: (name) => (name === '--dsw-alias-bg-layer-1' ? THEME_BG : ''),
+});
 globalThis.__docListeners = docListeners;
 
 /*
@@ -1597,6 +1611,49 @@ await test('package.json files 覆盖全部运行时必需文件（否则市场�
     assert.ok(files.some((pat) => matches(pat, f)),
       `package.json 的 files 白名单必须包含 ${f}，否则市场安装后运行时缺文件（历史 bug：缺 src/core.js 导致安装即崩）`);
   }
+});
+
+await test('浮窗明暗：按宿主实际背景色亮度判断，暗色时推送 dark:true', () => {
+  /*
+   * 用户报「改为深色主题悬浮窗没生效」。
+   *
+   * 旧实现只看 documentElement 上有没有 data-ds-dark-theme 属性，
+   * 宿主换主题时未必动这个属性 → 永远判成浅色，浮窗也就不变。
+   *
+   * 现在改成读 --dsw-alias-bg-layer-1 的计算值算亮度。这条用例把背景色
+   * 分别设成暗和亮，重新跑一次 apply，断言 POST 出去的值跟着变。
+   */
+  const runApplyAndCollect = (bg) => {
+    globalThis.__setThemeBg(bg);
+    FETCH_CALLS.length = 0;
+    const localRegs = [];
+    const localCtx = Object.assign({}, ctx, {
+      slots: {
+        inject(name, run) { run(); },
+        register(entry, Component) { localRegs.push({ entry, Component }); return () => {}; },
+      },
+    });
+    plugin.apply(localCtx, {});
+    return FETCH_CALLS
+      .filter((c) => c.method === 'POST' && c.body !== null)
+      .map((c) => JSON.parse(c.body))
+      .filter((b) => typeof b.dark === 'boolean');
+  };
+
+  const darkBodies = runApplyAndCollect('rgb(24, 26, 32)');
+  assert.ok(darkBodies.some((b) => b.dark === true),
+    '背景色接近黑时应推送 dark:true，实际发出的：' + JSON.stringify(darkBodies));
+
+  const lightBodies = runApplyAndCollect('rgb(255, 255, 255)');
+  assert.ok(lightBodies.some((b) => b.dark === false),
+    '背景色接近白时应推送 dark:false，实际发出的：' + JSON.stringify(lightBodies));
+
+  // 拿不到有效颜色时不猜：不应发出 dark 字段
+  const junkBodies = runApplyAndCollect('not-a-color');
+  assert.ok(!junkBodies.some((b) => typeof b.dark === 'boolean'),
+    '读不到有效背景色时不该乱推 dark，实际发出的：' + JSON.stringify(junkBodies));
+
+  globalThis.__setThemeBg('rgb(255, 255, 255)');
 });
 
 
