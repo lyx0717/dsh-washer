@@ -1516,6 +1516,27 @@ await test('设置页每个 class 都真的在 CSS 里有样式（不是裸 div 
   assert.ok(/align-items\s*:\s*center/.test(rowBody), '.dw-set-row 要垂直居中');
 });
 
+await test('设置页说明文字不能被分隔线穿中间（行+说明只留一条底线）', () => {
+  /*
+   * 用户报「每条设置项说明文字中间都有一条线」。
+   *
+   * 根因：.dw-set-row 有下边框，.dw-set-row + .dw-set-hint 又给说明加下边框，
+   * 且用 margin-top:-10px 把说明往上拽，正好撞上上一行的 border-bottom——
+   * 线就压在了说明文字上/中间。
+   *
+   * 约束：行+说明这节只允许一条分隔线（由说明的底线承担）；不许用负上边距；
+   * 行若后面紧跟说明，行自己的下边框要让位，避免双线。
+   */
+  const hintAdj = CSS_TEXT.slice(CSS_TEXT.indexOf('.dw-set-row + .dw-set-hint'));
+  const hintBody = hintAdj.slice(0, hintAdj.indexOf('}'));
+  assert.ok(!/margin-top\s*:\s*-/.test(hintBody),
+    '.dw-set-row + .dw-set-hint 不能用负的 margin-top（会把说明拽到上一行的边框线上 = 线穿文字）');
+  assert.ok(/border-bottom/.test(hintBody),
+    '行+说明这一节应由说明的 border-bottom 承担唯一的分隔线');
+  assert.ok(/\.dw-set-row:has\(\s*\+\s*\.dw-set-hint\s*\)/.test(CSS_TEXT),
+    '行后紧跟说明时，行自己的 border-bottom 要让位（:has 规则），否则行线和说明线两条叠着');
+});
+
 
 /* ---------- 最终汇总 ---------- *
  * 必须放在文件最末：CSS_TEXT 与截图之后还追加了几条用例，
