@@ -140,10 +140,12 @@
   max-width: 322px;
   height: 52px;
   padding: 6px 13px 6px 8px;
-  border: 1px solid var(--dw-line);
+  /* 无背景、无边框：停靠条要和宿主原生输入框区域融为一体，
+     不再是一张"浮在上面的卡片"。只留内容本身（机器 + 文字）。 */
+  border: 0;
   border-radius: 12px;
-  background: var(--dw-card);
-  box-shadow: var(--dw-shadow);
+  background: transparent;
+  box-shadow: none;
   color: inherit;
   font: inherit;
   text-align: left;

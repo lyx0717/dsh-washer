@@ -1067,6 +1067,48 @@ window.__ModuleLoader__.load({
           };
         }, 'dsh-washer: overlay prefs sync');
 
+        /*
+         * ---------------- 明暗主题 → 悬浮窗 ----------------
+         *
+         * 宿主 GUI 的主题靠 documentElement 上的 data-ds-dark-theme 属性表达
+         * （CSS 据此换色，没有任何 JS API）。浮窗是独立 Electron 页面，读不到
+         * 宿主的 DOM 属性，所以由这边量一次、POST 给宿主，宿主再推给浮窗——
+         * 这样浮窗的浅/深就和 dock 用的是同一份判定，不会各猜一套。
+         *
+         * 用户可能在设置里切主题，属性会变；用 MutationObserver 盯属性变化，
+         * 一变就重推。只观察 attributeFilter，代价极小。
+         */
+        const readIsDark = () => {
+          try {
+            const el = document.documentElement;
+            if (el === null) return null;
+            return el.hasAttribute('data-ds-dark-theme');
+          } catch { return null; }
+        };
+        const pushTheme = () => {
+          const dark = readIsDark();
+          if (dark === null) return;
+          try {
+            fetch(OVERLAY_PREFS_PATH, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ dark }),
+            }).catch(() => { /* 宿主没接这条路就算了 */ });
+          } catch { /* 同上 */ }
+        };
+        ctx.effect(() => {
+          pushTheme();
+          if (typeof MutationObserver === 'undefined') return () => {};
+          let observer = null;
+          try {
+            observer = new MutationObserver(() => pushTheme());
+            observer.observe(document.documentElement, {
+              attributes: true, attributeFilter: ['data-ds-dark-theme'],
+            });
+          } catch { observer = null; }
+          return () => { if (observer !== null) { try { observer.disconnect(); } catch { /* noop */ } } };
+        }, 'dsh-washer: theme -> overlay');
+
         // 测试用把手：拉取发生在 apply() 里，比任何用例都早，而且前面几条
         // 推送用例会把 fetch 记录清空——想断言"打开时会拉一次"就没法看全程了。
         // 暴露出来让测试能开一个明确的观察窗口。

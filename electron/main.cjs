@@ -51,6 +51,12 @@ let sizeMode = 'normal';
 /** 当前皮肤 */
 let skin = 'precision';
 /**
+ * 当前是否暗色。由 Web 端（主界面）把宿主 GUI 的实际主题 POST 进偏好文件，
+ * 这里 watch 到就读出来，推给浮窗切浅/深——做到「浮窗跟随 dock 同款主题」。
+ * 默认 true：浮窗原本就是深色版，没收到信号时保持原样。
+ */
+let themeDark = true;
+/**
  * 窗口是否可见。
  *
  * 和"进程是否活着"是两件事：宿主启动时会按设置决定要不要拉起进程，
@@ -482,7 +488,7 @@ function setSizeMode(mode) {
   writeFloatPrefs({ size: next });
   notifyHost({ size: next });
   if (win === null || win.isDestroyed()) return;
-  win.webContents.send('washer:prefs', { size: next, skin });
+  win.webContents.send('washer:prefs', { size: next, skin, dark: themeDark });
   const size = SIZES[next];
   // 宽度变了，贴边的窗口要跟着挪，否则会被屏幕边缘裁掉
   const [x, y] = win.getPosition();
@@ -507,7 +513,20 @@ function setSkin(next) {
   writeFloatPrefs({ skin });
   notifyHost({ skin });
   if (win === null || win.isDestroyed()) return;
-  win.webContents.send('washer:prefs', { size: sizeMode, skin });
+  win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark });
+}
+
+/**
+ * 明暗主题。只把布尔发给页面，具体配色的浅/深由 float.html 的 CSS 决定。
+ * 不写回偏好文件（这个值是 Web 端送进来派生的，不是用户在浮窗上改的），
+ * 也不 notifyHost（宿主就是它的来源，回推会形成环）。
+ */
+function setThemeDark(next) {
+  const nextDark = next === true;
+  if (nextDark === themeDark) return;
+  themeDark = nextDark;
+  if (win === null || win.isDestroyed()) return;
+  win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark });
 }
 
 /**
@@ -600,17 +619,6 @@ function showMenu() {
       click: () => win !== null && win.webContents.reload(),
     },
     { type: 'separator' },
-    {
-      label: '打开调试端',
-      click: () => {
-        const ep = readEndpoint();
-        if (ep === null || !ep.port || !ep.token) return;
-        const page = `file://${join(__dirname, '..', 'debug', 'overlay.html')}`
-          + `?port=${ep.port}&token=${encodeURIComponent(ep.token)}`;
-        shell.openExternal(page);
-      },
-    },
-    { type: 'separator' },
     /*
      * 退出前先把 show 关掉再退。
      * 否则：点菜单退出 → 窗口没了，但设置页的「显示悬浮窗」还亮着"开"，
@@ -658,10 +666,16 @@ function watchPrefs() {
        * 挪到设置页：设置页 POST → 宿主写偏好文件 → 这里读到就应用。
        */
       const nextThrough = typeof p.clickThrough === 'boolean' ? p.clickThrough : clickThrough;
+      /*
+       * 主题：Web 端把宿主 GUI 的明暗 POST 进来。只认布尔值，
+       * 缺字段时不动（偏好文件是读-合并-写的，不能让窗口莫名闪一下）。
+       */
+      const nextDark = typeof p.dark === 'boolean' ? p.dark : themeDark;
       if (nextSize !== sizeMode) setSizeMode(nextSize);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
       if (nextThrough !== clickThrough) setClickThrough(nextThrough);
+      if (nextDark !== themeDark) setThemeDark(nextDark);
     });
   } catch { prefWatcher = null; }
 }
@@ -688,6 +702,8 @@ app.whenReady().then(() => {
    * 启动阶段写一次会改 mtime，把随后的 watchFile 回调白白触发一遍。
    */
   if (typeof prefs.show === 'boolean') visible = prefs.show;
+  // 启动时的明暗：沿用上一次 Web 端送进来的值，避免启动瞬间先闪一次默认配色。
+  if (typeof prefs.dark === 'boolean') themeDark = prefs.dark;
 
   watchPrefs();
 
@@ -713,6 +729,7 @@ app.whenReady().then(() => {
     escapeAccelerator: ESCAPE_ACCELERATOR,
     size: sizeMode,
     skin,
+    dark: themeDark,
     visible,
   }));
   ipcMain.on('washer:set-size', (_event, mode) => setSizeMode(mode));

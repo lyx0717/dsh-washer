@@ -1537,6 +1537,31 @@ await test('设置页说明文字不能被分隔线穿中间（行+说明只留�
     '行后紧跟说明时，行自己的 border-bottom 要让位（:has 规则），否则行线和说明线两条叠着');
 });
 
+await test('dock 停靠条无背景无边框（融入原生窗口）', () => {
+  /*
+   * 用户要求：dock 去掉背景和边框，与原生窗口融为一体。
+   * 原来 .dw-strip 是"浮在输入框上方的一张卡片"（border + background + shadow）。
+   * 现在应该只剩内容（机器 + 文字），自己不带任何底/框/影。
+   */
+  const stripRule = CSS_TEXT.slice(CSS_TEXT.indexOf('.dw-strip'));
+  const stripBody = stripRule.slice(0, stripRule.indexOf('}'));
+  assert.ok(/border\s*:\s*0(;|\s|$)/.test(stripBody) || /border\s*:\s*none/.test(stripBody),
+    '.dw-strip 应去掉边框（border:0）');
+  assert.ok(/background\s*:\s*transparent/.test(stripBody),
+    '.dw-strip 背景应为 transparent');
+  assert.ok(/box-shadow\s*:\s*none/.test(stripBody),
+    '.dw-strip 不应再有阴影');
+});
+
+await test('悬浮窗菜单不再有「打开调试端」', () => {
+  /*
+   * 正式版把调试入口收起来，普通用户不该在右键菜单里看到"打开调试端"。
+   */
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+  assert.ok(!mainSrc.includes("'打开调试端'") && !mainSrc.includes('打开调试端'),
+    'electron/main.cjs 的右键菜单不应再包含「打开调试端」');
+});
+
 
 /* ---------- 最终汇总 ---------- *
  * 必须放在文件最末：CSS_TEXT 与截图之后还追加了几条用例，

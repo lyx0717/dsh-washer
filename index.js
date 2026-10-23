@@ -517,6 +517,12 @@ export function writeOverlayPrefs(patch) {
    * （Chromium 的拖拽区会吞掉 dblclick），所以把入口挪到设置页。
    */
   if (patch.clickThrough === true || patch.clickThrough === false) next.clickThrough = patch.clickThrough;
+  /*
+   * 暗色主题：Web 端把宿主 GUI 的实际主题（documentElement 是否带
+   * data-ds-dark-theme）POST 过来，浮窗据此切浅/深，做到「跟 dock 同步」。
+   * 宿主侧（Node）读不到渲染进程的主题，只能由页面量一次再送过来。
+   */
+  if (patch.dark === true || patch.dark === false) next.dark = patch.dark;
   try {
     writeFileSync(file, JSON.stringify(next), { mode: 0o600 });
     // writeFileSync 的 mode 只在新建时生效，已存在的老文件权限不会自动收紧

@@ -2,6 +2,7 @@
 node_modules/
 .DS_Store
 
-# 构建产物：由 `node build.mjs` 从 src/ 生成，改源码后重新构建
-# （如果你想直接分发已构建的包，把下面这行注释掉）
-client.js
+# 构建产物 client.js：必须进仓库
+# 插件以 git 源发布到插件市场，用户拿到的就是仓库内容；缺 client.js 时宿主按
+# exports["./client"] 加载会失败，Web 端组件不出现。改完 src/ 记得 node build.mjs 再提交。
+# （历史上曾忽略它，导致市场安装的包没有前端 bundle——见 commit 修复。）

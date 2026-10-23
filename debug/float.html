@@ -224,9 +224,57 @@
   /* 精密家电和动漫造型靠自带的 transition 表达水位，像素图靠 --water */
   body[data-size="tiny"] .machine > .dw-frame { transform-origin: top left; }
 
+  /* ---------- 主题：跟随宿主 GUI（dock 同款明暗） ---------- */
+  /*
+   * Web 端把宿主 documentElement 是否带 data-ds-dark-theme 量出来，
+   * 经 /dsh-washer/prefs 送到主进程，再推给这里，落到 body[data-theme]。
+   * - light：白底气泡、深字，机器用亮色材质（--dw-* 默认值本身就是亮色）。
+   * - dark ：深底气泡、浅字，机器换成暗色材质（下面这段覆盖 --dw-*）。
+   * 机器材质的暗色值直接搬主界面 [data-ds-dark-theme] 那套，保证两边同款。
+   */
+  body[data-theme="light"] {
+    color-scheme: light;
+    --bubble: rgba(255, 255, 255, .92);
+    --text: #1b2430;
+    --dim: #6b7684;
+  }
+  body[data-theme="light"] .bubble {
+    box-shadow: 0 2px 8px rgba(20, 40, 70, .14), 0 0 0 .5px rgba(0, 0, 0, .06);
+  }
+  body[data-theme="dark"] .washerskin,
+  body:not([data-theme="light"]) .washerskin {
+    --dw-body-1: #4c5762;
+    --dw-body-2: #39434e;
+    --dw-body-3: #28313a;
+    --dw-body-4: #1b2229;
+    --dw-body-edge: rgba(255, 255, 255, 0.16);
+    --dw-body-shade: rgba(0, 0, 0, 0.55);
+    --dw-chrome-1: #b9c4cf;
+    --dw-chrome-2: #6b7885;
+    --dw-chrome-3: #3a444f;
+    --dw-chrome-4: #8b98a5;
+    --dw-glass-1: rgba(120, 180, 215, 0.55);
+    --dw-glass-2: rgba(46, 96, 130, 0.6);
+    --dw-glass-3: rgba(14, 38, 58, 0.9);
+    --dw-glass-4: rgba(4, 12, 20, 0.97);
+    --dw-water-1: #6fc3e6;
+    --dw-water-2: #2b7ea8;
+    --dw-water-3: #17546f;
+    --dw-sig-run: #4aa3f0;
+    --dw-sig-wait: #f0b73a;
+    --dw-sig-err: #f26064;
+    --dw-sig-ok: #3fbf7a;
+    --dw-sig-off: #4c5762;
+  }
+  /* 动漫造型的机身是写死的浅色，暗色下压暗一点，别在深桌面上白得刺眼 */
+  body[data-theme="dark"] .dw-aw-body,
+  body:not([data-theme="light"]) .dw-aw-body {
+    background: linear-gradient(172deg, #3d4650 0%, #333b45 52%, #262d35 100%);
+  }
+
 </style>
 </head>
-<body data-size="normal" data-skin="precision">
+<body data-size="normal" data-skin="precision" data-theme="dark">
 <div class="wrap" id="wrap" data-conn="idle">
   <div class="machine" id="machine" data-blink="0" data-shake="0"
        style="--water:7;--foam:0;--led:#7c8896;--spin-dur:0s;--spin-play:paused">
@@ -383,6 +431,14 @@
       document.body.dataset.skin = p.skin;
       skinChanged = true;
     }
+    // 主题：Web 端推来的明暗，落到 body[data-theme]，CSS 据此切浅/深。
+    // 机器材质走 CSS 变量，不需要重建；换皮肤才要重建。
+    if (typeof p.dark === 'boolean') {
+      var nextTheme = p.dark ? 'dark' : 'light';
+      if (document.body.dataset.theme !== nextTheme) {
+        document.body.dataset.theme = nextTheme;
+      }
+    }
     if (skinChanged) {
       curState = null;
       if (lastSnap !== null) { buildMachine(lastSnap); paintLamp(lastSnap.state || 'off'); }
@@ -392,7 +448,7 @@
   }
   if (host) {
     host.state().then(function (st) {
-      if (st) applyPrefs({ size: st.size, skin: st.skin });
+      if (st) applyPrefs({ size: st.size, skin: st.skin, dark: st.dark });
     });
     host.onPrefs(applyPrefs);
 
