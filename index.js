@@ -518,11 +518,19 @@ export function writeOverlayPrefs(patch) {
    */
   if (patch.clickThrough === true || patch.clickThrough === false) next.clickThrough = patch.clickThrough;
   /*
-   * 暗色主题：Web 端把宿主 GUI 的实际主题（documentElement 是否带
-   * data-ds-dark-theme）POST 过来，浮窗据此切浅/深，做到「跟 dock 同步」。
-   * 宿主侧（Node）读不到渲染进程的主题，只能由页面量一次再送过来。
+   * 暗色主题：Web 端量出宿主的实际明暗（读背景色亮度）再 POST 过来，
+   * 浮窗据此切浅/深，做到「跟 dock 同步」。宿主（Node）读不到渲染进程的
+   * 主题，只能由页面量一次再送过来。
    */
   if (patch.dark === true || patch.dark === false) next.dark = patch.dark;
+  /*
+   * 探测诊断字段：页面把"读到了什么颜色"一起发过来，落盘后方便排查。
+   * 曾经出现过页面一次都没推、只看 dark 值完全看不出原因的情况。
+   * 只收短字符串，避免被塞大内容把偏好文件撑大。
+   */
+  if (typeof patch.darkProbe === 'string' && patch.darkProbe.length <= 120) {
+    next.darkProbe = patch.darkProbe;
+  }
   try {
     writeFileSync(file, JSON.stringify(next), { mode: 0o600 });
     // writeFileSync 的 mode 只在新建时生效，已存在的老文件权限不会自动收紧

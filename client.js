@@ -1538,15 +1538,39 @@ function shouldSwitch(from, to, heldMs) {
           return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
         };
 
-        /** 当前宿主是不是暗色；拿不到有效颜色时返回 null（不猜、不改浮窗）。 */
+        /**
+         * 宿主是不是暗色。
+         *
+         * 从多个元素上试读 --dsw-alias-bg-layer-1，**取第一个能解析出颜色的**：
+         * 自定义属性可能定义在 :root，也可能定义在某个主题容器上；只读
+         * documentElement 时拿到空串，就会永远判不出结果（实测踩过：
+         * 一次都没推出去，浮窗纹丝不动）。
+         *
+         * 全试完都拿不到有效颜色时返回 null——宁可不改浮窗，也不瞎猜。
+         */
+        const THEME_PROBE_TARGETS = () => {
+          const list = [];
+          const pushEl = (el) => { if (el !== null && el !== undefined) list.push(el); };
+          pushEl(typeof document !== 'undefined' ? document.documentElement : null);
+          pushEl(typeof document !== 'undefined' ? document.body : null);
+          try {
+            // 主题容器：宿主把 class/属性挂在哪个 div 上都可能，找第一个带背景的
+            if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
+              pushEl(document.querySelector('[data-ds-dark-theme], .theme-with-dark-background, [class*="theme"]'));
+            }
+          } catch { /* 选择器不支持就算了 */ }
+          return list;
+        };
+
         const readIsDark = () => {
           try {
-            const el = document.documentElement;
-            if (el === null || typeof getComputedStyle !== 'function') return null;
-            const value = getComputedStyle(el).getPropertyValue(THEME_BG_TOKEN);
-            const brightness = parseBrightness(value);
-            if (brightness === null) return null;
-            return brightness < 0.5;
+            if (typeof getComputedStyle !== 'function') return null;
+            for (const el of THEME_PROBE_TARGETS()) {
+              const value = getComputedStyle(el).getPropertyValue(THEME_BG_TOKEN);
+              const brightness = parseBrightness(value);
+              if (brightness !== null) return brightness < 0.5;
+            }
+            return null;
           } catch { return null; }
         };
 
@@ -1554,17 +1578,42 @@ function shouldSwitch(from, to, heldMs) {
         let lastPushedDark = null;
         const pushTheme = () => {
           const dark = readIsDark();
-          if (dark === null) return;
-          if (dark === lastPushedDark) return;
-          lastPushedDark = dark;
+          /*
+           * 诊断：把读到的原始颜色一起发出去（darkProbe）。
+           *
+           * 这一条是排查"切了主题浮窗不动"时加的——只看 dark 布尔值无法区分
+           * "读到了浅色"和"根本没读到颜色"。落盘后一眼能看出断在哪。
+           * 每次探测都带同一个颜色字符串，去重仍按 dark 值走。
+           */
+          let probe = '';
           try {
+            if (typeof getComputedStyle === 'function') {
+              const el = typeof document !== 'undefined' ? document.documentElement : null;
+              if (el !== null && el !== undefined) {
+                probe = String(getComputedStyle(el).getPropertyValue(THEME_BG_TOKEN) || '').trim();
+              }
+            }
+          } catch { probe = ''; }
+          if (dark !== null && dark === lastPushedDark) return;
+          if (dark === null) {
+            // 读不到颜色：仍把探测结果报一次，方便定位是"读不到"还是"判错"
+            if (probe === lastPushedProbe) return;
+            lastPushedProbe = probe;
+          }
+          if (dark !== null) {
+            lastPushedDark = dark;
+            lastPushedProbe = probe;
+          }
+          try {
+            const payload = dark === null ? { darkProbe: probe || '(empty)' } : { dark, darkProbe: probe || '(empty)' };
             fetch(OVERLAY_PREFS_PATH, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ dark }),
-            }).catch(() => { lastPushedDark = null; /* 失败下次重试 */ });
-          } catch { lastPushedDark = null; }
+              body: JSON.stringify(payload),
+            }).catch(() => { lastPushedDark = null; lastPushedProbe = null; /* 失败下次重试 */ });
+          } catch { lastPushedDark = null; lastPushedProbe = null; }
         };
+        let lastPushedProbe = null;
 
         ctx.effect(() => {
           pushTheme();
