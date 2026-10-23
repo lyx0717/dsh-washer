@@ -1,6 +1,6 @@
 {
   "name": "dsh-washer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "滚筒洗衣机 · 用一台洗衣机的运转状态显示 Agent 的工作状态",
@@ -19,14 +19,21 @@
   },
   "files": [
     "index.js",
+    "src/core.js",
     "client.js",
     "cordis.patch.yml",
     "icon.svg",
     "locale/*.json",
     "README.md",
     "docs/*.png",
-    "debug/overlay.html",
-    "docs/overlay-float.png"
+    "electron/main.cjs",
+    "electron/preload.cjs",
+    "electron/package.json",
+    "electron/start.sh",
+    "debug/float.html",
+    "debug/float.machines.js",
+    "debug/detail.html",
+    "debug/overlay.html"
   ],
   "dsh": {
     "bundle": {

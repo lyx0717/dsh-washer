@@ -1562,6 +1562,43 @@ await test('悬浮窗菜单不再有「打开调试端」', () => {
     'electron/main.cjs 的右键菜单不应再包含「打开调试端」');
 });
 
+await test('package.json files 覆盖全部运行时必需文件（否则市场安装缺文件）', () => {
+  /*
+   * 用户报「市场安装失败：Cannot find module …/src/core.js」。
+   *
+   * 根因：插件以 git 源发布，安装器按 package.json 的 files 白名单裁剪；
+   * files 漏了 src/core.js（index.js 运行时 import 它）→ 一装就崩。
+   * 顺带发现 electron/ 和 debug/float.html 等也没进 files，
+   * 浮窗功能会白屏。
+   *
+   * 这条按"运行时真正会读到的文件"逐一点名，缺一个就红。
+   */
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const required = [
+    'index.js',      // main
+    'src/core.js',   // index.js 运行时 import
+    'client.js',     // exports['./client']，Web 端 bundle
+    'cordis.patch.yml',
+    'electron/main.cjs',
+    'electron/preload.cjs',
+    'debug/float.html',
+    'debug/float.machines.js',
+    'debug/detail.html',
+    'debug/overlay.html',
+  ];
+  const files = Array.isArray(pkg.files) ? pkg.files : [];
+  // 简单 glob 匹配：只处理 * 通配，够这份白名单用
+  const matches = (pat, f) => {
+    if (!pat.includes('*')) return pat === f;
+    const re = new RegExp('^' + pat.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*') + '$');
+    return re.test(f);
+  };
+  for (const f of required) {
+    assert.ok(files.some((pat) => matches(pat, f)),
+      `package.json 的 files 白名单必须包含 ${f}，否则市场安装后运行时缺文件（历史 bug：缺 src/core.js 导致安装即崩）`);
+  }
+});
+
 
 /* ---------- 最终汇总 ---------- *
  * 必须放在文件最末：CSS_TEXT 与截图之后还追加了几条用例，
