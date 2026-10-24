@@ -509,10 +509,39 @@ function createWindow() {
  */
 function notify(title, body) {
   if (notifyPref !== true) return;
-  if (Notification === undefined || !Notification.isSupported()) return;
-  if (win !== null && !win.isDestroyed() && win.isVisible() && win.isFocused()) return;
+  /*
+   * 前台不弹的判据只看 isFocused，不看 isVisible。
+   *
+   * 浮窗是 alwaysOnTop 且 focusable，它几乎永远"可见"；早先写成
+   * `isVisible() && isFocused()` 看上去更严格，实际等价于只看焦点，
+   * 却让人误以为"可见就静音"。真正该问的是"用户此刻在看这个窗口吗"，
+   * 那只有焦点能回答。
+   */
+  if (win !== null && !win.isDestroyed() && win.isFocused()) return;
   if (lastNotifyAt > 0 && Date.now() - lastNotifyAt < 4000) return;
   lastNotifyAt = Date.now();
+  if (showElectronNotification(title, body)) return;
+  /*
+   * Electron 的 Notification 可能整个不可用——这台机器就是：
+   * Electron.app 是 adhoc 签名、bundle id 是 com.github.Electron，
+   * macOS 15 直接回 UNErrorDomain 错误 1（未授权），连权限弹窗都不给。
+   *
+   * 退到 osascript：它由系统自带的「脚本编辑器」发通知，而那个 App
+   * 是签过名的，权限早就有了。图标会变成脚本编辑器的图标，
+   * 但内容、时间点都对——比什么都收不到强。
+   */
+  showScriptNotification(title, body);
+}
+
+/**
+ * 用 Electron 自己的 Notification 发。返回是否成功发出。
+ *
+ * sync 的 show() 不抛错不代表发出去了：没授权时失败是**异步**的
+ * 'failed' 事件，同步 try/catch 抓不到。所以这里只负责"提交"，
+ * 判断成败交给 onFailed 回调去核销——见 notify 的调用方。
+ */
+function showElectronNotification(title, body) {
+  if (Notification === undefined || !Notification.isSupported()) return false;
   try {
     const n = new Notification({ title, body, silent: false });
     n.on('click', () => {
@@ -520,9 +549,38 @@ function notify(title, body) {
       win.show();
       win.focus();
     });
+    /*
+     * 发失败（最常见就是没授权）就退到 osascript。
+     * 不加这个，用户只会看到"开关开了但什么都不弹"。
+     */
+    n.on('failed', () => { showScriptNotification(title, body); });
     n.show();
+    return true;
   } catch {
-    /* 通知权限被拒、系统没通知服务：静默降级，绝不能因为发不出通知就崩 */
+    return false;
+  }
+}
+
+/**
+ * 走 osascript 发通知。
+ *
+ * 参数是拼进 AppleScript 字符串的，所以引号必须转义：
+ * 正文里出现 `"` 会让脚本变成语法错误，整个通知静默丢掉
+ * ——比弹一个怪通知更难查。反斜杠先转，否则会把转义序列二次消费。
+ */
+function showScriptNotification(title, body) {
+  if (process.platform !== 'darwin') return;
+  const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const script = `display notification "${esc(body)}" with title "${esc(title)}"`;
+  try {
+    require('node:child_process').execFile(
+      'osascript',
+      ['-e', script],
+      { timeout: 3000 },
+      () => { /* 失败也不报：通知发不出去不该影响任何别的东西 */ },
+    );
+  } catch {
+    /* 同上 */
   }
 }
 

@@ -137,6 +137,59 @@
   .bubble { -webkit-app-region: no-drag; }
 
   /*
+   * 本地完成横幅：浮窗自己说"跑完了"，不经过 macOS 通知中心。
+   *
+   * 盖在机器上三分之一的位置——那里是滚筒上半部，本来就是空白反光区，
+   * 压在上面不挡关键信息（水位、面板都在下半部）。
+   *
+   * data-on 控制显隐，用 opacity+transform 而不是 display：
+   * display 切换没法过渡，会硬闪一下。
+   */
+  .flash {
+    position: absolute;
+    left: 6px; right: 6px;
+    top: 18%;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 5px 8px;
+    border-radius: 10px;
+    /* 半透明深色底 + 细边，压在浅色机身上才看得清；
+       纯色底在 precision 造型的白色外壳上会显得很突兀 */
+    background: rgba(18, 22, 28, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-4px) scale(.96);
+    transition: opacity 180ms ease, transform 180ms ease;
+  }
+  .flash[data-on="1"] { opacity: 1; transform: translateY(0) scale(1); }
+  .flash-t {
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: #fff;
+    white-space: nowrap;
+  }
+  .flash-s {
+    font-size: 9.5px;
+    line-height: 1.2;
+    color: rgba(255, 255, 255, 0.66);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* 故障用红调，和机器指示灯的 error 色一致 */
+  .flash[data-kind="error"] {
+    background: rgba(58, 16, 20, 0.92);
+    border-color: rgba(229, 72, 77, 0.5);
+  }
+  /* 极简档只有 76px 宽，放不下两行字，直接不出横幅 */
+  body[data-size="tiny"] .flash { display: none; }
+
+  /*
    * 水位 / 泡沫 / 指示灯的颜色不再在这里定义 —— 它们和主界面是同一段 CSS
    * （style.css 的 .dw-px 段落），由 build-float.mjs 打包进造型样式表。
    * 这里只剩像素滚筒的转动：它只属于浮窗，主界面那个 32px sprite 转不转无所谓。
@@ -550,6 +603,21 @@
     <span class="tm" id="tm">--:--</span>
     <span class="dots" id="dots" role="group" aria-label="会话"></span>
   </div>
+  <!--
+    本地完成横幅。
+
+    为什么要它：macOS 上 Electron 的通知可能是死的（这台机器的
+    Electron.app 是 adhoc 签名，系统直接拒绝授权 —— 详见 main.cjs
+    里 showScriptNotification 的注释）。系统通知发不出来时，
+    至少让"跑完了"这件事在窗口里看得见。
+
+    盖在机器上方而不是塞进气泡：气泡那行已经放着状态、计时、
+    会话圆点，横向空间用满了，再挤会看不清。浮窗总共才 132×200。
+  -->
+  <div class="flash" id="flash" role="status" data-on="0">
+    <span class="flash-t" id="flashT"></span>
+    <span class="flash-s" id="flashS"></span>
+  </div>
 </div>
 
 <script src="./float.machines.js"></script>
@@ -686,11 +754,44 @@
     lastNotifiedState = s;
     if (prev === null || prev === s) return;   // 首帧不通知，切到同一个状态也不通知
     if (s !== 'done' && s !== 'error') return;
-    if (!host || typeof host.notify !== 'function') return;
     var text = s === 'error'
       ? ((LABEL[s] || s) + (snap.errorCode ? ' · ' + snap.errorCode : ''))
       : (snap.durationText ? '用时 ' + snap.durationText : '');
-    host.notify(s, text);
+    if (host && typeof host.notify === 'function') host.notify(s, text);
+    /*
+     * 横幅和系统通知**同时**出，不是二选一。
+     *
+     * 页面这边没法知道 main 进程有没有真的把通知弹出来——
+     * macOS 不给权限时失败是异步事件，IPC 是单向的。
+     * 让两边的触发条件保持一致（都只看状态边沿），
+     * 那边成功你就看到系统通知，失败你至少看到横幅；
+     * 两边都成功时也不冲突：通知在屏幕角落，横幅在窗口里，一闪就没了。
+     */
+    showFlash(s, text);
+  }
+
+  /*
+   * 本地完成横幅。
+   *
+   * 用淡入淡出而不是突然出现：浮窗只有 132px 宽，一个方块硬闪出来
+   * 会把正在看的人吓一跳。1.8 秒够看清一行字，又不至于赖着不走。
+   */
+  var flashTimer = null;
+  function showFlash(kind, text) {
+    var box = el('flash');
+    var t = el('flashT');
+    var sub = el('flashS');
+    if (!box || !t || !sub) return;
+    if (document.body.dataset.size === 'tiny') return;  // 极简档没有位置放
+    t.textContent = kind === 'error' ? '出故障了' : '洗完了';
+    sub.textContent = text;
+    box.dataset.kind = kind === 'error' ? 'error' : 'done';
+    box.dataset.on = '1';
+    if (flashTimer !== null) clearTimeout(flashTimer);
+    flashTimer = setTimeout(function () {
+      box.dataset.on = '0';
+      flashTimer = null;
+    }, 1800);
   }
 
   function render(snap) {

@@ -1634,6 +1634,65 @@ await test('dock 停靠条无背景无边框（融入原生窗口）', () => {
     '.dw-strip 不应再有阴影');
 });
 
+await test('系统通知发不出去时必须降级，不能静默吞掉', () => {
+  /*
+   * 用户报「任务执行完之后没有发通知」。
+   *
+   * 查下来不是开关没开（偏好里 notify=true），是这台机器根本发不了：
+   * Electron.app 是 adhoc 签名、bundle id 为 com.github.Electron，
+   * macOS 15 直接回 UNErrorDomain 错误 1（未授权），连权限弹窗都不给。
+   *
+   * 原来的 notify() 里 try/catch 是**同步**的，而授权失败是**异步**的
+   * 'failed' 事件——于是异常被吞得干干净净，用户看到的就是"开关开了但没反应"。
+   */
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+
+  // 必须监听 'failed' 并降级
+  assert.ok(/\.on\('failed'/.test(mainSrc),
+    "Notification 必须监听 'failed' 事件——授权失败是异步的，try/catch 抓不到");
+  assert.ok(mainSrc.includes('showScriptNotification'),
+    '需要一个 osascript 降级路径（Electron 通知在这台机器上不可用）');
+  assert.ok(mainSrc.includes('osascript'),
+    '降级路径要用系统自带的 osascript，不能要求用户装 terminal-notifier');
+
+  // AppleScript 是拼字符串，引号必须转义，否则正文带引号就静默丢通知
+  const escFn = mainSrc.slice(mainSrc.indexOf('function showScriptNotification'));
+  assert.ok(/replace\(\/\\\\\/g/.test(escFn) || escFn.includes("replace(/\\/g, '\\\\')"),
+    '转义必须先处理反斜杠，否则会把转义序列二次消费');
+  assert.ok(escFn.includes(String.raw`replace(/"/g, '\\"')`),
+    '正文里的双引号必须转义，否则 AppleScript 语法错误、通知静默丢失');
+});
+
+await test('浮窗自己也要能提示完成，不完全依赖系统通知', () => {
+  /*
+   * 系统通知在部分机器上注定发不出来（见上一条），所以浮窗内部
+   * 必须有一条不依赖通知权限的提示路径，否则用户永远得不到反馈。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(html.includes('id="flash"'), '浮窗需要一个本地横幅容器');
+  assert.ok(html.includes('function showFlash'), '需要 showFlash 渲染逻辑');
+  assert.ok(html.includes("box.dataset.on = '1'"), 'showFlash 要能把横幅显示出来');
+  // 横幅由状态边沿触发，和系统通知同一个时机
+  const notifyFn = html.slice(html.indexOf('function maybeNotify'));
+  /*
+   * 只断言"定义了 showFlash"是不够的——删掉调用点测试照样绿。
+   * 必须确认 maybeNotify 里真的调了它，否则横幅永远不会出现。
+   */
+  /*
+   * 只看 maybeNotify 自己的函数体。
+   *
+   * 早先切到下一个 function 再断言"里面有 showFlash"是错的：
+   * showFlash 的**定义**正好夹在 maybeNotify 和 render 之间，
+   * 切出来的片段永远包含它，把调用点删掉测试照样绿。
+   * 现在精确到 maybeNotify 的花括号范围，再匹配调用语句。
+   */
+  const start = html.indexOf('function maybeNotify');
+  const close = html.indexOf('\n  }\n', start);
+  const notifyBody = html.slice(start, close);
+  assert.ok(/^\s*showFlash\(s, text\);$/m.test(notifyBody),
+    'maybeNotify 里必须真的调用 showFlash(s, text)，否则横幅永远不出现');
+});
+
 await test('退出程序不能把「不显示浮窗」写成用户偏好', () => {
   /*
    * 用户报「浮窗不见了，是不是版本不对」。
