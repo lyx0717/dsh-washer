@@ -180,6 +180,43 @@
   .bubble .st[data-s="error"] { color: var(--bad); }
   .bubble .tm { color: var(--dim); font-variant-numeric: tabular-nums; }
 
+  /* ---- 多会话指示灯 ----
+   * 用户经常同时跑两三个 agent，只显示一个等于看不见其他的。
+   * 一颗点 = 一个还活着的会话，颜色就是它的状态色。
+   * 点一下钉住那个会话，再点一下放开（回到跟随最近活动）。
+   */
+  .dots {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 0 0 2px;
+    margin-left: 2px;
+    border-left: 1px solid rgba(255, 255, 255, .12);
+    -webkit-app-region: no-drag;
+  }
+  .dots:empty { display: none; }
+  .dots i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--dim);
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .dots i:hover { transform: scale(1.5); }
+  /* 钉住的那颗带一圈光晕，否则用户不知道自己钉着 */
+  .dots i[data-pinned="1"] { box-shadow: 0 0 0 2px rgba(255, 255, 255, .55); }
+  .dots i[data-s="idle"], .dots i[data-s="off"] { background: var(--dim); }
+  .dots i[data-s="starting"], .dots i[data-s="washing"],
+  .dots i[data-s="rinsing"], .dots i[data-s="spinning"],
+  .dots i[data-s="draining"] { background: var(--run); }
+  .dots i[data-s="waiting"] { background: var(--warn); }
+  .dots i[data-s="done"] { background: var(--ok); }
+  .dots i[data-s="error"] { background: var(--bad); }
+  /* 极小态放不下，藏掉——那颗机器本身已经在报状态了 */
+  body[data-size="tiny"] .dots { display: none; }
+
+
   /* 没连上时气泡换成提示，机器保持暗淡 */
   .bubble[data-off="1"] { color: var(--dim); }
   .wrap[data-conn="lost"] .bubble { color: var(--bad); }
@@ -511,6 +548,7 @@
   <div class="bubble" id="bubble">
     <span class="st" id="st" data-s="off">未连接</span>
     <span class="tm" id="tm">--:--</span>
+    <span class="dots" id="dots" role="group" aria-label="会话"></span>
   </div>
 </div>
 
@@ -577,6 +615,84 @@
     curState = s;
   }
 
+  /*
+   * 多会话指示灯。
+   *
+   * 只在真的有多个会话时才出现——一个会话时挂一颗孤零零的点
+   * 纯属噪音（布局本身就该把话说清楚）。
+   *
+   * 点一下钉住那个会话，再点一下放开。钉住态靠 data-pinned 那圈光晕表达，
+   * 不加文字说明：窗口只有 132px 宽，一行说明会把机器挤没。
+   */
+  var lastDotsSig = '';
+  function renderDots(snap) {
+    var box = el('dots');
+    if (box === null) return;
+    var list = Array.isArray(snap.sessions) ? snap.sessions : [];
+    if (list.length < 2) {
+      if (lastDotsSig !== '') { box.textContent = ''; lastDotsSig = ''; }
+      return;
+    }
+    var pinned = snap.pinnedSessionId || null;
+    var sig = list.map(function (r) {
+      return r.sessionId + ':' + r.state + ':' + (r.sessionId === pinned ? 'p' : '');
+    }).join('|');
+    if (sig === lastDotsSig) return;
+    lastDotsSig = sig;
+    box.textContent = '';
+    list.forEach(function (row) {
+      var dot = document.createElement('i');
+      dot.dataset.s = row.state || 'off';
+      if (row.sessionId === pinned) dot.dataset.pinned = '1';
+      dot.setAttribute('role', 'button');
+      dot.tabIndex = 0;
+      // 读屏要说清这是哪个会话的什么状态，不能只念"按钮"
+      dot.setAttribute('aria-label', (LABEL[row.state] || row.state) + ' · ' + String(row.sessionId).slice(0, 8)
+        + (row.sessionId === pinned ? ' · 已钉住' : ''));
+      function toggle() { pinSession(row.sessionId === pinned ? null : row.sessionId); }
+      dot.addEventListener('click', toggle);
+      dot.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); }
+      });
+      box.appendChild(dot);
+    });
+  }
+
+  /* 钉住 / 放开。端口和 token 每次现取——宿主重启后它们都会变。 */
+  function pinSession(sessionId) {
+    if (!host) return;
+    host.state().then(function (st) {
+      if (!st || !st.endpoint) return;
+      var url = 'http://127.0.0.1:' + st.endpoint.port + '/dsh-washer/pin?token='
+        + encodeURIComponent(st.endpoint.token);
+      fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId }),
+      }).catch(function () { /* 宿主没起来就算了，下一帧覆盖 */ });
+    });
+  }
+
+  /*
+   * 状态边沿检测：只在**跳进** done/error 的那一刻通知一次。
+   *
+   * 不能按"当前是 done 就通知"——pushNow 每秒都会重推一次快照，
+   * done 保持窗口有 6 秒，那样会连着弹六条。
+   */
+  var lastNotifiedState = null;
+  function maybeNotify(snap) {
+    var s = snap.state || 'off';
+    var prev = lastNotifiedState;
+    lastNotifiedState = s;
+    if (prev === null || prev === s) return;   // 首帧不通知，切到同一个状态也不通知
+    if (s !== 'done' && s !== 'error') return;
+    if (!host || typeof host.notify !== 'function') return;
+    var text = s === 'error'
+      ? ((LABEL[s] || s) + (snap.errorCode ? ' · ' + snap.errorCode : ''))
+      : (snap.durationText ? '用时 ' + snap.durationText : '');
+    host.notify(s, text);
+  }
+
   function render(snap) {
     var s = snap.state || 'off';
     var v = VISUAL[s] || VISUAL.idle;
@@ -592,6 +708,8 @@
     el('st').textContent = (LABEL[s] || s) + (errCode ? ' · ' + errCode : '');
     el('st').dataset.s = s;
     el('tm').textContent = snap.durationText || '--:--';
+    renderDots(snap);
+    maybeNotify(snap);
 
     paintLamp(s);
     buildMachine(snap);

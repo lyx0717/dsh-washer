@@ -43,10 +43,13 @@ window.__ModuleLoader__.load({
       'sub.idleLast': '上次洗完 {time}',
       'sub.starting': '正在起转 · {elapsed}',
       'sub.washing': '{elapsed} · 第 {n} 件',
+      'sub.washingEta': '{elapsed} · 第 {n} 件 · 还要 {remaining}',
       'sub.stalled': '已经 {stalled} 没动静，卡住了?',
       'sub.rinsing': '{tool} · {elapsed}',
+      'sub.rinsingEta': '{tool} · {elapsed} · 还要 {remaining}',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': '收尾整理 · {elapsed}',
+      'sub.spinningEta': '收尾整理 · {elapsed} · 还要 {remaining}',
       'sub.waiting': '有个地方要你拍板',
       'sub.draining': '上下文压缩中 · 第 {n} 件',
       'sub.done': '用时 {dur} · 共 {n} 件',
@@ -69,6 +72,8 @@ window.__ModuleLoader__.load({
       'ov.normal': '正常',
       'ov.tiny': '极简',
       'set.overlaySizeHint': '「极简」只留指示灯，不显示状态文字，占桌面空间最小。',
+      'set.overlayNotify': '洗完弹通知',
+      'set.overlayNotifyHint': '只报「洗完了」和「故障」，窗口在前台时不打扰。',
       'set.overlayThrough': '鼠标穿透',
       'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
       'err.e00.title': '出了点问题',
@@ -103,10 +108,13 @@ window.__ModuleLoader__.load({
       'sub.idleLast': 'Last run {time}',
       'sub.starting': 'Spinning up · {elapsed}',
       'sub.washing': '{elapsed} · {n} pcs',
+      'sub.washingEta': '{elapsed} · {n} pcs · ~{remaining} left',
       'sub.stalled': 'nothing for {stalled} — stuck?',
       'sub.rinsing': '{tool} · {elapsed}',
+      'sub.rinsingEta': '{tool} · {elapsed} · ~{remaining} left',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': 'Wrapping up · {elapsed}',
+      'sub.spinningEta': 'Wrapping up · {elapsed} · ~{remaining} left',
       'sub.waiting': 'Something needs your call',
       'sub.draining': 'Compacting context · {n} pcs',
       'sub.done': 'Took {dur} · {n} pcs',
@@ -131,6 +139,8 @@ window.__ModuleLoader__.load({
       'set.overlaySizeHint': '"Minimal" keeps only the indicator light with no status text - the smallest footprint.',
       'set.overlayThrough': 'Click-through',
       'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press Opt+Cmd+W to turn it off.',
+      'set.overlayNotify': 'Notify when done',
+      'set.overlayNotifyHint': 'Only “done” and “error”. Silent while the window is focused.',
       'err.e00.title': 'Something went wrong',
       'err.e00.hint': 'Unknown cause - try again',
       'err.e10.title': 'Account or service unavailable',
@@ -155,9 +165,37 @@ window.__ModuleLoader__.load({
     // 机型的自然尺寸（headless Chrome 实测，1:1 下的像素盒）。
     // h 必须把伸出机身的部件算进去：底脚、电源线之类的部件在 bottom/right 负偏移里，
     // 所以精密家电的机身 397 之外还要留到 412。
+    /*
+     * 皮肤注册表。
+     *
+     * 早先这套是硬编码的：`skin === 'precision' || skin === 'pixel'`，
+     * NATURAL 只认这两个 key，BigMachine 里一个 if 就定死。
+     * 加第三套造型要改五六处，而且每处都得记得——漏一处就是白屏。
+     *
+     * 现在改成"注册进去，按名字分发"：内置两套照样注册，
+     * 外部想加一套只要 SKIN_REGISTRY.set('名字', {w, h, render}) 即可。
+     * 不认识的名字仍然回退 pixel（脏配置不能让停靠条空白）。
+     */
+    const SKIN_REGISTRY = new Map();
+    function defineSkin(name, spec) {
+      if (typeof name !== 'string' || name === '') return;
+      if (spec === null || typeof spec !== 'object') return;
+      const w = typeof spec.w === 'number' && spec.w > 0 ? spec.w : null;
+      const h = typeof spec.h === 'number' && spec.h > 0 ? spec.h : null;
+      const render = typeof spec.render === 'function' ? spec.render : null;
+      if (w === null || h === null || render === null) return;
+      SKIN_REGISTRY.set(name, { w, h, render });
+    }
+    /** 名字 → 造型。不认识的回退 pixel，再不行回退第一个注册过的。 */
+    function resolveSkin(name) {
+      if (SKIN_REGISTRY.has(name)) return name;
+      if (SKIN_REGISTRY.has('pixel')) return 'pixel';
+      const first = SKIN_REGISTRY.keys().next();
+      return first.done ? null : first.value;
+    }
     const NATURAL = {
-      pixel: { w: 256, h: 312 },
-      precision: { w: 330, h: 412 },
+      get pixel() { return SKIN_REGISTRY.get('pixel') || { w: 256, h: 312 }; },
+      get precision() { return SKIN_REGISTRY.get('precision') || { w: 330, h: 412 }; },
     };
 
     /*
@@ -212,6 +250,12 @@ window.__ModuleLoader__.load({
        * 以前这是浮窗上双击切换的，现在挪到设置页（理由见 OVERLAY_PREF_KEYS）。
        */
       desktopOverlayClickThrough: false,
+      /*
+       * 洗完弹系统通知。默认关——突然弹通知比错过更烦人，
+       * 用户得自己去设置页开。只报「完成」和「故障」，
+       * 正常运转的每一步都弹一遍，当天就会被关掉。
+       */
+      desktopOverlayNotify: false,
     };
 
     /* ------------------------------------------------------------------ *
@@ -306,14 +350,16 @@ window.__ModuleLoader__.load({
      * 不认识的值也一样——不能让停靠条因为一个脏字段变空白。
      */
     function MachineStrip(skin, state, screenTime) {
-      const resolved = skin === 'precision' || skin === 'pixel' ? skin : 'pixel';
+      const resolved = resolveSkin(skin);
+      // 像素 sprite 是 32px 的小图，不是 MachineFrame 那套缩放框，单独走
       if (resolved === 'pixel') return PixelSprite(state);
+      if (resolved === null) return null;
       return BigMachine(resolved, state, WASHER_STRIP_MACHINE_W, screenTime);
     }
 
     /* 任意机型统一放进固定尺寸 + transform 缩放的框里：重排一次都不做 */
     function MachineFrame(skin, state, width, inner) {
-      const natural = NATURAL[skin];
+      const natural = NATURAL[skin] || NATURAL.pixel;
       const scale = width / natural.w;
       return h('div', {
         className: 'dw-frame',
@@ -329,8 +375,7 @@ window.__ModuleLoader__.load({
     }
 
     function PixelMachine(state, width) {
-      return MachineFrame('pixel', state, width,
-        h('div', { dangerouslySetInnerHTML: { __html: MACHINE_SVG }, style: { lineHeight: 0 } }));
+      return MachineFrame('pixel', state, width, SKIN_REGISTRY.get('pixel').render({ state }));
     }
 
     /* 精密家电：机身小屏只说机器自己的话（WASH / SPIN / ERR…），不重复 UI 文案 */
@@ -340,10 +385,14 @@ window.__ModuleLoader__.load({
     };
 
     function PrecisionMachine(state, width, screenTime) {
+      return MachineFrame('precision', state, width, _precisionBody(state, screenTime));
+    }
+
+    /** 精密家电的机身本体，不含缩放框（MachineFrame 统一套）。 */
+    function _precisionBody(state, screenTime) {
       const play = SPEED[state] === '0s' ? 'paused' : 'running';
       const water = PW_WATER[state];
-      return MachineFrame('precision', state, width,
-        h('div', {
+      return h('div', {
           className: 'dw-pw',
           'data-state': state,
           style: {
@@ -372,13 +421,33 @@ window.__ModuleLoader__.load({
           h('div', { className: 'row2' },
             h('span', { className: 'wl' }, water + '%'),
             h('span', { className: 'bar' }, h('i')))),
-        h('div', { className: 'feet' })));
+        h('div', { className: 'feet' }));
     }
 
     function BigMachine(skin, state, width, screenTime) {
-      if (skin === 'pixel') return PixelMachine(state, width);
-      return PrecisionMachine(state, width, screenTime);
+      const resolved = resolveSkin(skin);
+      if (resolved === null) return null;
+      if (resolved === 'pixel') return PixelMachine(state, width);
+      const spec = SKIN_REGISTRY.get(resolved);
+      if (spec === undefined) return null;
+      return MachineFrame(resolved, state, width, spec.render({ state, screenTime }));
     }
+
+    /*
+     * 内置两套。注册动作必须排在 BigMachine 之前定义、之后调用——
+     * 放在文件顶部会让 PixelMachine/PrecisionMachine 还没定义就被引用（TDZ）。
+     */
+    defineSkin('pixel', {
+      w: 256, h: 312,
+      render: ({ state }) => h('div', {
+        dangerouslySetInnerHTML: { __html: MACHINE_SVG },
+        style: { lineHeight: 0 },
+      }),
+    });
+    defineSkin('precision', {
+      w: 330, h: 412,
+      render: ({ state, screenTime }) => _precisionBody(state, screenTime),
+    });
 
     /* ------------------------------------------------------------------ *
      * 组件
@@ -568,14 +637,33 @@ window.__ModuleLoader__.load({
       const title = tr('state.' + state);
       const toolName = active === undefined ? '' : active.name;
 
-      const parts = { elapsed: dur, dur, n: String(toolCount), code, tool: toolName };
+      /*
+       * 预计还要多久。用这个会话自己最近几轮的中位数，不跨会话借数据——
+       * 别的会话跑得快不代表这一轮也快。少于 2 轮样本宁可不显示。
+       *
+       * 只在真正在跑的四个状态里给：starting 刚起轮还没产出，估了也是瞎猜；
+       * done/idle 说"还剩几分钟"是胡话。
+       */
+      const RUNNING_STATES = { washing: 1, rinsing: 1, spinning: 1, draining: 1 };
+      const remainingMs = RUNNING_STATES[state] === 1
+        ? remainingOf(typicalTurnMs(turnTimings), elapsed)
+        : null;
+
+      const parts = {
+        elapsed: dur, dur, n: String(toolCount), code, tool: toolName,
+        remaining: remainingMs === null ? '' : formatDuration(remainingMs),
+      };
       let sub = tr('sub.' + state);
       if (state === 'idle') {
         sub = lastEnd === undefined ? tr('sub.idle') : fill(tr('sub.idleLast'), { time: formatClock(lastEnd) });
       } else if (state === 'rinsing' && toolName === '') {
         sub = fill(tr('sub.rinsingBare'), parts);
       } else if (state !== 'off' && state !== 'waiting') {
-        sub = fill(tr('sub.' + state), parts);
+        // 有估算才换成带 ETA 的文案，估不出来就用原来的样子——
+        // 宁可少说一句，也不显示"还要 undefined"
+        const etaKey = 'sub.' + state + 'Eta';
+        const key = remainingMs !== null && tr(etaKey) !== etaKey ? etaKey : 'sub.' + state;
+        sub = fill(tr(key), parts);
       }
 
       /*
@@ -776,6 +864,9 @@ window.__ModuleLoader__.load({
         row('set.overlayThrough',
           sw('desktopOverlayClickThrough', cfg.desktopOverlayClickThrough === true, tr('set.overlayThrough'))),
         h('p', { className: 'dw-set-hint' }, tr('set.overlayThroughHint')),
+        row('set.overlayNotify',
+          sw('desktopOverlayNotify', cfg.desktopOverlayNotify === true, tr('set.overlayNotify'))),
+        h('p', { className: 'dw-set-hint' }, tr('set.overlayNotifyHint')),
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));
     }
 
@@ -955,6 +1046,8 @@ window.__ModuleLoader__.load({
            * 两者不能共存。于是拖拽优先，穿透改由设置页开关控制。
            */
           desktopOverlayClickThrough: 'clickThrough',
+          // 洗完弹系统通知。默认关，用户显式开了才写进偏好文件。
+          desktopOverlayNotify: 'notify',
           /*
            * skin 现在同时是主界面皮肤和浮窗造型，所以改它必须推一份给宿主，
            * 否则浮窗要等下次重启才换。反方向由 SSE 回灌（见 applyRemotePrefs）。
@@ -1021,6 +1114,7 @@ window.__ModuleLoader__.load({
           const REVERSE = {
             show: 'desktopOverlay', size: 'desktopOverlaySize', skin: 'skin',
             clickThrough: 'desktopOverlayClickThrough',
+            notify: 'desktopOverlayNotify',
           };
           let changed = false;
           for (const field of Object.keys(REVERSE)) {
@@ -1029,7 +1123,7 @@ window.__ModuleLoader__.load({
             let value = remote[field];
             // 本地字段名和文件字段名眼瞅着一样，但类型不同：
             // 文件里 size 是 'tiny'/'normal'，页面里是 desktopOverlaySize
-            if ((key === 'desktopOverlay' || key === 'desktopOverlayClickThrough') && typeof value !== 'boolean') continue;
+            if ((key === 'desktopOverlay' || key === 'desktopOverlayClickThrough' || key === 'desktopOverlayNotify') && typeof value !== 'boolean') continue;
             if (prefs[key] === value) continue;
             prefs[key] = value;
             changed = true;

@@ -32,6 +32,9 @@ import {
   latestTurnOf,
   formatDuration,
   stalledForOf,
+  stateWeight,
+  typicalTurnMs,
+  remainingOf,
 } from './src/core.js';
 
 export const name = 'dsh-washer';
@@ -692,6 +695,8 @@ export function writeOverlayPrefs(patch) {
    * （Chromium 的拖拽区会吞掉 dblclick），所以把入口挪到设置页。
    */
   if (patch.clickThrough === true || patch.clickThrough === false) next.clickThrough = patch.clickThrough;
+  // 洗完弹系统通知。默认关，用户显式开了才写进去。
+  if (patch.notify === true || patch.notify === false) next.notify = patch.notify;
   /*
    * 暗色主题：Web 端量出宿主的实际明暗（读背景色亮度）再 POST 过来，
    * 浮窗据此切浅/深，做到「跟 dock 同步」。宿主（Node）读不到渲染进程的
@@ -877,9 +882,70 @@ export function apply(ctx, config) {
     return state;
   }
 
+  /**
+   * 钉住的会话。null = 跟着最近活动走。
+   *
+   * 为什么要这个：Host 侧不知道哪个会话在前台。客户端靠
+   * `retainedBy.mainView > 0` 判断，但那是纯客户端的引用计数，
+   * Node 进程里没有。于是浮窗只能"谁最后一个动就显示谁"，
+   * 多开会话时画面随机跳，用户根本认不出在看哪一台。
+   *
+   * 与其猜，不如给一个明确的锚点：用户点一下指示灯就钉住那个会话，
+   * 不点了就回到跟随。猜错了比不猜更烦人。
+   */
+  let pinnedSessionId = null;
+
+  /** 浮窗要显示哪个会话：钉住的优先，否则最近活动的。 */
+  function viewSessionId() {
+    if (pinnedSessionId !== null && sessions.has(pinnedSessionId)) return pinnedSessionId;
+    return currentSessionId;
+  }
+
+  /**
+   * 所有还活着的会话的一句话概览。
+   *
+   * 浮窗一行指示灯用它画：每个会话一颗，颜色对应状态。
+   * 用户经常同时跑两三个 agent，只显示一个等于看不见其它两个。
+   *
+   * 不排序的话每次 Map 遍历顺序不同会让指示灯乱跳，所以按
+   * "紧急的在前，其次最近的在前"固定下来——这本身就是有用的信息。
+   */
+  function sessionSummaries(now) {
+    const rows = [];
+    for (const [id, s] of sessions) {
+      const outline = s.turn > 0 ? [{ turn: s.turn }] : [];
+      const state = deriveState({
+        sessionId: id,
+        running: s.running,
+        pending: (pendingApprovals.get(id) || 0) > 0 ? { kind: 'approval' } : undefined,
+        runningCalls: s.runningCalls,
+        partial: s.partial,
+        nodes: s.nodes,
+        outline,
+        trajectory: undefined,
+        sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
+        now,
+      });
+      const turn = latestTurnOf(outline);
+      rows.push({
+        sessionId: id,
+        state,
+        turn,
+        running: s.running,
+        elapsedMs: elapsedOf(s.turnTimings, turn, now) || 0,
+        // 排序用：越大越靠前。紧急态（等待/故障）永远在最前面，
+        // 因为那才是需要人动手的。
+        weight: stateWeight(state),
+        lastAt: turnEndTimeOf(s.turnTimings, turn) || 0,
+      });
+    }
+    rows.sort((a, b) => (b.weight - a.weight) || (b.lastAt - a.lastAt) || a.sessionId.localeCompare(b.sessionId));
+    return rows;
+  }
+
   /** 把 Host 侧攒的状态映射成 deriveState 的输入，产出给渲染端的快照 */
   function snapshot() {
-    const sessionId = currentSessionId;
+    const sessionId = viewSessionId();
     const now = Date.now();
     if (sessionId === null) {
       return {
@@ -897,6 +963,9 @@ export function apply(ctx, config) {
         tokenUsage: null,
         errorCode: null,
         lastEndedAt: null,
+        // 即使当前没有主视图会话，后台可能还有在跑的——总览要照样给
+        sessions: sessionSummaries(now),
+        pinnedSessionId,
         updatedAt: now,
       };
     }
@@ -922,6 +991,14 @@ export function apply(ctx, config) {
     const turn = latestTurnOf(outline);
     const elapsedMs = elapsedOf(s.turnTimings, turn, now) || 0;
     const speed = speedOf(s.tokenSamples, now);
+    /*
+     * 预计还要多久。只有「正在跑」才有意义：已经结束的一轮说"还剩 2 分钟"
+     * 是胡话。超过典型时长显示 0，前端据此换成"该好了"而不是负数。
+     */
+    const typicalMs = typicalTurnMs(s.turnTimings);
+    const remainingMs = derived !== 'done' && derived !== 'idle' && derived !== 'off'
+      ? remainingOf(typicalMs, elapsedMs)
+      : null;
     return {
       version: 1,
       sessionId,
@@ -931,6 +1008,9 @@ export function apply(ctx, config) {
       durationText: formatDuration(elapsedMs),
       // 看着在转、其实没动静。没卡是 null，前端据此决定要不要改副标题。
       stalledMs: stalledForOf(s.tokenSamples, derived, now),
+      // 预计剩余。基于这个会话自己最近几轮的中位数，不跨会话借数据。
+      typicalMs,
+      remainingMs,
       tools: recentTools(s.nodes, 6).map((t) => ({
         name: t.name,
         ms: t.ms === undefined ? null : t.ms,
@@ -949,6 +1029,10 @@ export function apply(ctx, config) {
       // errorCodeOf(null) 会返回 'E-00'，所以只在确实有错误节点时才问它
       errorCode: hasError(s.nodes) ? errorCodeOf(lastErrorNode(s.nodes)) : null,
       lastEndedAt: turnEndTimeOf(s.turnTimings, turn) || null,
+      // 其余会话的概览：浮窗画一排指示灯，用户才知道另外两台在干嘛
+      sessions: sessionSummaries(now),
+      // 非 null 表示用户钉住了某一台，浮窗据此显示/隐藏「回到跟随」
+      pinnedSessionId: viewSessionId() === pinnedSessionId ? pinnedSessionId : null,
       updatedAt: now,
     };
   }
@@ -1144,6 +1228,50 @@ export function apply(ctx, config) {
     if (url.pathname === '/dsh-washer/state') {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify(snapshot()));
+      return;
+    }
+    /*
+     * 钉住/放开某个会话。
+     *
+     * GET 一个会改状态的接口会被浏览器预取误触发，所以只收 POST。
+     * body 是 {sessionId: string | null}：null 表示回到「跟随最近活动」。
+     * 不校验 sessionId 是否已存在——会话可能是刚创建、Host 还没来得及处理的，
+     * 钉一个还不存在的 id 不会出事（viewSessionId 会自己回退）。
+     */
+    if (url.pathname === '/dsh-washer/pin') {
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'content-type': 'application/json', allow: 'POST' });
+        res.end(JSON.stringify({ error: 'method not allowed' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 4096) req.destroy();
+      });
+      req.on('end', () => {
+        let patch;
+        try {
+          patch = JSON.parse(body);
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad json' }));
+          return;
+        }
+        const want = patch && patch.sessionId;
+        if (want === null || want === undefined) {
+          pinnedSessionId = null;
+        } else if (typeof want === 'string' && want.length > 0 && want.length <= 200) {
+          pinnedSessionId = want;
+        } else {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'sessionId must be a short string or null' }));
+          return;
+        }
+        schedulePush();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ pinnedSessionId }));
+      });
       return;
     }
     if (url.pathname === '/dsh-washer/health') {
@@ -1400,6 +1528,9 @@ export function apply(ctx, config) {
     if (sessionId === null) return;
     sessions.delete(sessionId);
     if (currentSessionId === sessionId) currentSessionId = null;
+    // 钉住的会话没了就自动放开，否则 viewSessionId 会一直回退到跟随，
+    // 但 UI 上还显示着"已钉住"——那是在骗人。
+    if (pinnedSessionId === sessionId) pinnedSessionId = null;
     schedulePush();
   });
 

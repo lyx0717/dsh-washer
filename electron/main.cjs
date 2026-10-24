@@ -8,7 +8,7 @@
  * 用 .cjs 后缀：插件本体是 ESM（package.json 里 type: module），
  * 但 Electron 主进程入口必须是 CommonJS。改后缀是让两者共存最省事的办法。
  */
-const { app, BrowserWindow, globalShortcut, ipcMain, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Menu, Notification, screen, shell } = require('electron');
 const { readFileSync, existsSync } = require('node:fs');
 const { homedir } = require('node:os');
 const { join, dirname } = require('node:path');
@@ -80,6 +80,13 @@ let visible = true;
  * 默认 false：拿不到就按"要动画"处理，比默认关掉更不容易让人以为卡住。
  */
 let reduceMotion = false;
+
+/**
+ * 洗完是否弹系统通知。默认关——用户在设置页显式开了才弹。
+ * lastNotifyAt 是节流：状态抖动时不能连着弹一串通知。
+ */
+let notifyPref = false;
+let lastNotifyAt = 0;
 
 /**
  * 读端点文件，并且**确认那一头的宿主真的在听**。
@@ -487,6 +494,38 @@ function createWindow() {
  *
  * 进程真退出由宿主负责，这里只管窗口可见性。
  */
+/**
+ * 洗完通知。
+ *
+ * 「洗完了」在角落只停 3-6 秒，低头喝口水就错过了——而"这一轮结束了"
+ * 恰恰是离开座位的人唯一想知道的那件事。所以走系统原生通知，
+ * 点一下把浮窗调用到前面。
+ *
+ * 三条约束：
+ *   1. 默认关。突然弹通知比错过更烦人，要用户自己去设置页开。
+ *   2. 只在该报的时候报：完成、以及需要人动手的故障。
+ *      正常运转的每一步都弹一遍，用户当天就会把它关掉。
+ *   3. 窗口在前台时不弹——人就在看，还弹通知是打扰。
+ */
+function notify(title, body) {
+  if (notifyPref !== true) return;
+  if (Notification === undefined || !Notification.isSupported()) return;
+  if (win !== null && !win.isDestroyed() && win.isVisible() && win.isFocused()) return;
+  if (lastNotifyAt > 0 && Date.now() - lastNotifyAt < 4000) return;
+  lastNotifyAt = Date.now();
+  try {
+    const n = new Notification({ title, body, silent: false });
+    n.on('click', () => {
+      if (win === null || win.isDestroyed()) return;
+      win.show();
+      win.focus();
+    });
+    n.show();
+  } catch {
+    /* 通知权限被拒、系统没通知服务：静默降级，绝不能因为发不出通知就崩 */
+  }
+}
+
 function setVisible(next) {
   const want = next === true;
   if (want === visible) return;
@@ -786,11 +825,14 @@ function watchPrefs() {
        * 缺字段时不动（偏好文件是读-合并-写的，不能让窗口莫名闪一下）。
        */
       const nextDark = typeof prefs.dark === 'boolean' ? prefs.dark : themeDark;
+      // 通知开关也走同一条路：设置页 POST → 宿主写文件 → 这里读到就生效
+      const nextNotify = typeof prefs.notify === 'boolean' ? prefs.notify : notifyPref;
       if (nextSize !== sizeMode) setSizeMode(nextSize);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
       if (nextThrough !== clickThrough) setClickThrough(nextThrough);
       if (nextDark !== themeDark) setThemeDark(nextDark);
+      notifyPref = nextNotify;
     });
   } catch { prefWatcher = null; }
 }
@@ -819,6 +861,8 @@ app.whenReady().then(() => {
   if (typeof prefs.show === 'boolean') visible = prefs.show;
   // 启动时的明暗：沿用上一次 Web 端送进来的值，避免启动瞬间先闪一次默认配色。
   if (typeof prefs.dark === 'boolean') themeDark = prefs.dark;
+  // 通知默认关：没显式开过就一直关着
+  if (typeof prefs.notify === 'boolean') notifyPref = prefs.notify;
 
   /*
    * 单实例：重复点启动只是把已有窗口提到前面。
@@ -854,6 +898,12 @@ app.whenReady().then(() => {
     dark: themeDark,
     visible,
   }));
+  ipcMain.on('washer:notify', (_event, payload) => {
+    const kind = payload && payload.kind;
+    const text = payload && typeof payload.text === 'string' ? payload.text.slice(0, 80) : '';
+    if (kind === 'done') notify('洗完了', text || '这一轮跑完了');
+    else if (kind === 'error') notify('出故障了', text || '点开看看');
+  });
   ipcMain.on('washer:set-size', (_event, mode) => setSizeMode(mode));
   ipcMain.on('washer:set-skin', (_event, name) => setSkin(name));
   ipcMain.on('washer:set-visible', (_event, on) => setVisible(on === true));

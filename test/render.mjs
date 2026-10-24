@@ -1038,8 +1038,8 @@ await test('设置页的开关是 role=switch 且带内联样式（不靠 class 
   const html = render(Settings(propsFrom(world)));
 
   const switches = html.match(/role="switch"/g) || [];
-  // 三个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透（表情和显示成本已按用户要求删除）
-  assert.equal(switches.length, 3, '三个布尔项各一个开关（空闲隐藏/悬浮窗/鼠标穿透），实际 ' + switches.length);
+  // 四个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知（表情和显示成本已按用户要求删除）
+  assert.equal(switches.length, 4, '四个布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知），实际 ' + switches.length);
   assert.ok(/aria-checked="true"/.test(html), '开着的开关 aria-checked=true');
   assert.ok(/aria-checked="false"/.test(html), '关着的开关 aria-checked=false');
 
@@ -1176,7 +1176,7 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
 
   // 空配置下，每个开关都得渲染成明确的关/开（不能因为值是 undefined 就没有 aria-checked）
   const switches = [...html.matchAll(/<button[^>]*role="switch"[^>]*aria-checked="(true|false)"[^>]*>/g)];
-  assert.equal(switches.length, 3, '三个布尔项（空闲隐藏 / 桌面悬浮窗 / 鼠标穿透）各一个开关');
+  assert.equal(switches.length, 4, '四个布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知）各一个开关');
   for (const m of switches) {
     if (/悬浮窗/.test(m[0])) assert.equal(m[1], 'false', '空配置下悬浮窗开关必须是关');
   }
@@ -1302,6 +1302,26 @@ await test('皮肤组只有三套造型，没有「自动」选项', () => {
   assert.notEqual(plugin.__defaults.skin, 'auto', '默认皮肤不能还是 auto，否则默认态没有选项被选中');
   assert.ok(['precision', 'pixel'].includes(plugin.__defaults.skin),
     '默认皮肤必须是三套之一，实际: ' + plugin.__defaults.skin);
+});
+
+await test('皮肤走注册表分发：两套内置都在，脏名字回退而不是白屏', () => {
+  /*
+   * 早先皮肤是硬编码 if/else + NATURAL 只认两个 key。
+   * 改成注册表之后，最容易出的错是"注册了但分发没走注册表"，
+   * 表现为换个名字整台机器消失（不是报错，是静默空白）。
+   * 所以这里按名字逐个渲染一遍，确认都吐得出机器。
+   */
+  for (const skin of ['pixel', 'precision']) {
+    const m = mount(streaming({ config: baseConfig() }), 'dock', { skin });
+    assert.ok(m.html.includes('dw-sprite') || m.html.includes('dw-frame'),
+      skin + ' 应渲染出机器');
+    m.unmount();
+  }
+  // 脏名字：配置里被塞了个不存在的皮肤，不能让停靠条空白
+  const bad = mount(streaming({ config: baseConfig() }), 'dock', { skin: 'no-such-skin' });
+  assert.ok(bad.html.includes('dw-strip'), '不认识的皮肤名不能让停靠条消失');
+  assert.ok(bad.html.includes('dw-sprite') || bad.html.includes('dw-frame'), '应回退到默认造型');
+  bad.unmount();
 });
 
 /* ================================================================== *

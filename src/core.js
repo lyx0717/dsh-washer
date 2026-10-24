@@ -395,6 +395,53 @@ export function stalledForOf(samples, state, now, thresholdMs = STALL_AFTER_MS) 
 }
 
 /**
+ * 从历史轮次的耗时里算一个基线（毫秒），用来估"还要多久"。
+ *
+ * 只用**已完成**的轮次（有 endTime 的）：正在跑那一轮的 endTime 还没有，
+ * 混进去会把平均值拉低，估出来的剩余时间偏乐观。
+ *
+ * 取中位数不取均值：一轮卡住跑了 10 分钟，均值就被它带飞了，
+ * 而这恰恰是最该被忽略的离群值。
+ *
+ * 少于 2 轮不估——一轮的"平均值"没有意义，宁可不说也别乱说。
+ *
+ * @param {Map<number, {startTime?: number, endTime?: number}>} turnTimings
+ * @param {number} [limit] 只看最近几轮（越久远的行为越不代表现在）
+ * @returns {number | null} 典型轮时长（毫秒）；样本不够返回 null。
+ */
+export function typicalTurnMs(turnTimings, limit = 8) {
+  if (!turnTimings || typeof turnTimings.get !== 'function') return null;
+  const spans = [];
+  for (const timing of turnTimings.values()) {
+    if (timing === null || typeof timing !== 'object') continue;
+    const { startTime, endTime } = timing;
+    if (typeof startTime !== 'number' || typeof endTime !== 'number') continue;
+    const span = endTime - startTime;
+    if (span <= 0) continue;
+    spans.push(span);
+  }
+  if (spans.length < 2) return null;
+  const recent = spans.slice(-limit).sort((a, b) => a - b);
+  const mid = recent.length >> 1;
+  return recent.length % 2 === 0
+    ? (recent[mid - 1] + recent[mid]) / 2
+    : recent[mid];
+}
+
+/**
+ * 预计还要多久。已经超过典型时长时返回 0，不返回负数。
+ *
+ * @param {number | null} typicalMs 典型轮时长
+ * @param {number | null} elapsedMs 本轮已跑多久
+ * @returns {number | null} 剩余毫秒；估不出来返回 null。
+ */
+export function remainingOf(typicalMs, elapsedMs) {
+  if (typeof typicalMs !== 'number' || !Number.isFinite(typicalMs) || typicalMs <= 0) return null;
+  if (typeof elapsedMs !== 'number' || !Number.isFinite(elapsedMs)) return null;
+  return Math.max(0, typicalMs - elapsedMs);
+}
+
+/**
  * 毫秒 → mm:ss。
  * @param {number | undefined} ms
  * @returns {string}

@@ -1008,3 +1008,150 @@ test('同一会话多个审批并行时，全部结束才恢复', async () => {
 
   ctx.dispose();
 });
+
+/* ------------------------------------------------------------------ *
+ * 多会话总览 + 钉住
+ *
+ * 用户经常同时跑两三个 agent。Host 侧不知道哪个会话在前台
+ * （retainedBy.mainView 是纯客户端引用计数），所以浮窗只能"谁最后动显示谁"，
+ * 多开时画面随机跳。给一个明确的锚点：钉住就不再跟随。
+ * ------------------------------------------------------------------ */
+
+function post(port, path, token, body) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = httpRequest({
+      host: '127.0.0.1', port,
+      path: path + '?token=' + encodeURIComponent(token),
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) },
+    }, (res) => {
+      let out = '';
+      res.on('data', (c) => { out += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: out }));
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+test('多会话：snapshot 带上所有会话的概览', () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onEvent = ctx.handlers.get('session/event');
+
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's2' }, ev('turn/start', { turn: 1 }));
+
+  const snap = api.snapshot();
+  assert.ok(Array.isArray(snap.sessions), 'snapshot 必须带 sessions 数组');
+  assert.equal(snap.sessions.length, 2, '两个会话都要在总览里');
+  for (const row of snap.sessions) {
+    assert.equal(typeof row.sessionId, 'string');
+    assert.equal(typeof row.state, 'string');
+    assert.equal(typeof row.weight, 'number');
+  }
+  ctx.dispose();
+});
+
+test('多会话：等待审批的排在最前面（那才是要人动手的）', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onEvent = ctx.handlers.get('session/event');
+  const onApproval = ctx.handlers.get('approval/request');
+
+  onEvent({ id: 'busy' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 'waiting-one' }, ev('turn/start', { turn: 1 }));
+
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const handled = onApproval({ agent: { session: { id: 'waiting-one' } } }, () => gate);
+
+  const snap = api.snapshot();
+  assert.equal(snap.sessions[0].sessionId, 'waiting-one', '等审批的会话必须排第一');
+  assert.equal(snap.sessions[0].state, 'waiting');
+
+  release(undefined);
+  await handled;
+  ctx.dispose();
+});
+
+test('钉住：钉住后不被其它会话抢占，放开后恢复跟随', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+  const info = JSON.parse(readFileSync(TEST_ENDPOINT, 'utf8'));
+  const onEvent = ctx.handlers.get('session/event');
+
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  assert.equal(api.snapshot().sessionId, 's1');
+
+  // 再开一个会话，跟随逻辑会把视图切过去
+  onEvent({ id: 's2' }, ev('turn/start', { turn: 1 }));
+  assert.equal(api.snapshot().sessionId, 's2', '没钉住时跟随最近活动');
+
+  // 钉住 s1
+  const pinned = await post(port, '/dsh-washer/pin', info.token, { sessionId: 's1' });
+  assert.equal(pinned.status, 200);
+  assert.equal(api.snapshot().sessionId, 's1', '钉住后视图不能被抢走');
+  assert.equal(api.snapshot().pinnedSessionId, 's1');
+
+  // s2 继续动，仍不该抢走视图
+  onEvent({ id: 's2' }, ev('tool/call', { turn: 1, name: 'bash', callId: 'c1' }));
+  assert.equal(api.snapshot().sessionId, 's1', '钉住后别的会话再动也不切');
+
+  // 放开
+  const cleared = await post(port, '/dsh-washer/pin', info.token, { sessionId: null });
+  assert.equal(cleared.status, 200);
+  assert.equal(api.snapshot().sessionId, 's2', '放开后回到跟随');
+
+  ctx.dispose();
+});
+
+test('钉住：会话被销毁时自动放开（不留「已钉住」的假象）', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+  const info = JSON.parse(readFileSync(TEST_ENDPOINT, 'utf8'));
+  const onEvent = ctx.handlers.get('session/event');
+  const onDisposed = ctx.handlers.get('session/disposed');
+
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's2' }, ev('turn/start', { turn: 1 }));
+  await post(port, '/dsh-washer/pin', info.token, { sessionId: 's1' });
+  assert.equal(api.snapshot().pinnedSessionId, 's1', '先确认真的钉住了');
+
+  onDisposed({ id: 's1' });
+  const snap = api.snapshot();
+  assert.equal(snap.pinnedSessionId, null, '会话没了必须自动放开，不能还显示已钉住');
+  assert.equal(snap.sessionId, 's2', '视图应回到还活着的会话');
+  ctx.dispose();
+});
+
+test('钉住接口：GET 拒绝（不能被浏览器预取误触发）', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+  const info = JSON.parse(readFileSync(TEST_ENDPOINT, 'utf8'));
+
+  const res = await get(port, '/dsh-washer/pin', info.token);
+  assert.equal(res.status, 405, '改状态的接口只能 POST');
+
+  ctx.dispose();
+});
+
+test('钉住接口：脏 sessionId 拒绝，不能写进去', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+  const info = JSON.parse(readFileSync(TEST_ENDPOINT, 'utf8'));
+
+  const tooLong = await post(port, '/dsh-washer/pin', info.token, { sessionId: 'x'.repeat(500) });
+  assert.equal(tooLong.status, 400, '超长 sessionId 必须拒绝');
+
+  const wrongType = await post(port, '/dsh-washer/pin', info.token, { sessionId: 123 });
+  assert.equal(wrongType.status, 400, '非字符串必须拒绝');
+
+  ctx.dispose();
+});

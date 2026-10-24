@@ -24,6 +24,14 @@ contextBridge.exposeInMainWorld('washerHost', {
   showMenu: () => ipcRenderer.send('washer:show-menu'),
   /** 退出 */
   quit: () => ipcRenderer.send('washer:quit'),
+  /**
+   * 洗完弹系统通知。
+   *
+   * 由页面在状态跳到 done/error 的那一刻调用，主进程只负责"弹"——
+   * 判断该不该弹（开关、节流、窗口是否在前台）全在主进程里做，
+   * 因为只有它知道窗口焦点状态。
+   */
+  notify: (kind, text) => ipcRenderer.send('washer:notify', { kind: kind, text: text }),
   /** 切换尺寸档位：'normal' | 'tiny' */
   setSize: (mode) => ipcRenderer.send('washer:set-size', mode),
   /** 换肤 */

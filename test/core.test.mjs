@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   deriveState, latestTurnOf, turnProduced, findTurnError, findToolFailure, activeTool, recentTools,
   toolCountOf, errorCodeOf, elapsedOf, formatDuration, formatToolMs, formatTokens,
-  shouldSwitch, VISUAL, compactionRunning, stalledForOf,
+  shouldSwitch, VISUAL, compactionRunning, stalledForOf, typicalTurnMs, remainingOf,
 } from '../src/core.js';
 
 const NOW = 1_700_000_000_000;
@@ -297,4 +297,53 @@ test('stalledForOf：阈值边界（等于阈值不算卡住）', () => {
   assert.equal(stalledForOf(samples, 'rinsing', NOW), null);
   assert.equal(stalledForOf(samples, 'rinsing', NOW, 45000), null);
   assert.equal(stalledForOf(samples, 'rinsing', NOW + 1), 45001);
+});
+
+/* ------------------------------------------------------------------ *
+ * 预计剩余时间
+ * ------------------------------------------------------------------ */
+
+test('typicalTurnMs：少于 2 轮不估（均值没有意义）', () => {
+  assert.equal(typicalTurnMs(null), null);
+  assert.equal(typicalTurnMs(new Map()), null);
+  assert.equal(typicalTurnMs(new Map([[1, { startTime: 0, endTime: 5000 }]])), null);
+});
+
+test('typicalTurnMs：只算已完成的轮（跑着那轮没有 endTime）', () => {
+  const t = new Map([
+    [1, { startTime: 0, endTime: 10000 }],
+    [2, { startTime: 10000, endTime: 20000 }],
+    [3, { startTime: 20000 }],           // 正在跑
+  ]);
+  assert.equal(typicalTurnMs(t), 10000);
+});
+
+test('typicalTurnMs：取中位数不取均值（离群值不该带飞基线）', () => {
+  // 四轮：2s / 2s / 3s / 600s。均值会被那 600s 拖到 150s，中位数仍是 2.5s
+  const t = new Map([
+    [1, { startTime: 0, endTime: 2000 }],
+    [2, { startTime: 2000, endTime: 4000 }],
+    [3, { startTime: 4000, endTime: 7000 }],
+    [4, { startTime: 7000, endTime: 607000 }],
+  ]);
+  assert.equal(typicalTurnMs(t), 2500, '中位数不能被 600s 那轮带飞');
+});
+
+test('typicalTurnMs：坏数据直接跳过（不 NaN 传播）', () => {
+  const t = new Map([
+    [1, { startTime: 0, endTime: 4000 }],
+    [2, { startTime: 4000, endTime: 8000 }],
+    [3, { startTime: 9000, endTime: 5000 }],   // end 早于 start，非法
+    [4, null],
+    [5, { startTime: 'x', endTime: 1 }],
+  ]);
+  assert.equal(typicalTurnMs(t), 4000);
+});
+
+test('remainingOf：超时返回 0，不返回负数', () => {
+  assert.equal(remainingOf(10000, 3000), 7000);
+  assert.equal(remainingOf(10000, 10000), 0);
+  assert.equal(remainingOf(10000, 25000), 0, '已经超时只能是 0');
+  assert.equal(remainingOf(null, 1000), null);
+  assert.equal(remainingOf(0, 1000), null);
 });
