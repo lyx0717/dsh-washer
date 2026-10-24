@@ -13,23 +13,24 @@
       disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === '@lyx0717/dsh-washer' && e.options.id !== 'washer' && !e.disabled)"
       config:
         enabled: true
+        # dock    = 挂在输入框上方的停靠条
+        # overlay = 挂在 shell.overlay 的网页内浮层（和桌面悬浮窗是两回事）
         mode: dock
+        # 仅 overlay 形态有效：只在忙碌时出现。waiting 时无视此开关，一定出现。
         overlayOnlyWhenBusy: true
-        size: S
-        skin: auto
+        # pixel（默认，像素 sprite）/ precision（精密家电）
+        skin: pixel
         hideWhenIdle: false
-        costPerKToken: 0
-        costCurrency: '¥'
-        doneHoldMs: 3000
-        toolHistoryLimit: 6
-        # P1b 桌面悬浮窗：本地 HTTP+WS 服务（只绑 127.0.0.1，带随机 token）。
-        # 默认关——装了不看的人不该莫名多一个后台端口。
+        doneHoldMs: 6000
+        # 桌面悬浮窗的本地 HTTP+WS 服务（只绑 127.0.0.1，随机 token）。
         desktopOverlay: true
         # 0 = 让系统分配端口，避免抢端口；日志里会打印实际地址
         desktopOverlayPort: 0
         # 悬浮窗跟着宿主一起启停：关掉的话端口还开着，但不会自动拉窗。
-        # 默认开——装了悬浮窗就是想要它出现。
         desktopOverlayAutoLaunch: true
-        # 启动参数里的初始档位；设置页改动后会以同名参数覆盖
+        # 启动档位：normal / tiny（tiny 只留指示灯）
         desktopOverlaySize: normal
-        # 皮肤只有一份（上面的 skin），主界面和悬浮窗共用，不再单独配
+        # 鼠标穿透。开着时点击落到下面的应用，⌥⌘W 恢复。
+        desktopOverlayClickThrough: false
+        # 洗完弹系统通知：只报「完成」和「故障」
+        desktopOverlayNotify: false

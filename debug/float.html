@@ -794,6 +794,39 @@
     }, 1800);
   }
 
+  /*
+   * 计时那一格显示什么。
+   *
+   * 宿主已经算好了三个数，别浪费：
+   *   stalledMs  —— 连续多久没有可见进展（null 表示没卡）
+   *   typicalMs  —— 这个会话最近几轮耗时的中位数
+   *   remainingMs—— 按中位数估的剩余时间
+   *
+   * 优先级故意是这个顺序：
+   *   1. 卡住了先说卡住了——用户这时候真正想问的是"它是不是死了"，
+   *      还在那报"已运行 3:20"等于没回答。
+   *   2. 有基线就报还要多久——知道自己还要等几分钟，比知道已经等了多久有用。
+   *   3. 都没有才报已运行时长。
+   *
+   * 浮窗只有 132px 宽，所以这里只出一段字，不拼完整句子。
+   */
+  function fmtDur(ms) {
+    var total = Math.max(0, Math.round(ms / 1000));
+    var m = Math.floor(total / 60);
+    var sec = total % 60;
+    return String(m) + ':' + String(sec < 10 ? '0' + sec : sec);
+  }
+
+  function durationOf(s, snap) {
+    if (typeof snap.stalledMs === 'number' && snap.stalledMs !== null) {
+      return '停 ' + fmtDur(snap.stalledMs);
+    }
+    if (typeof snap.remainingMs === 'number' && snap.remainingMs !== null) {
+      return fmtDur(snap.remainingMs) + ' 后好';
+    }
+    return snap.durationText || '--:--';
+  }
+
   function render(snap) {
     var s = snap.state || 'off';
     var v = VISUAL[s] || VISUAL.idle;
@@ -808,7 +841,7 @@
     var errCode = s === 'error' && snap.errorCode ? snap.errorCode : '';
     el('st').textContent = (LABEL[s] || s) + (errCode ? ' · ' + errCode : '');
     el('st').dataset.s = s;
-    el('tm').textContent = snap.durationText || '--:--';
+    el('tm').textContent = durationOf(s, snap);
     renderDots(snap);
     maybeNotify(snap);
 

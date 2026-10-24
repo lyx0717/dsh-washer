@@ -7,20 +7,6 @@
  * - 本文件可在 node 下直接跑单测（见 test/core.test.mjs）。
  */
 
-/** 十个状态，顺序即优先级（off 最高）。 */
-export const STATES = [
-  'off',
-  'waiting',
-  'error',
-  'rinsing',
-  'washing',
-  'starting',
-  'spinning',
-  'draining',
-  'done',
-  'idle',
-];
-
 /** 需要立即切换、不受最小停留时间约束的状态。 */
 export const URGENT_STATES = { off: 1, waiting: 1, error: 1, idle: 1, done: 1 };
 
@@ -32,9 +18,6 @@ export const OUTPUT_NODE_KINDS = new Set([
   'assistant', 'tool-call', 'tool-result', 'reasoning', 'text', 'image',
   'turn-error', 'turn-max-tokens', 'model-retry',
 ]);
-
-/** 完成态在状态机里短暂停留的时长（毫秒）。 */
-export const DONE_HOLD_MS = 6000;
 
 /**
  * 从 turnOutline 取当前轮号。
@@ -223,41 +206,6 @@ export function errorCodeOf(node) {
 }
 
 /**
- * 错误码 → 人类可读的解释。
- *
- * 码本身是给机器看的（E-20 之类），用户看到 "E-20 · 点开看看" 并不知道该干什么。
- * 这里把每类故障翻译成「发生了什么 + 你能做什么」，两者都用 locale key 表达，
- * 具体文案在客户端字典里。
- *
- * @param {string} code
- * @returns {{ title: string, hint: string }}
- */
-export function explainError(code) {
-  switch (code) {
-    case 'E-10':
-      // 账号 / 上游服务问题，用户自己能处理
-      return { title: 'err.e10.title', hint: 'err.e10.hint' };
-    case 'E-20':
-      // 工具执行失败：Agent 通常能自愈，提示它是在自愈还是真挂了
-      return { title: 'err.e20.title', hint: 'err.e20.hint' };
-    case 'E-21':
-      // 审批被拒 / 权限不足：这是用户主动的选择，不是故障
-      return { title: 'err.e21.title', hint: 'err.e21.hint' };
-    case 'E-30':
-      // 上下文超限：需要清理会话或压缩
-      return { title: 'err.e30.title', hint: 'err.e30.hint' };
-    case 'E-40':
-      // 被中断：用户或宿主主动停止，不算出错
-      return { title: 'err.e40.title', hint: 'err.e40.hint' };
-    case 'E-50':
-      // 策略拦截：内容/权限策略
-      return { title: 'err.e50.title', hint: 'err.e50.hint' };
-    default:
-      return { title: 'err.e00.title', hint: 'err.e00.hint' };
-  }
-}
-
-/**
  * turnTimings 是 Map<turn, {startTime, endTime?}>。
  * @param {unknown} turnTimings
  * @param {number} turn
@@ -345,20 +293,6 @@ export const VISUAL = {
   draining: { water: 7, foam: 0, led: '#1f9aa8', blink: 0, spin: 5 },
   done: { water: 6.5, foam: 0, led: '#2ee06a', blink: 0, spin: 0 },
   error: { water: 5, foam: 0, led: '#e5484d', blink: 0.35, spin: 0 },
-};
-
-/** 状态色（圆点 / 强调文字）。 */
-export const STATE_COLOR = {
-  off: '#8f9ba8',
-  idle: '#2f9e63',
-  starting: '#2f86d6',
-  washing: '#2f86d6',
-  rinsing: '#2f86d6',
-  spinning: '#2f86d6',
-  waiting: '#d99a1f',
-  draining: '#1f9aa8',
-  done: '#2f9e63',
-  error: '#d94a4f',
 };
 
 /**

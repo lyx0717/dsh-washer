@@ -544,19 +544,6 @@ export function isOwnEndpoint(info, port, token, pid) {
   return info.pid === pid && info.token === token && info.port === port;
 }
 
-function clearEndpointFile(port, token) {
-  try {
-    const file = endpointFile();
-    if (!existsSync(file)) return;
-    const info = JSON.parse(readFileSync(file, 'utf8'));
-    // 不是自己写的就别动
-    if (!isOwnEndpoint(info, port, token, process.pid)) return;
-    rmSync(file, { force: true });
-  } catch {
-    // 尽力而为，删不掉也不该影响卸载流程
-  }
-}
-
 function persistEndpoint(port, token) {
   try {
     const file = endpointFile();

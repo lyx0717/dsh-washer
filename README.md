@@ -4,15 +4,22 @@
 
 不是装饰：洗衣机的每一个动作都对应一个**可验证**的宿主信号。洗涤 = 模型在出字，漂洗 = 工具在跑，脱水 = 收尾，暂停 = 在等你批准。
 
+<p>
+<img src="docs/float-washing.png" width="120" alt="洗涤中">
+<img src="docs/float-rinsing.png" width="120" alt="漂洗中">
+<img src="docs/float-waiting.png" width="120" alt="等你确认">
+<img src="docs/float-done.png" width="120" alt="洗完了">
+</p>
+
 ```
 待机     ▁▁▁▁▁▁▁▁ 筒空、灯暗
 注水     ●●●○○○○○ 启动、水位上升
 洗涤     ●●●●●●●● 滚筒慢转、气泡翻滚、模型在出字
-漂洗     ●●●●●●○○ 反转、工具在跑（卡片里显示工具名）
+漂洗     ●●●●●●○○ 反转、工具在跑（气泡里显示工具名）
 脱水     ○○●●●○○○ 高速抖动、模糊、收尾
 等你     ◐◐◐◐◐◐◐◐ 灯闪琥珀色、盯着你（等你批准/回答）
 排水     ▁▁▁▁▁▁▁▁ 换水、水位降到底（上下文压缩中）
-洗完了   ✓✓✓✓✓✓✓✓ 绿灯、停 6 秒后回待机
+洗完了   ✓✓✓✓✓✓✓✓ 绿灯、停 `doneHoldMs` 后回待机
 故障     ✕✕✕✕✕✕✕✕ 红灯快闪 + E 码
 ```
 
@@ -23,12 +30,12 @@
 | `idle` | 待机，筒空 | 会话存在但没在跑 |
 | `starting` | 注水、筒开始转 | `running` 且本轮**还没有任何节点**（模型在出第一个字） |
 | `washing` | 洗涤，泡多水满 | `running` 且正在流式出字（`partial` 非空），或上一步是工具 |
-| `rinsing` | 漂洗，反转 | `running` 且有工具在跑（`runningCalls` 非空），卡片显示最后一个工具名 |
+| `rinsing` | 漂洗，反转 | `running` 且有工具在跑（`runningCalls` 非空） |
 | `spinning` | 脱水，高速抖动 | `running` 且无工具无流式，本轮最后一个节点是模型输出（收尾） |
-| `waiting` | 暂停，灯闪琥珀 | 网页端：`sessionStatus.pendingInteraction` 有值；桌面悬浮窗：宿主 `approval/request` 事件（批准 / 拒绝 / 取消后自动恢复） |
+| `waiting` | 暂停，灯闪琥珀 | 网页端：`sessionStatus.pendingInteraction` 有值；桌面悬浮窗：宿主 `approval/request` 事件。批准 / 拒绝 / 取消后自动恢复 |
 | `draining` | 排水换水 | 上下文压缩进行中（`useTrajectory` 快照里最后一条 `purpose: 'compaction'` 的 request 状态为 `running`） |
 | `done` | 洗完了 | 本轮正常结束，停 `doneHoldMs` 后自动回 `idle` |
-| `error` | 故障 | `turn-error` 节点、或**本轮最后一条**工具 `isError`（失败后自愈重试成功不报故障） |
+| `error` | 故障 | `turn-error` 节点、或**本轮最后一条**工具 `isError` |
 | `off` | 关机 | 会话被移除 / 不可用 |
 
 错误码：`E-10` 模型/账号、`E-20` 工具失败、`E-21` 审批被拒、`E-30` 上下文/长度、`E-40` 中断、`E-50` 策略拦截、`E-00` 未知。
@@ -39,31 +46,28 @@
 
 主界面里只有一个**固定形态的停靠条**：32px 机器小图 + 一行状态 + 计时/件数。
 不展开、不点击、不循环档位——它要回答的是"洗到哪了"，不是"打开看看"。
-要看得更全，用**桌面悬浮窗**（见下方「悬浮窗」）或设置页。
+要看得更全，用**桌面悬浮窗**（见下方「悬浮窗」）。
 
 造型（`skin`）两套：**像素风**（`'pixel'`，默认）和**精密家电**（`'precision'`）。
-
-皮肤走注册表分发（`SKIN_REGISTRY`），内置两套照常注册。不认识的皮肤名回退到 `pixel`，
+皮肤走注册表分发（`SKIN_REGISTRY`），不认识的皮肤名回退到 `pixel`，
 不会让停靠条空白——脏配置不该比没配置更糟。
 
 > 曾经有过 S/M/L 三档可展开卡片（L 档带工具流水和 token/成本）。
-> 已整体删除：一个状态条不需要点开，详情交给了悬浮窗和详情面板。
-> 相关配置项保留为**废弃字段**（见配置表），写进老配置不会报错，但不再有任何效果。
+> 已整体删除：一个状态条不需要点开，详情交给了悬浮窗。
+> 老配置里的 `size` / `expandedByDefault` / `skinBySize` / `showCost` /
+> `costPerKToken` / `costCurrency` / `toolHistoryLimit` 现在**完全不被读取**，
+> 留着也不会报错，但没有任何效果。
 
 ### 关于 `mode: 'overlay'`
 
 网页内的浮层座位。它没有 `useChat`，拿不到节点和轨迹，所以**只报它确实知道的两件事**：
 有待处理交互 → `waiting`（在等你），在跑 → `starting`（在忙，不猜细分阶段）。
 
-「等你确认」时它一定会出现（那正是唯一需要看它的时候）；其余情况默认只在忙碌时浮现，
-由 `overlayOnlyWhenBusy` 控制。
-
-> 早先这里写死 `state = 'washing'`，不管实际在干什么都报「洗涤中」，且 `pending` 时直接隐藏。
-> 那违背了本项目的原则——每个动作都要对应一个可验证的宿主信号。
+「等你确认」时它一定会出现（那正是唯一需要看它的时候）；其余情况由 `overlayOnlyWhenBusy` 控制。
 
 ## 无进展提示
 
-机器在转，不代表它在干活。停靠条在 `washing` / `rinsing` / `spinning` 状态下，
+机器在转，不代表它在干活。`washing` / `rinsing` / `spinning` 状态下，
 如果连续 **45 秒**没有任何可见变化（节点数、流式文本长度、在跑的工具数都不动），
 副标题会从「已运行时长」换成卡住提示——用户真正想问的是"它是不是死了"，
 只报时长等于没回答。
@@ -72,12 +76,14 @@
 
 ## 预计剩余时间
 
-同一轮跑多了，停靠条会带上 `还要 1:20`。基线取这个会话**自己最近 8 轮**耗时的
+同一轮跑多了，会带上 `还要 1:20`。基线取这个会话**自己最近 8 轮**耗时的
 中位数——不跨会话借数据（别的会话快不代表这轮也快），也**不取均值**
 （一轮卡住跑了 10 分钟，均值就被它带飞，而那恰恰是最该忽略的离群值）。
 
-少于 2 轮不估：一轮的"平均值"没有意义，宁可不说。超出基线时显示 `还要 0:00`
-而不是负数。
+少于 2 轮不估：一轮的"平均值"没有意义，宁可不说。超出基线时显示 `还要 0:00` 而不是负数。
+
+浮窗那一格也吃这三个数，优先级是 **卡住 > 剩余 > 已运行**：
+`停 0:52` / `1:24 后好` / `01:02`。卡住了还在报"已运行 3:20"等于没回答。
 
 ## 多会话
 
@@ -85,8 +91,7 @@
 颜色就是它的状态色（蓝=在跑、琥珀=等你、红=故障、绿=洗完、灰=待机）。
 
 排序固定：**等审批 / 故障的永远排最前**（那才是要人动手的），其次按最近活动。
-
-一个会话时不显示圆点——孤零零一颗点纯属噪音。
+只有 1 个会话时不显示圆点——孤零零一颗点纯属噪音。
 
 ### 钉住
 
@@ -98,9 +103,14 @@ Node 进程里没有），所以浮窗默认"谁最后动显示谁"，多开时�
 
 ## 洗完通知
 
-设置页可开。只报两件事：**「洗完了」**和**「出故障了」**。
-默认关——突然弹通知比错过更烦人，得用户自己去开；窗口在前台时不弹（人就在看，还弹是打扰）；
-4 秒内不重复弹。点通知把浮窗调到前面。
+设置页可开，默认关。只报两件事：**「洗完了」**和**「出故障了」**。
+
+- 窗口在前台时不弹（人就在看，还弹是打扰），4 秒内不重复弹。
+- 点通知把浮窗调到前面。
+- **浮窗内另有本地横幅**：盖在滚筒上方停 1.8 秒。这条不经过系统通知中心，
+  所以即使通知权限被拒也一定有反馈。
+- 系统通知发不出来时会自动退回 `osascript`（详见 `electron/main.cjs` 里
+  `showScriptNotification` 的注释：adhoc 签名的 Electron 拿不到 macOS 通知权限）。
 
 ## 安装
 
@@ -145,30 +155,26 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 两条路，互相配合：
 
 1. **默认值**写在 `cordis.patch.yml` 的 `washer` 行 `config:` 下（全部可选，见下表）。
-2. **用户改动**在 GUI 里做——展开到 L 档卡片用分段控件切，或打开 **设置 → 洗衣机**。改动存进浏览器 `localStorage`（key `dsh-washer:prefs`），读取顺序是 `内置默认` ← `patch config` ← `localStorage`。
+2. **用户改动**在 GUI 里做——**设置 → 洗衣机**。改动存进浏览器 `localStorage`（key `dsh-washer:prefs`），读取顺序是 `内置默认` ← `patch config` ← `localStorage`。
 
 > 为什么不走宿主统一的设置持久化（`ctx.configForms`）：那套 store 只服务挂在 loader `include` 行下的插件，第三方 bundle 走 `- insert:` 拿到的控制器永远是 `unavailable`（写进去读不回来）。已装的 `dsh-better-sidebar` 同样绕开它、自存 `localStorage`。
 >
-> 代价：桌面悬浮窗读不到浏览器 `localStorage`。浮窗的偏好因此走宿主写到 `~/.dsh/dsh-washer-float-prefs.json` 的文件，并通过 `/dsh-washer/prefs`（JSON 文件）与设置页双向同步——详见下方「悬浮窗（P1b）」。
+> 代价：桌面悬浮窗读不到浏览器 `localStorage`。浮窗的偏好因此走宿主写到 `~/.dsh/dsh-washer-float-prefs.json` 的文件，并通过 `/dsh-washer/prefs` 与设置页双向同步。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `true` | `false` 时完全不挂载（连样式都不注册） |
 | `mode` | `'dock'` | `'dock'` 挂在输入框上方。`'overlay'` 挂到 `shell.overlay`（网页内浮层，与桌面悬浮窗无关） |
-| `size` | — | **已废弃**。三档删除后没有任何代码读它 |
-| `expandedByDefault` | — | **已废弃**，同上 |
-| `skin` | `'pixel'` | `'pixel'` / `'precision'`（动漫风已删除；老配置里的 `'auto'` 按 `'pixel'` 处理） |
-| `skinBySize` | — | **已废弃**，随三档一起删除 |
-| `showCost` | — | **已废弃**：成本面板随 L 档删除，暂未重新接入 |
-| `costPerKToken` | — | **已废弃**，同上 |
-| `costCurrency` | — | **已废弃**，同上 |
+| `overlayOnlyWhenBusy` | `true` | 仅 `overlay` 形态有效。`pending` 时无视此开关，一定出现 |
+| `skin` | `'pixel'` | `'pixel'` / `'precision'`。不认识的值回退 `'pixel'` |
 | `hideWhenIdle` | `false` | 待机时整个隐藏 |
-| `desktopOverlay` | `false` | 是否拉起桌面悬浮窗进程 |
+| `doneHoldMs` | `6000` | 「洗完了」停留时长 |
+| `desktopOverlay` | `true` | 是否开本地 HTTP+WS 服务（浮窗的数据源） |
+| `desktopOverlayPort` | `0` | `0` = 系统分配，避免抢端口；日志里打印实际地址 |
+| `desktopOverlayAutoLaunch` | `true` | 宿主启动时是否自动拉起浮窗进程。关掉后端口还在，只是不自动开窗 |
 | `desktopOverlaySize` | `'normal'` | `'normal'` / `'tiny'`（极简：只留指示灯） |
 | `desktopOverlayClickThrough` | `false` | 鼠标穿透，点穿到底下应用；`⌥⌘W` 恢复 |
 | `desktopOverlayNotify` | `false` | 洗完弹系统通知（只报完成和故障） |
-| `doneHoldMs` | `6000` | 「洗完了」停留时长 |
-| `toolHistoryLimit` | `6` | 工具流水最多显示几条 |
 
 示例：
 
@@ -194,22 +200,38 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 ## 开发
 
 ```bash
-node build.mjs                   # src/ → client.js（内联 core/css/svg，约 128KB）
-node --test test/core.test.mjs   # 状态机单测（29 条）
-node --test test/host.test.mjs   # 宿主半单测（49 条；会起本地服务，按需手动跑）
-node test/render.mjs             # 行为测试（48 条）+ 生成 /tmp/washer-render 截图素材
-node debug/e2e.mjs               # 端到端：起真服务 + 模拟事件流，逐行打印状态迁移
+npm run build     # src/ → client.js + debug/float.machines.js（约 133KB）
+npm test          # core 38 + host 60 + build 4 = 102 条
+node test/render.mjs           # 56 条行为测试 + 生成 /tmp/washer-render 截图素材
+node test/render.mjs --no-shots   # 只跑用例不写盘
+node debug/e2e.mjs             # 端到端：起真服务 + 模拟事件流，逐行打印状态迁移
 ```
 
 - `src/core.js` 纯函数状态机，node 下可直接测。
 - `src/client.template.js` 组件源码，`build.mjs` 把 core/CSS/SVG 内联成单文件 `client.js`。
+- `build-float.mjs` 生成浮窗用的独立造型脚本 `debug/float.machines.js`，
+  在构建期把 `NATURAL` 求值成纯常量（浮窗脚本够不到主界面的 `SKIN_REGISTRY`）。
 - `test/render.mjs` 是最小 React hooks 运行时：真跑 hooks、真 re-render，能测到时间轴行为。
-  加 `--no-shots` 只跳过截图写盘，**用例照跑满 48 条**（别在中间 `process.exit()`，
+  **加 `--no-shots` 只是跳过截图写盘，用例照跑满 56 条**（别在中间 `process.exit()`，
   否则后面的用例没跑也显示通过）。
+
+> `test/host.test.mjs` 会起本地 HTTP 服务且不主动关闭，所以 test 脚本带 `--test-force-exit`。
+> 手动单跑时也要带上，否则进程不退出：
+> `node --test --test-force-exit test/host.test.mjs`。
+
+### 测试的规矩
+
+**每条回归测试都要先还原旧实现，确认它会变红。** 不这样做的测试是在给自己发假的安心。
+
+两个真实踩过的坑：
+
+- 断言片段里包含了被删代码的**函数定义**，删掉调用点测试照样绿。
+  要精确切到函数体范围再断言。
+- 断言片段里包含注释中引用的旧写法，得先 strip 注释再匹配。
 
 ### ⚠️ 改包名时的唯一硬约束
 
-`src/client.template.js` 第 10 行的模块 id **必须等于 `package.json` 的 `name`**：
+`src/client.template.js` 里的模块 id **必须等于 `package.json` 的 `name`**：
 
 ```js
 window.__ModuleLoader__.load({
@@ -218,7 +240,7 @@ window.__ModuleLoader__.load({
 
 宿主按 `insert.name`（即包名）去 `__ModuleLoader__` 的注册表里查客户端模块。两者不一致时，**查不到的那一边不会报任何错**：服务端半照常工作、日志干净，只是 dock 座位不出现、`settings.section` 不注册——用户在界面上看到的是「插件装了但设置页里连入口都没有」。
 
-`build.mjs` 已加构建期硬断言：模块 id 与包名不符直接构建失败并指出该改哪一行。所以正常情况你改错就会当场发现——**如果看到上面这个症状，先怀疑是不是绕过了构建直接用了旧的 `client.js`。**
+`build.mjs` 已加构建期硬断言：模块 id 与包名不符直接构建失败并指出该改哪一行。
 
 改包名时还要同步（`grep -rn "dsh-washer" src/ cordis.patch.yml` 能全部列出来）：
 
@@ -230,24 +252,26 @@ window.__ModuleLoader__.load({
 
 另外，npm 与插件市场是两套东西，别混：
 
-- **npm 包名**改了就是 breaking change，必须**先卸旧包再装新包**——`disabled` 表达式只认新包名，新旧并存会在两个 entry 上都挂 `id: washer`，插件被初始化两次（监听器重复注册、SSE 推送翻倍）。
+- **npm 包名**改了就是 breaking change，必须**先卸旧包再装新包**。
 - **插件市场**（`awesome-dsh-plugin`）那条 `lyx0717__dsh-washer.yml` 的 `url` 字段**只能填 GitHub 仓库地址**，不要改成 npm 链接。npm 源是官方 CI 的 `probe-npm.mjs` 自动探测的：它读仓库根 `package.json` 的 `name`，再核对 npm 上该包的 `repository.url` 是否指回同一个 GitHub 仓库。所以只要 `name` 和 `repository` 都对，不用提 PR 改任何东西，等流水线跑一轮即可。
 
 ### 发布到插件市场
 
-改代码 → 刷新索引 → push，一步别少：`node scripts/refresh-market.mjs && git add docs/index.json && git commit -m "docs: 刷新市场索引" && git push`（索引钉当前 commit/版本，push 到 `main` 后 GitHub Pages 自动更新；pre-push 钩子会在"代码变了但索引没刷"时拦下并自动重写 `docs/index.json`）。
+改代码 → 刷新索引 → push，一步别少：
 
-### 宿主半（`index.js`）：P1b 数据管道
+```bash
+node scripts/refresh-market.mjs && git add docs/index.json && \
+  git commit -m "docs: 刷新市场索引" && git push
+```
+
+pre-push 钩子会在"代码变了但索引没刷"时拦下并自动重写 `docs/index.json`。
+
+### 宿主半（`index.js`）与客户端的数据通道
 
 Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌面窗口（Electron）拿不到那些东西。所以宿主半在 Node 侧监听同一批事件、喂给**同一个** `src/core.js`，再通过本地 HTTP+WS 把快照推出去——两边判定只有一份实现，不会各写一套然后对不上。
 
-```yaml
-desktopOverlay: false        # 默认关；开了才占端口
-desktopOverlayPort: 0        # 0 = 系统分配，日志里打印实际地址
-```
-
 - 只绑 `127.0.0.1`，每次启动生成随机 token，`/dsh-washer/state`、`/dsh-washer/health`、`WS /dsh-washer/stream` 全部要 token（query 或 Bearer）。
-- 启动后端点信息写到 `~/.dsh/dsh-washer-overlay.json`（0600，进程退出即删），里面有现成的 `url`：
+- 启动后端点信息写到 `~/.dsh/dsh-washer-overlay.json`（0600，进程退出即删）：
 
   ```json
   { "url": "http://127.0.0.1:61491/dsh-washer/state?token=...",
@@ -256,35 +280,34 @@ desktopOverlayPort: 0        # 0 = 系统分配，日志里打印实际地址
 
 - 调试端：`debug/overlay.html?port=端口&token=令牌`，浏览器直接打开就能看状态流转，断线会自动指数退避重连。
 
-  ![调试端](docs/overlay-debug.png)
+## 悬浮窗
 
-## 悬浮窗（P1b）
-
-除了 Web GUI 里的洗衣机，还有一个独立的桌面悬浮窗，常驻屏幕角落看 Agent 在干什么。
-
-```bash
-./electron/start.sh
-```
+独立的桌面悬浮窗，常驻屏幕角落看 Agent 在干什么。
 
 - 透明无边框、置顶、跨 Space 可见、不抢焦点
-- 按住卡片顶部可拖动，位置退出后记住
-- **双击**卡片切换鼠标穿透（穿透时半透明，点击落到下面应用）
-- **右键**弹出菜单：穿透开关 / 重连刷新 / 打开调试端 / 退出
-- 穿透状态下窗口收不到任何鼠标事件，用 **⌥⌘W** 关闭穿透（不要用 ⌘⇧W，那是系统关窗口的键）
+- 拖动可改位置，退出后记住
+- **双击**切换鼠标穿透（穿透时半透明，点击落到下面应用）
+- **右键**菜单：穿透开关 / 重连刷新 / 打开调试端 / 退出
+- 穿透状态下窗口收不到任何鼠标事件，用 **⌥⌘W** 恢复（不要用 ⌘⇧W，那是系统关窗口的键）
+
+```bash
+./electron/start.sh          # 手动起（调试用）
+ELECTRON_PATH=/path/to/Electron ./electron/start.sh   # 指定 Electron 运行时
+```
 
 > 从 DSH 的终端里启动时，`ELECTRON_RUN_AS_NODE=1` 会被继承，Electron 会退化成纯 Node。
-> `start.sh` 已经帮你清掉了。
+> `electron/start.sh` 已经帮你清掉了。正常情况下不需要手动起——宿主会按 `desktopOverlayAutoLaunch` 自己拉。
 
-![悬浮窗](docs/overlay-float.png)
+### 浮窗看不到？按这个顺序查
 
-- 两个必须守住的点，都有回归测试：**工具返回后不能还停在 rinsing**（状态撒谎比不显示更糟）；**`step/*` 不能进节点序列**——`deriveState` 用「最后一个节点是不是产出类节点」判断走到哪，`step-*` 不在白名单里，混进去会让状态从 washing 倒退成 starting。
+1. **偏好文件里的 `show` 是不是 false**：`~/.dsh/dsh-washer-float-prefs.json`。
+   这是"用户点了关闭"的记录，进程被强杀时可能被误写成 false。
+2. **进程在不在**：`ps aux | grep 'dsh-washer/electron'`。
+3. **画面空白但进程在**：多半是 `debug/float.machines.js` 坏了。
+   跑 `node --check debug/float.machines.js`，有语法错就重新 `npm run build`。
+   （`build-float.mjs` 曾经因为正则截断生成过残缺文件，`test/build.test.mjs` 现在盯着这件事。）
 
-### 调试：插件"不见了"先看这里
-
-- **新会话里本来就不显示**。`sessionId` 为空时组件按设计返回 `null`——先打开一个会话再看。
-- 判断是不是加载失败：页面若无「启动失败」卡片，说明所有 entry 都激活成功（宿主 `bZ()` 审计会在有失败时抛 `web boot: N entries did not activate` 并渲染卡片）。
-- 两条激活通道别混：装进 profile 的 bundle 由启动时的 `manifest.plugins → entries.start → loader.create` 自动激活（本插件走这条）；`cordis-host-runner` 那套只服务模型用 `cordis_define` 现写的动态插件。
-- 替换已装包要重启宿主；新装包可被 HMR 接管。
+> 调试别靠猜窗口坐标截图——用离屏 Electron 的 `capturePage()` 直接出图。
 
 ## 许可
 

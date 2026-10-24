@@ -24,20 +24,6 @@ window.__ModuleLoader__.load({
  * - 本文件可在 node 下直接跑单测（见 test/core.test.mjs）。
  */
 
-/** 十个状态，顺序即优先级（off 最高）。 */
-const STATES = [
-  'off',
-  'waiting',
-  'error',
-  'rinsing',
-  'washing',
-  'starting',
-  'spinning',
-  'draining',
-  'done',
-  'idle',
-];
-
 /** 需要立即切换、不受最小停留时间约束的状态。 */
 const URGENT_STATES = { off: 1, waiting: 1, error: 1, idle: 1, done: 1 };
 
@@ -49,9 +35,6 @@ const OUTPUT_NODE_KINDS = new Set([
   'assistant', 'tool-call', 'tool-result', 'reasoning', 'text', 'image',
   'turn-error', 'turn-max-tokens', 'model-retry',
 ]);
-
-/** 完成态在状态机里短暂停留的时长（毫秒）。 */
-const DONE_HOLD_MS = 6000;
 
 /**
  * 从 turnOutline 取当前轮号。
@@ -240,41 +223,6 @@ function errorCodeOf(node) {
 }
 
 /**
- * 错误码 → 人类可读的解释。
- *
- * 码本身是给机器看的（E-20 之类），用户看到 "E-20 · 点开看看" 并不知道该干什么。
- * 这里把每类故障翻译成「发生了什么 + 你能做什么」，两者都用 locale key 表达，
- * 具体文案在客户端字典里。
- *
- * @param {string} code
- * @returns {{ title: string, hint: string }}
- */
-function explainError(code) {
-  switch (code) {
-    case 'E-10':
-      // 账号 / 上游服务问题，用户自己能处理
-      return { title: 'err.e10.title', hint: 'err.e10.hint' };
-    case 'E-20':
-      // 工具执行失败：Agent 通常能自愈，提示它是在自愈还是真挂了
-      return { title: 'err.e20.title', hint: 'err.e20.hint' };
-    case 'E-21':
-      // 审批被拒 / 权限不足：这是用户主动的选择，不是故障
-      return { title: 'err.e21.title', hint: 'err.e21.hint' };
-    case 'E-30':
-      // 上下文超限：需要清理会话或压缩
-      return { title: 'err.e30.title', hint: 'err.e30.hint' };
-    case 'E-40':
-      // 被中断：用户或宿主主动停止，不算出错
-      return { title: 'err.e40.title', hint: 'err.e40.hint' };
-    case 'E-50':
-      // 策略拦截：内容/权限策略
-      return { title: 'err.e50.title', hint: 'err.e50.hint' };
-    default:
-      return { title: 'err.e00.title', hint: 'err.e00.hint' };
-  }
-}
-
-/**
  * turnTimings 是 Map<turn, {startTime, endTime?}>。
  * @param {unknown} turnTimings
  * @param {number} turn
@@ -362,20 +310,6 @@ const VISUAL = {
   draining: { water: 7, foam: 0, led: '#1f9aa8', blink: 0, spin: 5 },
   done: { water: 6.5, foam: 0, led: '#2ee06a', blink: 0, spin: 0 },
   error: { water: 5, foam: 0, led: '#e5484d', blink: 0.35, spin: 0 },
-};
-
-/** 状态色（圆点 / 强调文字）。 */
-const STATE_COLOR = {
-  off: '#8f9ba8',
-  idle: '#2f9e63',
-  starting: '#2f86d6',
-  washing: '#2f86d6',
-  rinsing: '#2f86d6',
-  spinning: '#2f86d6',
-  waiting: '#d99a1f',
-  draining: '#1f9aa8',
-  done: '#2f9e63',
-  error: '#d94a4f',
 };
 
 /**
@@ -581,20 +515,6 @@ function shouldSwitch(from, to, heldMs) {
       'set.overlayNotifyHint': '只报「洗完了」和「故障」，窗口在前台时不打扰。',
       'set.overlayThrough': '鼠标穿透',
       'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
-      'err.e00.title': '出了点问题',
-      'err.e00.hint': '原因不明，可以重试一次',
-      'err.e10.title': '账号或服务不可用',
-      'err.e10.hint': '检查登录状态和网络后重试',
-      'err.e20.title': '工具有一步没跑成',
-      'err.e20.hint': '通常能自己重试；连续失败就检查那一步的命令或权限',
-      'err.e21.title': '你拒绝了这一步',
-      'err.e21.hint': '需要的话重新发一次，或放宽权限',
-      'err.e30.title': '上下文塞满了',
-      'err.e30.hint': '开新会话，或让它先压缩一下',
-      'err.e40.title': '被中断了',
-      'err.e40.hint': '不是故障，重新发一次就能续上',
-      'err.e50.title': '被策略拦下了',
-      'err.e50.hint': '这一步触发了限制，换个说法试试',
     };
 
     const EN = {
@@ -646,20 +566,6 @@ function shouldSwitch(from, to, heldMs) {
       'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press Opt+Cmd+W to turn it off.',
       'set.overlayNotify': 'Notify when done',
       'set.overlayNotifyHint': 'Only “done” and “error”. Silent while the window is focused.',
-      'err.e00.title': 'Something went wrong',
-      'err.e00.hint': 'Unknown cause - try again',
-      'err.e10.title': 'Account or service unavailable',
-      'err.e10.hint': 'Check your sign-in and network, then retry',
-      'err.e20.title': 'A tool step failed',
-      'err.e20.hint': 'Usually recovers on its own; if it keeps failing, check that step',
-      'err.e21.title': 'You declined that step',
-      'err.e21.hint': 'Send it again, or loosen the permission',
-      'err.e30.title': 'Context is full',
-      'err.e30.hint': 'Start a new session, or let it compact first',
-      'err.e40.title': 'Interrupted',
-      'err.e40.hint': 'Not a failure - send it again to continue',
-      'err.e50.title': 'Blocked by policy',
-      'err.e50.hint': 'This step hit a limit - rephrase and retry',
     };
 
     /* 每状态：水位 / 转速 / 泡沫。机型自己的表，和文案解耦 */
@@ -714,14 +620,12 @@ function shouldSwitch(from, to, heldMs) {
       enabled: true,
       mode: 'dock',
       /*
-       * 停靠条只有一种形态：不再有 S/M/L 三档，也不再点击展开。
-       * size / expandedByDefault 是旧字段，留着只为兼容老 config 不报错，
-       * 但已经没有任何代码读它们——渲染永远是 S 档停靠条。
-       */
-      /*
        * 默认皮肤。以前是 'auto'（按尺寸自动挑 pixel/precision），
        * 用户要求去掉"自动"选项——那就不能留个默认值让下拉里没有任何一项被选中。
        * 直接落成 pixel：停靠条本身就是像素 sprite，视觉最连贯。
+       *
+       * 老配置里残留的 'auto' 不用特殊处理：resolveSkin 不认识的名字一律
+       * 回退 pixel，脏配置不该比没配置更糟。
        */
       skin: 'pixel',
       /*
@@ -730,17 +634,10 @@ function shouldSwitch(from, to, heldMs) {
        * 早先分成 skin（主界面）和 desktopOverlaySkin（浮窗）两个字段，
        * 结果是用户改了一个另一个不变，界面上两组"精密/像素"看着一模一样
        * 却各自独立，本身就是误导。现在合并成一份，浮窗启动参数也读这个字段。
-       *
-       * skinBySize 只保留 xs/lg 两档宽度：停靠条里的迷你 sprite 和
-       * 悬浮窗/浮层用的大图。sm/md 是旧三档时代的产物，已无人使用。
        */
-      skinBySize: { xs: 'pixel', lg: 'pixel' },
-      costPerKToken: 0,
-      costCurrency: 'CNY',
       hideWhenIdle: false,
       overlayOnlyWhenBusy: true,
       doneHoldMs: 6000,
-      toolHistoryLimit: 6,
       // 桌面悬浮窗（Electron 壳）：靠 localStorage 持久化，
       // 宿主侧 apply() 读的是 cordis 配置，所以这里只负责"设置页能改、能同步给浮窗"
       //
@@ -773,9 +670,6 @@ function shouldSwitch(from, to, heldMs) {
       Object.keys(patch).forEach((key) => {
         if (patch[key] !== undefined) out[key] = patch[key];
       });
-      if (patch.skinBySize && typeof patch.skinBySize === 'object') {
-        out.skinBySize = Object.assign({}, DEFAULT_CONFIG.skinBySize, patch.skinBySize);
-      }
       return out;
     }
 
@@ -793,16 +687,6 @@ function shouldSwitch(from, to, heldMs) {
       return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     }
 
-
-    /**
-     * 皮肤只有三个合法值。老配置里可能还留着 skin:'auto'，按 pixel 处理，
-     * 免得渲染时拿到一个谁都不认识的字符串。
-     */
-    function pickSkin(cfg, bucket) {
-      if (cfg.skin !== 'auto') return cfg.skin;
-      const mapped = cfg.skinBySize ? cfg.skinBySize[bucket] : undefined;
-      return mapped === 'precision' || mapped === 'pixel' ? mapped : 'pixel';
-    }
 
     /**
      * 减弱动态效果：只跟随系统，不再提供设置项。
@@ -851,7 +735,7 @@ function shouldSwitch(from, to, heldMs) {
     /**
      * 停靠条里那台小机器：按皮肤选造型。
      *
-     * 宽度固定 30px。'auto'（老配置残留）走 pickSkin 落到 pixel，
+     * 宽度固定 30px。'auto'（老配置残留）由 resolveSkin 兜底成 pixel，
      * 不认识的值也一样——不能让停靠条因为一个脏字段变空白。
      */
     function MachineStrip(skin, state, screenTime) {
@@ -1202,7 +1086,7 @@ function shouldSwitch(from, to, heldMs) {
        * 只是没人调用它们了。
        *
        * 停靠条里机器只占 30px 宽，三套造型在这个尺寸下都还能认出来，
-       * 所以按 skin 直接选；老配置里的 'auto' 由 pickSkin 兜底成 pixel。
+       * 所以按 skin 直接选；老配置里的 'auto' 由 resolveSkin 兜底成 pixel。
        */
       /*
        * 三档自适应靠 CSS @media 窗口宽度查询（见 style.css，别用 @container——

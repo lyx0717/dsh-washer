@@ -366,11 +366,15 @@ const t = (key, params) => {
 const NOW = Date.now();
 const T0 = NOW - 70000;
 
+/*
+ * 只放真实存在、且代码真的会读的配置键。
+ * 夹具里堆一批已删除的字段（size / expandedByDefault / showCost / face /
+ * reduceMotion / costPerKToken / skinBySize）会让"删干净了没有"这件事
+ * 永远测不出来——你以为在测边界，其实喂的是一堆没人读的垃圾。
+ */
 const baseConfig = (over) => Object.assign({
-  enabled: true, mode: 'dock', size: 'S', expandedByDefault: false, skin: 'auto',
-  skinBySize: { xs: 'pixel', sm: 'precision', md: 'precision', lg: 'precision' },
-  face: false, reduceMotion: 'auto', showCost: false, costPerKToken: 0, costCurrency: 'CNY',
-  hideWhenIdle: false, overlayOnlyWhenBusy: true, doneHoldMs: 300, toolHistoryLimit: 6,
+  enabled: true, mode: 'dock', skin: 'pixel',
+  hideWhenIdle: false, overlayOnlyWhenBusy: true, doneHoldMs: 300,
 }, over || {});
 
 function makeWorld(over) {
@@ -711,7 +715,8 @@ await test('停靠条跟着皮肤换造型（用户报障：改了皮肤 dock �
    *
    * 现在按 skin 选：pixel 走 PixelSprite（本来就是为 32px 画的），
    * precision 走 BigMachine 缩到 32px。
-   * 'auto' 是老配置残留，兜底成 pixel，不能让条变空白。
+   * 'auto' 是已删除的老配置值，resolveSkin 不认识它就回退 pixel——
+   * 没为它写专门分支，脏配置不该比没配置更糟。
    */
   const cases = [
     ['pixel', 'dw-sprite', null],
@@ -774,10 +779,11 @@ await test('成本功能删除：showCost 设置项与成本显示都不再存�
    * 用户要求去掉「显示成本」的设置项和功能。
    * 成本原本显示在展开卡片的统计区（dw-stats）里，卡片删除后无处可放。
    *
-   * 费率字段 costPerKToken / costCurrency 留在 config 里但不再被读取——
-   * 删掉它们会让老配置文件里的字段变成"未知键"，反而可能报警告。
+   * 费率字段 costPerKToken / costCurrency 已从 DEFAULT_CONFIG 删除。
+   * 这里故意把它们连同 showCost 一起喂进去，验证老配置文件里残留的
+   * 未知键既不会报错、也不会让停靠条多出成本显示。
    */
-  const m = mount(streaming({ config: baseConfig({ showCost: true, costPerKToken: 0.004 }) }));
+  const m = mount(streaming({ config: baseConfig({ showCost: true, costPerKToken: 0.004, costCurrency: 'CNY' }) }));
   await m.settle(450);
   assert.ok(!m.text().includes('成本'), '停靠条不该显示成本');
   assert.ok(!m.html.includes('dw-stats'), '不该有统计区');
@@ -1384,11 +1390,10 @@ const CASES = {
   error: { running: false, nodes: [...tools(3), { kind: 'turn-error', turn: 1, message: 'max_tokens exceeded', code: 'MAX_TOKENS' }], outline: [{ turn: 1, seq: 1, prompt: 'hi', response: 'trunc' }], turnTimings: new Map([[1, { startTime: T0, endTime: NOW - 8000 }]]) },
 };
 
-const levelCfg = (level) => ({
-  size: level, expandedByDefault: false, skin: 'auto',
-  skinBySize: { xs: 'pixel', sm: 'precision', md: 'precision', lg: 'precision' },
-  face: false, reduceMotion: 'auto', showCost: false, costPerKToken: 0, costCurrency: 'CNY',
-  hideWhenIdle: false, doneHoldMs: 6000, toolHistoryLimit: 6,
+// levelCfg 曾经按 S/M/L 三档造不同的配置，三档删除后只剩一份，
+// 保留函数名是为了不改下面那批截图用例的结构。
+const levelCfg = () => ({
+  skin: 'pixel', hideWhenIdle: false, doneHoldMs: 6000,
 });
 
 const cells = [];
@@ -1691,6 +1696,32 @@ await test('浮窗自己也要能提示完成，不完全依赖系统通知', ()
   const notifyBody = html.slice(start, close);
   assert.ok(/^\s*showFlash\(s, text\);$/m.test(notifyBody),
     'maybeNotify 里必须真的调用 showFlash(s, text)，否则横幅永远不出现');
+});
+
+await test('浮窗要真的用宿主算好的 stalledMs / remainingMs，不能只推不用', () => {
+  /*
+   * 宿主半 index.js 一直在推三个数：stalledMs（卡了多久）、typicalMs（这个
+   * 会话最近几轮的中位数）、remainingMs（估的剩余），但浮窗页面只读 state /
+   * durationText / errorCode——算完了没人用，等于白算。
+   *
+   * 用户盯着浮窗时最想知道的两件事恰恰是这两个：
+   * 它是不是死了（停多久了）、还要等多久（ETA）。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(html.includes('function durationOf'), '需要一个统一的计时格取值函数');
+  assert.ok(html.includes('snap.stalledMs'), '计时格必须读 stalledMs');
+  assert.ok(html.includes('snap.remainingMs'), '计时格必须读 remainingMs');
+
+  // 优先级：卡住 > ETA > 已运行时长
+  const start = html.indexOf('function durationOf');
+  const close = html.indexOf('\n  }\n', start);
+  const body = html.slice(start, close);
+  const iStalled = body.indexOf('stalledMs');
+  const iRemain = body.indexOf('remainingMs');
+  const iPlain = body.indexOf('durationText');
+  assert.ok(iStalled >= 0 && iRemain >= 0 && iPlain >= 0, '三个分支都要有');
+  assert.ok(iStalled < iRemain && iRemain < iPlain,
+    '优先级必须是 卡住 > 剩余 > 已运行：卡住了还在报已运行时长等于没回答');
 });
 
 await test('退出程序不能把「不显示浮窗」写成用户偏好', () => {
