@@ -9,9 +9,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 
-import { foldEvent, encodeWsText, apply, isOwnEndpoint, speedOf, rankTools } from '../index.js';
+import {
+  foldEvent, encodeWsText, apply, isOwnEndpoint, speedOf, rankTools,
+  endFailureOf, writeOverlayPrefs,
+} from '../index.js';
+import { deriveState } from '../src/core.js';
 
 /**
  * 测试专用端点路径：绝不能碰 ~/.dsh 下的真实文件（宿主服务在用它）。
@@ -54,6 +58,7 @@ function freshState() {
     model: null,
     lastUsage: null,
     tokenSamples: [],
+    doneUntil: 0,
   };
 }
 
@@ -799,4 +804,117 @@ test('偏好文件里的 show:false 不能把功能关死（重启后服务必�
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0, desktopOverlayAutoLaunch: false });
   assert.ok(api !== null);
   ctx.dispose();
+});
+
+/* ---------- 本轮审查修复的回归保护 ---------- */
+
+test('turn/end 带 reason:error → 亮 error，且不亮「洗完了」', () => {
+  /*
+   * 审查发现的 S3：turn-error 节点从来没人写，deriveState 里
+   * findTurnError 那条分支在桌面端是死代码——模型报错、账号登出、
+   * 进程被中断，悬浮窗一律掉回 idle 装没事。
+   * 宿主的失败信息藏在 turn/end.data.reason 里，见 endFailureOf。
+   */
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('assistant/message', { turn: 1, message: { source: { model: 'm' } } }), NOW + 100);
+  foldEvent(s, ev('turn/end', {
+    turn: 1,
+    reason: { kind: 'error', error: { code: 'CONTEXT_OVERFLOW', message: 'too long' } },
+  }), NOW + 200);
+
+  assert.equal(s.doneUntil, 0, '出错的轮次不能同时亮「洗完了」');
+  const err = s.nodes.filter((n) => n.kind === 'turn-error');
+  assert.equal(err.length, 1, '必须记下 turn-error 节点');
+  assert.equal(err[0].code, 'CONTEXT_OVERFLOW');
+
+  const derived = deriveState({
+    sessionId: 's1', running: false, pending: undefined, runningCalls: [],
+    partial: null, nodes: s.nodes, outline: [{ turn: 1 }], trajectory: undefined,
+    sticky: null, now: NOW + 300,
+  });
+  assert.equal(derived, 'error');
+});
+
+test('endFailureOf：只有 error / 登出中止 / interrupted 才算失败', () => {
+  assert.equal(endFailureOf({ kind: 'error', error: { code: 'X', message: 'm' } }).code, 'X');
+  assert.equal(endFailureOf({ kind: 'error', error: { message: 'no code' } }).code, 'E-00');
+  assert.equal(
+    endFailureOf({ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } }).code,
+    'ACCOUNT_SIGNED_OUT',
+  );
+  assert.equal(endFailureOf({ kind: 'interrupted' }).code, 'INTERRUPTED');
+  // 下面这些不是故障：用户自己按停、正常完成、审批拒绝、到 max tokens
+  assert.equal(endFailureOf({ kind: 'aborted', reason: { kind: 'user' } }), undefined);
+  assert.equal(endFailureOf({ kind: 'completed' }), undefined);
+  assert.equal(endFailureOf({ kind: 'blocked' }), undefined);
+  assert.equal(endFailureOf({ kind: 'max-tokens' }), undefined);
+  assert.equal(endFailureOf(null), undefined);
+});
+
+test('turn/end 正常完成 → 桌面端也能进 done（不再恒为 null）', () => {
+  /*
+   * 审查发现的 S2：snapshot() 里写死 sticky:null，deriveState 的
+   * done 分支在桌面端恒不成立，绿灯停几秒这个核心反馈一次都不出现。
+   */
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('assistant/message', { turn: 1, message: { source: { model: 'm' } } }), NOW + 100);
+  foldEvent(s, ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), NOW + 200);
+  assert.ok(s.doneUntil > NOW + 200, '完成后必须写下保持窗口');
+
+  const at = (now) => deriveState({
+    sessionId: 's1', running: false, pending: undefined, runningCalls: [],
+    partial: null, nodes: s.nodes, outline: [{ turn: 1 }], trajectory: undefined,
+    sticky: s.doneUntil > 0 ? { kind: 'done', turn: 1, until: s.doneUntil } : null, now,
+  });
+  assert.equal(at(NOW + 300), 'done');
+  assert.equal(at(s.doneUntil + 1), 'idle', '保持窗口过了就该回 idle');
+});
+
+test('新一轮开始立刻清掉 done（转起来的机器不能还挂绿勾）', () => {
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), NOW + 100);
+  assert.ok(s.doneUntil > 0);
+  foldEvent(s, ev('turn/start', { turn: 2 }), NOW + 200);
+  assert.equal(s.doneUntil, 0);
+});
+
+test('turnTimings 有上界（长跑会话不能无界增长）', () => {
+  const s = freshState();
+  for (let i = 1; i <= 200; i += 1) {
+    foldEvent(s, ev('turn/start', { turn: i }), NOW + i * 1000);
+    foldEvent(s, ev('turn/end', { turn: i, reason: { kind: 'completed' } }), NOW + i * 1000 + 500);
+  }
+  assert.ok(s.turnTimings.size <= 50, `turnTimings 应被裁剪到 50 以内，实际 ${s.turnTimings.size}`);
+  // 裁剪后当前轮必须还在，否则计时会归零
+  assert.ok(s.turnTimings.has(200), '当前轮不能被裁掉');
+});
+
+test('偏好文件损坏时拒绝写入，不能拿空对象抹盘', () => {
+  /*
+   * 审查发现的 S5：writeOverlayPrefs 以前 catch 里回退成 {}，
+   * 于是「读到半截 JSON」→「以 {} 为基底合并」→「写回」= 全清。
+   * 现在读失败一律返回 null（放弃这次写入），盘上的坏文件原样保留，
+   * 至少用户还能看见、能修。
+   */
+  writeFileSync(TEST_PREFS, '{"skin":"pixel", 这里是半截');
+  const before = readFileSync(TEST_PREFS, 'utf8');
+  const result = writeOverlayPrefs({ size: 'tiny' });
+  assert.equal(result, null, '读不出来时必须返回 null 表示没写成');
+  assert.equal(readFileSync(TEST_PREFS, 'utf8'), before, '坏文件必须原样保留，不能被覆盖');
+});
+
+test('偏好写入是原子的，不会留下半截文件', () => {
+  writeFileSync(TEST_PREFS, JSON.stringify({ skin: 'pixel', size: 'normal' }));
+  const next = writeOverlayPrefs({ size: 'tiny' });
+  assert.ok(next !== null);
+  assert.equal(next.skin, 'pixel', '合并时不能丢别的字段');
+  assert.equal(next.size, 'tiny');
+  // 读回来必须是完整 JSON
+  assert.deepEqual(JSON.parse(readFileSync(TEST_PREFS, 'utf8')), next);
+  // 不能留下临时文件
+  const leftovers = readdirSync('/tmp').filter((f) => f.startsWith('dsh-washer-test-prefs.json.') && f.endsWith('.tmp'));
+  assert.deepEqual(leftovers, [], '原子写不能留临时文件');
 });

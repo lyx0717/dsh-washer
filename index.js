@@ -16,7 +16,7 @@
  * `?token=` 或 `Authorization: Bearer`，防止本机其它程序偷看会话状态。
  */
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -99,6 +99,16 @@ function createSessionState() {
     // core.js 的 elapsedOf/turnEndTimeOf 要的是 Map<turn, {startTime, endTime}>，
     // 早期写成普通对象 + {start,end}，导致计时永远 00:00、lastEndedAt 永远 null。
     turnTimings: new Map(),
+    /**
+     * 「洗完了」的保持窗口（毫秒时间戳）。
+     *
+     * 主界面端靠 React state 里的 sticky 做这件事，桌面端没有 React，
+     * 早先 snapshot() 里写死 `sticky: null`，于是 deriveState 的分支
+     * `sticky.kind === 'done'` 恒不成立 —— 悬浮窗永远进不了 done，
+     * 绿灯停 6 秒这个核心反馈在桌面上一次都不会出现。
+     * 需要一个不依赖渲染进程存活的时间点，所以存在这里。
+     */
+    doneUntil: 0,
     /** 最近一次 agent/status */
     running: false,
     /**
@@ -118,6 +128,16 @@ function createSessionState() {
 
 /** 速度滑动窗口（毫秒）。取 5 秒：太短抖得看不清，太长反应迟钝。 */
 const SPEED_WINDOW_MS = 5000;
+
+/**
+ * 「洗完了」绿灯保持多久（毫秒）。
+ * 和 client.js 的默认值保持一致——同一个 config 项，两边默认值不同会让
+ * 主界面和悬浮窗对"完成"这件事的持续时间不一样，看着像两个 bug。
+ */
+const DEFAULT_DONE_HOLD_MS = 6000;
+
+/** turnTimings 最多留几轮。超出就丢最旧的，见 foldEvent 的 turn/start。 */
+const TURN_TIMINGS_LIMIT = 50;
 
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
@@ -215,6 +235,59 @@ function pushNode(state, node) {
  *   step/end    { turn, step }
  *   turn/end    { turn }
  */
+/**
+ * 模块级可变的一次性配置。
+ *
+ * foldEvent 是导出的纯函数（测试直接调），签名里没有 config；
+ * 为了不改测试和调用方，用一个模块级的"当前值"承接。apply 时设、
+ * 卸载时还原，多实例（热重载并存的那一小段）会互相覆盖——但那段时间
+ * 本来只有一个实例在收事件，可以接受。
+ */
+let doneHoldMs = DEFAULT_DONE_HOLD_MS;
+
+/** 测试和 apply 用：设定「洗完了」保持多久 */
+export function setDoneHoldMs(ms) {
+  doneHoldMs = Number.isFinite(ms) && ms >= 0 ? ms : DEFAULT_DONE_HOLD_MS;
+}
+
+/**
+ * 从 turn/end 的 data.reason 里提取失败信息。
+ *
+ * 端口自 dsh-client-ui-chat 的 endFailure()（宿主 lib/types/client/
+ * conversation-nodes/turn-error.js），三种 reason 才算失败：
+ *   { kind:'error',       error:{ code, message } }  模型/工具链路报错
+ *   { kind:'aborted',     reason:{ kind:'hook', reason:'deepseek-account/signed-out' } }
+ *                                                    登出导致的中止
+ *   { kind:'interrupted' }                           宿主进程在一轮中途退出
+ * 其余（completed / blocked / max-tokens / aborted-by-user）都不算错误：
+ * 用户自己按停不该报红灯。
+ *
+ * 早先这里根本不存在——turn-error 节点从来没人写，deriveState 里
+ * `findTurnError(...) === 'error'` 那条分支在桌面端是死代码，
+ * 账号登出、上下文超限、进程被中断，悬浮窗一律掉回 idle 装没事。
+ */
+export function endFailureOf(reason) {
+  if (reason === null || typeof reason !== 'object') return undefined;
+  if (reason.kind === 'error') {
+    const e = reason.error;
+    if (e && typeof e === 'object') {
+      return { code: typeof e.code === 'string' ? e.code : 'E-00', message: typeof e.message === 'string' ? e.message : '' };
+    }
+    return { code: 'E-00', message: '' };
+  }
+  if (reason.kind === 'aborted') {
+    const r = reason.reason;
+    if (r && r.kind === 'hook' && r.reason === 'deepseek-account/signed-out') {
+      return { code: 'ACCOUNT_SIGNED_OUT', message: 'Stopped because you signed out of DeepSeek.' };
+    }
+    return undefined;
+  }
+  if (reason.kind === 'interrupted') {
+    return { code: 'INTERRUPTED', message: 'The DSH process exited before this turn finished.' };
+  }
+  return undefined;
+}
+
 export function foldEvent(state, event, now) {
   const data = event && event.data ? event.data : {};
   const type = event ? event.type : undefined;
@@ -227,6 +300,18 @@ export function foldEvent(state, event, now) {
       state.runningCalls = [];
       state.callStartedAt.clear();
       state.turnTimings.set(turn, { startTime: now });
+      // 新一轮开始了，「洗完了」必须立刻让位，否则转起来的机器还挂着绿勾
+      state.doneUntil = 0;
+      /*
+       * turnTimings 只增不删，长跑会话下会无界增长（一轮一条，一个月几千条）。
+       * 实际只有两个消费者：elapsedOf/turnEndTimeOf 看当前轮，
+       * 外加详情面板的历史。留最近 50 轮足够，多的直接丢。
+       */
+      while (state.turnTimings.size > TURN_TIMINGS_LIMIT) {
+        const oldest = state.turnTimings.keys().next();
+        if (oldest.done) break;
+        state.turnTimings.delete(oldest.value);
+      }
       // 新 turn 开始，旧节点不再参与「这一步走到哪」的判定
       state.nodes = [];
       pushNode(state, { kind: 'turn-start', turn });
@@ -343,6 +428,19 @@ export function foldEvent(state, event, now) {
       if (state.turnTimings.has(turn) && state.turnTimings.get(turn).endTime === undefined) {
         state.turnTimings.get(turn).endTime = now;
       }
+      /*
+       * 失败信息藏在 data.reason 里（宿主的 turn/end 一定带 reason）。
+       * 先记 turn-error 节点，再决定要不要亮「洗完了」——顺序不能反，
+       * hasError 看的是节点序列。
+       */
+      const failure = endFailureOf(data.reason);
+      if (failure !== undefined) {
+        pushNode(state, { kind: 'turn-error', turn, code: failure.code, message: failure.message });
+      }
+      // 只有这一轮没出错才亮「洗完了」——出错的轮次归 error，不能同时报完成
+      if (failure === undefined && !hasError(state.nodes)) {
+        state.doneUntil = now + (Number.isFinite(doneHoldMs) ? doneHoldMs : DEFAULT_DONE_HOLD_MS);
+      }
       pushNode(state, { kind: 'turn-end', turn });
       return state;
     }
@@ -373,8 +471,14 @@ function lastErrorNode(nodes) {
 
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
-/** 极简 WebSocket 帧编码：只发文本、只支持单帧（状态快照远小于 64KB）。 */
-export function encodeWsText(text) {
+/**
+ * 极简 WebSocket 帧编码：只发文本/空 ping、只支持单帧（状态快照远小于 64KB）。
+ *
+ * @param {string} text 帧内容
+ * @param {number} [opcode] 1 = text（默认），9 = ping。ping 帧内容为空，
+ *   payload 长度 0，浏览器收到会自动回一个 pong——不需要我们解析任何入站帧。
+ */
+export function encodeWsText(text, opcode = 0x1) {
   const payload = Buffer.from(text, 'utf8');
   const length = payload.length;
   let header;
@@ -389,7 +493,7 @@ export function encodeWsText(text) {
     // 超大快照：不该发生，真发生了就丢掉，别让单条消息把连接搞乱
     return null;
   }
-  header[0] = 0x81; // FIN + opcode=1 (text)
+  header[0] = 0x80 | opcode; // FIN + opcode
   return Buffer.concat([header, payload]);
 }
 
@@ -492,21 +596,91 @@ function electronBinary() {
  * 主进程读不到浏览器的 localStorage，只能靠这个文件传话。反过来
  * 主进程也会在用户点右键菜单时改这个文件，所以两边都可能写——
  * 用整份覆盖（而不是增量 merge）会让两边互相抹掉对方刚改的字段。
- * 这里读-合并-写，且在同一个 tick 内完成，本机不会有竞争。
+ * 这里读-合并-写。
+ *
+ * 早先注释写的是「在同一个 tick 内完成，本机不会有竞争」——那只对
+ * **单进程内**成立。实际有宿主编排进程和 Electron 主进程两个进程在写：
+ *   宿主读 {skin} → 主进程读 {skin} → 主进程写 {skin, clickThrough}
+ *   → 宿主写 {skin, show}，clickThrough 就这么被抹了。
+ * 窗口小、难复现，但用户会看到"刚改的某个设置自己回去了"。
+ *
+ * 三个措施，都是廉价且必须的：
+ *   1. 写入原子化（临时文件 + rename）。rename 在同一文件系统内是原子的，
+ *      读的一方永远只会看到完整的旧版本或完整的新版本，不会是半截 JSON；
+ *   2. 读到的内容解析失败时**放弃这次写入**，不要当成空对象继续——
+ *      以前 catch 里回退成 {}，下一次写就把整个偏好文件清空了；
+ *   3. 合并前重复读几次，降低两进程同时进入窗口的概率（不能根除，
+ *      根除要文件锁，不值得为几十字节的配置引入依赖）。
  */
 function overlayPrefsFile() {
   return process.env.DSH_WASHER_PREFS_FILE
     || join(homedir(), '.dsh', 'dsh-washer-float-prefs.json');
 }
 
+/**
+ * 原子写：先写同目录临时文件，再 rename 覆盖。
+ * 同目录是必须的——跨文件系统 rename 会退化成复制+删除，不再原子。
+ */
+export function writeFileAtomic(file, content, mode = 0o600) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, content, { mode });
+    // writeFileSync 的 mode 只在新建时生效，已存在的老文件权限不会自动收紧
+    chmodSync(tmp, mode);
+    renameSync(tmp, file);
+    return true;
+  } catch {
+    try { rmSync(tmp, { force: true }); } catch { /* 清不掉就算了，下次覆盖 */ }
+    return false;
+  }
+}
+
+/**
+ * 读偏好文件。
+ * 返回 `undefined` = 文件不存在（可以安全地全新创建）；
+ * 返回 `null` = 文件存在但读不出来（坏了/正在被写），**这次不要写**；
+ * 返回对象 = 正常读到的内容。
+ */
+function readPrefsFile(file) {
+  let raw;
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return undefined;
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function readOverlayPrefs() {
+  const parsed = readPrefsFile(overlayPrefsFile());
+  return parsed === undefined || parsed === null ? {} : parsed;
+}
+
 export function writeOverlayPrefs(patch) {
   if (patch === null || typeof patch !== 'object') return null;
   const file = overlayPrefsFile();
-  let current = {};
-  try {
-    const raw = JSON.parse(readFileSync(file, 'utf8'));
-    if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) current = raw;
-  } catch { /* 文件不存在或坏了都按空处理 */ }
+  /*
+   * 读 3 次、每次隔 15ms：给对面进程的 rename 一个落地窗口。
+   * 前两次可能是半截数据（虽然原子写之后不该发生，但历史文件可能是
+   * 非原子写留下的），第三次仍读不出来就认定文件坏了，直接放弃写入。
+   * 返回 null 让调用方知道"这次没写成"，而不是假装成功。
+   */
+  let current;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    current = readPrefsFile(file);
+    if (current !== null) break;
+    const until = Date.now() + 15;
+    while (Date.now() < until) { /* 极短自旋；这段只在读失败时才走到 */ }
+  }
+  if (current === null) return null;
+  if (current === undefined) current = {};
   const next = Object.assign({}, current);
   // 只接受认识且类型对的字段，防止页面传脏数据把窗口搞成 0 宽
   if (patch.size === 'normal' || patch.size === 'tiny') next.size = patch.size;
@@ -531,14 +705,7 @@ export function writeOverlayPrefs(patch) {
   if (typeof patch.darkProbe === 'string' && patch.darkProbe.length <= 120) {
     next.darkProbe = patch.darkProbe;
   }
-  try {
-    writeFileSync(file, JSON.stringify(next), { mode: 0o600 });
-    // writeFileSync 的 mode 只在新建时生效，已存在的老文件权限不会自动收紧
-    chmodSync(file, 0o600);
-  } catch {
-    return null;
-  }
-  return next;
+  return writeFileAtomic(file, JSON.stringify(next), 0o600) ? next : null;
 }
 
 /**
@@ -547,15 +714,6 @@ export function writeOverlayPrefs(patch) {
  * 单独抽出来是因为它现在有两个消费者：设置页的初始状态、SSE 推送的载荷。
  * 两边必须看到同一份数据，不能一边用文件、一边用内存副本。
  */
-export function readOverlayPrefs() {
-  try {
-    const raw = JSON.parse(readFileSync(overlayPrefsFile(), 'utf8'));
-    return raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
 function spawnOverlay(ctx, opts) {
   const binary = electronBinary();
   if (!existsSync(binary)) return null;
@@ -608,6 +766,14 @@ export function apply(ctx, config) {
    * 窗口要不要 show（见 electron/main.cjs 的 whenReady）。宿主只负责把
    * 进程拉起来，显不显示不归它管。
    */
+  /*
+   * 「洗完了」保持时长跟主界面共用同一个 config 项。
+   * 桌面端原来完全没有这一档（见 createSessionState 的 doneUntil 注释），
+   * 这里的默认值也和 client.js 的 6000 对齐；cordis.patch.yml 里写的是
+   * 3000，落在 cfg 上会覆盖默认值——两边读同一个字段，行为一致。
+   */
+  setDoneHoldMs(Number(cfg.doneHoldMs));
+
   const savedPrefs = readOverlayPrefs();
   if (savedPrefs.size === 'normal' || savedPrefs.size === 'tiny') cfg.desktopOverlaySize = savedPrefs.size;
   if (typeof savedPrefs.skin === 'string' && /^[a-z]{3,12}$/.test(savedPrefs.skin)) cfg.skin = savedPrefs.skin;
@@ -626,6 +792,8 @@ export function apply(ctx, config) {
   let currentSessionId = null;
   /** 已连接的 WS 客户端 */
   const clients = new Set();
+  /** socket → 最近一次收到字节的时间（心跳判定用，见 ensureHeartbeat） */
+  const lastSeen = new Map();
   let port = 0;
   const token = randomBytes(24).toString('base64url');
   let lastPushed = '';
@@ -739,7 +907,9 @@ export function apply(ctx, config) {
       nodes: s.nodes,
       outline,
       trajectory: undefined,
-      sticky: null,
+      // 主界面用 React state 记这件事，桌面端没有 React，只能从会话状态里取。
+      // 到期不用清：deriveState 自己比 now < until，过期自然失效。
+      sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
       now,
     });
 
@@ -805,6 +975,59 @@ export function apply(ctx, config) {
     }
   }
 
+  /*
+   * ---------------------- 心跳 ----------------------
+   *
+   * 没有心跳时，"连接还活着"唯一的证据是 TCP 自己报错。而合盖、切网络、
+   * 对端进程被 SIGSTOP 时，TCP 不会立刻报——那条 socket 会一直待在
+   * clients 里，pushNow 每次遍历都往它缓冲区里写，缓冲区无限增长，
+   * 而 catch { clients.delete() } 分支几乎走不到（write 对已死 socket
+   * 通常是静默缓冲，不抛）。
+   *
+   * 做法：每 25 秒给所有连接发一个空 ping；浏览器自动回 pong，
+   * 我们只管更新 lastSeen。超过 2 个周期一点动静都没有的连接直接 destroy。
+   * 入站帧是浏览器自己生成的（带掩码），我们不解码，只当作心跳证据。
+   */
+  const HEARTBEAT_MS = 25000;
+  /** 连续两个周期没动静就认为死了 */
+  const HEARTBEAT_IDLE_MS = HEARTBEAT_MS * 2;
+  let heartbeatTimer = null;
+  function ensureHeartbeat() {
+    if (heartbeatTimer !== null) return;
+    heartbeatTimer = setInterval(() => {
+      if (clients.size === 0) {
+        if (heartbeatTimer !== null) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+        return;
+      }
+      const now = Date.now();
+      const ping = encodeWsText('', 0x9);
+      for (const socket of clients) {
+        const seen = lastSeen.get(socket) ?? 0;
+        if (now - seen > HEARTBEAT_IDLE_MS) {
+          // 两个周期完全没动静：半开连接，留着只会积压缓冲
+          try { socket.destroy(); } catch { /* noop */ }
+          clients.delete(socket);
+          lastSeen.delete(socket);
+          continue;
+        }
+        if (ping !== null) {
+          try {
+            // 写不动也说明连接坏了，直接摘掉，别等下一轮
+            if (socket.write(ping) === false && socket.writableLength > 256 * 1024) {
+              socket.destroy();
+              clients.delete(socket);
+              lastSeen.delete(socket);
+            }
+          } catch {
+            clients.delete(socket);
+            lastSeen.delete(socket);
+          }
+        }
+      }
+    }, HEARTBEAT_MS);
+    if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+  }
+
   /** 节流推送：连续工具调用时不让每条事件都走一遍序列化 */
   /**
    * 心跳：没有任何事件时，时长仍然在走，渲染端得看得到秒数。
@@ -867,15 +1090,37 @@ export function apply(ctx, config) {
       + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
     );
     clients.add(socket);
+    /*
+     * 心跳账面。浏览器收到 ping 会自动回 pong，我们只需要知道
+     * "最近有没有收到过任何字节"来判断这条连接还活着。
+     */
+    lastSeen.set(socket, Date.now());
     ensureTick();
+    ensureHeartbeat();
     // 连上先给一份当前快照，省得渲染端干等下一次变化
     const hello = encodeWsText(JSON.stringify(snapshot()));
     if (hello !== null) socket.write(hello);
-    const drop = () => { clients.delete(socket); };
+    const drop = () => {
+      clients.delete(socket);
+      lastSeen.delete(socket);
+      // 最后一条连接断了就别再让心跳空转
+      if (clients.size === 0 && heartbeatTimer !== null) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
     socket.on('close', drop);
+    socket.on('end', drop);
     socket.on('error', drop);
-    // 这是单向推送通道，客户端帧一律忽略，但必须消费掉，否则 TCP 反压
-    socket.on('data', () => {});
+    /*
+     * 这是单向推送通道，客户端帧内容一律忽略，但必须消费掉，否则 TCP 反压。
+     * 之前这里是个空函数，顺带把"连接是否还活着"也一起丢了——见下面的心跳。
+     */
+    socket.on('data', () => {
+      lastSeen.set(socket, Date.now());
+      // 半关闭：对端已经说了再见，往上写不会再有人收
+      if (socket.readableEnded) drop();
+    });
   }
 
   const server = createServer((req, res) => {
@@ -1129,6 +1374,24 @@ export function apply(ctx, config) {
     schedulePush();
   });
 
+  /*
+   * 会话关掉就把它的状态丢掉。
+   *
+   * 早先 sessions 只 set 不 delete：每开过一个会话就永久留一份
+   * createSessionState()（含最近 200 条节点、token 采样、最多 50 轮计时）。
+   * 一天开几十个会话，几天下来内存单调增长，而且没有任何东西会回收它。
+   *
+   * 不接这个事件也不会崩（地图上限就那么点），但接了才是对的：
+   * 会话生命周期结束，它攒的那一份状态就没有读者了。
+   */
+  ctx.on('session/disposed', (session) => {
+    const sessionId = resolveSessionId(session);
+    if (sessionId === null) return;
+    sessions.delete(sessionId);
+    if (currentSessionId === sessionId) currentSessionId = null;
+    schedulePush();
+  });
+
   ctx.on('agent/status', (payload) => {
     const status = payload && payload.status;
     const agent = payload && payload.agent;
@@ -1145,6 +1408,8 @@ export function apply(ctx, config) {
   ctx.effect(() => () => {
     if (pushTimer !== null) clearTimeout(pushTimer);
     if (tickTimer !== null) clearInterval(tickTimer);
+    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
     /*
      * 插件热重载时，disposer 跑的是**旧实例**，但文件里记的是新实例的 pid+token，
      * isOwnEndpoint 会拦住不删——这是对的。
@@ -1158,6 +1423,7 @@ export function apply(ctx, config) {
       try { socket.destroy(); } catch { /* noop */ }
     }
     clients.clear();
+    lastSeen.clear();
     if (server.listening) server.close();
     /*
      * 宿主走了悬浮窗也该走，否则它连着一个已经关闭的端口，

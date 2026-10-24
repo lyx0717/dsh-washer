@@ -83,9 +83,28 @@
     50%  { transform: translate(1px, -1px); }
     100% { transform: translate(0, 1px); }
   }
+  /*
+   * 切状态的预备动作：极短的一次"吸气"。
+   *
+   * 为什么不缩整机：.machine 是撑满窗口宽度的 flex 容器，scale 会以中心为
+   * 原点外扩——机身往上顶出窗口、往下压住气泡，而窗口是透明紧贴内容的，
+   * 顶出去的部分直接被裁掉，看起来像"机器跳了一下"。
+   * 改成只给机身（.skin-host）做缩放，transform-origin 钉在底部中心，
+   * 像真机器那样"沉一下"，不会碰到气泡。
+   *
+   * 也不能复用 .machine 上的 transform：data-shake 已经在上面跑无限循环，
+   * 两个 animation 抢同一个属性，后声明的直接覆盖前者——甩干时抖着抖着
+   * 就停了。所以 pop 挂在子元素上，两套动画互不干扰。
+   */
+  .machine[data-pop="1"] > .skin-host { animation: pop .24s cubic-bezier(.34, 1.56, .64, 1); }
+  @keyframes pop {
+    0%   { transform: scale(1) translateY(0); }
+    35%  { transform: scale(1.045) translateY(1px); }
+    100% { transform: scale(1) translateY(0); }
+  }
+  .machine > .skin-host { transform-origin: 50% 100%; }
 
-  svg { display: block; image-rendering: pixelated; }
-  /* 64x78 的像素画，按 1.75 倍放大到 112x136——整数倍会糊，非整数倍才锐 */
+  svg { display: block; image-rendering: pixelated; }  /* 64x78 的像素画，按 1.75 倍放大到 112x136——整数倍会糊，非整数倍才锐 */
   .washer { width: 112px; height: 136px; }
 
   /*
@@ -168,6 +187,156 @@
    */
   body[data-through="1"] .machine,
   body[data-through="1"] .bubble { opacity: .42; }
+
+  /* ---------- 门外道具层 ---------- */
+  /*
+   * 视频里那套"动画语法"的关键不在滚筒转多快，而在机身之外的反应：
+   * 等人时头顶飘一个问号、故障时一道闪电、洗完亮三颗星。
+   * 我们的表达原来全缩在机身里 + 一颗 7px 小灯，所以机器在动但没情绪。
+   *
+   * 实现约束（踩过就知道）：
+   * - 必须 pointer-events:none。.grab 是整机拖拽区，道具层压在它上面会
+   *   把拖拽吃掉，表现为"机器突然拖不动了"。
+   * - 只能动 transform / opacity。透明置顶窗口里动 width/left 会每帧重排，
+   *   功耗直接翻倍，笔记本上很明显。
+   * - 道具层贴在机器上沿之上，不占布局（position:absolute），
+   *   否则窗口内容会变高，把气泡顶出可见区。
+   */
+  .props {
+    /*
+     * 道具层压在机身顶部那一条上（bottom:100% 即机器上沿）。
+     * 高度 22px 而不是 34px：窗口只有 200px 高，机器 136 + 气泡约 24，
+     * 上方只剩约 40px 余量，再高就顶到窗口边缘被裁掉。
+     * 每个道具各自用 bottom 精确定位，不用 flex 对齐——三个道具形状不同，
+     * flex-end 会让它们按各自盒模型贴底，看起来高低不齐。
+     */
+    /*
+     * bottom: calc(100% + 2px)：留 2px 呼吸缝。
+     * 贴死 100% 时，道具层最低那 6px 会被机器的圆角/描边压住——
+     * 待机呼吸光和星星底座正好卡在那儿，看起来像被削掉半截。
+     */
+    position: absolute;
+    left: 0; right: 0; bottom: calc(100% + 2px);
+    height: 20px;
+    pointer-events: none;
+    z-index: 20;
+  }
+  /*
+   * 居中的做法很关键：所有道具都用 left: calc(50% - 半宽) 而非
+   * left:50% + transform:translateX(-50%)。
+   *
+   * 因为问号/闪电/呼吸光各自都有 transform 动画（pop-in / hover / twitch /
+   * glow-breathe），keyframes 里的 transform 会整个替换掉元素上的
+   * transform 值——translateX(-50%) 一旦被覆盖，道具会当场右跳半个宽度，
+   * 动画结束又跳回来，看着就是"抖了一下"。
+   * 用 left 做居中，transform 就能完全留给动画自由使用。
+   */
+  .props > * {
+    position: absolute;
+    opacity: 0;
+    will-change: transform, opacity;
+  }
+
+  /* 等待确认：头顶一个问号，慢慢上下浮，门缝透出暖光 */
+  .props .p-q {
+    font: 700 15px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--warn);
+    text-shadow: 0 0 8px rgba(245, 185, 58, .75);
+    bottom: 1px;
+    left: calc(50% - 4px);   /* 问号字面偏左，用 -4px 让视觉重心落在中线上 */
+  }
+  .machine[data-state="waiting"] .props .p-q {
+    animation: pop-in .28s cubic-bezier(.34, 1.56, .64, 1) both,
+               hover 2.2s ease-in-out .28s infinite;
+  }
+  .machine[data-state="waiting"] .door,
+  .machine[data-state="waiting"] .dw-aw-ring,
+  .machine[data-state="waiting"] .dw-pw .door {
+    filter: drop-shadow(0 0 6px rgba(245, 185, 58, .55));
+  }
+
+  /* 故障：一道闪电，高频短促地抽动一下再停 */
+  .props .p-bolt {
+    font: 700 16px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--bad);
+    text-shadow: 0 0 9px rgba(229, 72, 77, .8);
+    bottom: 0;
+    left: calc(50% - 8px);   /* ⚡ 字形更宽，半宽约 8px */
+  }
+  .machine[data-state="error"] .props .p-bolt {
+    animation: pop-in .18s ease-out both,
+               twitch .72s steps(1, end) .18s infinite;
+  }
+
+  /* 洗完了：三颗星依次亮起，然后一起淡下去（只演一轮，不吵） */
+  .props .p-stars { display: flex; gap: 3px; bottom: 3px; left: calc(50% - 10.5px); }  /* 3*5px + 2*3px = 21px，半宽 10.5 */
+  /*
+   * 星星的居中同样只靠 left 算出来（21px 宽），容器本身不带 transform，
+   * 这样每颗星的 star-pop 可以放心用 scale。若改成 translateX(-50%)，
+   * 子元素的 scale 不会波及父级，但父级一旦被 keyframes 写 transform
+   * 居中就会失效——保持容器无 transform 是最省心的写法。
+   */
+  .props .p-stars i {
+    width: 5px; height: 5px;
+    background: var(--ok);
+    clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+    box-shadow: 0 0 5px var(--ok);
+  }
+  .machine[data-state="done"] .props .p-stars {
+    animation: stars-run 3.2s ease-out both;
+  }
+  .machine[data-state="done"] .props .p-stars i:nth-child(1) { animation: star-pop .34s ease-out both; }
+  .machine[data-state="done"] .props .p-stars i:nth-child(2) { animation: star-pop .34s .12s ease-out both; }
+  .machine[data-state="done"] .props .p-stars i:nth-child(3) { animation: star-pop .34s .24s ease-out both; }
+
+  /* 待机：一团缓慢呼吸的冷光，安静但不死 */
+  .props .p-glow {
+    bottom: 5px; width: 26px; height: 8px; left: calc(50% - 13px); border-radius: 50%;
+    /*
+     * 呼吸光要"看得见但不抢戏"。
+     * 初版透明度 .55 再叠 blur(2px)，在深色桌面上等于消失——
+     * 截图里只剩一道灰雾，跟没加一样。
+     * 提亮到 .8、去掉 blur（blur 会把它摊成一团平均色，反而更看不见），
+     * 改用两层径向渐变做出中间实、边缘虚的灯罩感。
+     */
+    background:
+      radial-gradient(ellipse at 50% 50%, rgba(150, 210, 255, .8), rgba(120, 180, 235, .25) 55%, transparent 76%);
+  }
+  .machine[data-state="idle"] .props .p-glow { animation: glow-breathe 5.5s ease-in-out infinite; }
+  .machine[data-state="off"] .props > * { animation: none; opacity: 0; }
+
+  /*
+   * 极简态（64px 机器）里道具会挤成一坨糊，整层关掉——
+   * 那个档位的定位本来就是"只剩指示灯"。
+   */
+  body[data-size="tiny"] .props { display: none; }
+
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(.4) translateY(6px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  @keyframes hover {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-3px); }
+  }
+  @keyframes twitch {
+    0%, 42%, 100% { transform: translateX(0); }
+    43%, 51%      { transform: translateX(-2px); }
+    47%, 55%      { transform: translateX(2px); }
+  }
+  @keyframes star-pop {
+    from { opacity: 0; transform: scale(.2); }
+    60%  { opacity: 1; transform: scale(1.25); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  @keyframes stars-run {
+    0%, 62% { opacity: 1; }
+    100%    { opacity: .34; }
+  }
+  @keyframes glow-breathe {
+    0%, 100% { opacity: .18; transform: scale(.86); }
+    50%      { opacity: .5;  transform: scale(1.06); }
+  }
 
   /* ---------- 尺寸档位 ---------- */
   /* 正常态：132x200，机器 + 气泡 */
@@ -271,6 +440,58 @@
   body:not([data-theme="light"]) .dw-aw-body {
     background: linear-gradient(172deg, #3d4650 0%, #333b45 52%, #262d35 100%);
   }
+  /* ---------- 状态光：整机被状态色"照亮" ---------- */
+  /*
+   * 视频里每个镜头都有这层光晕，是"远看就知道在忙什么"的关键。
+   * 我们的状态色早就有（--led / --dw-sig），但只落在一颗 7px 小灯上。
+   *
+   * 做法是把同一个颜色加成门圈/机身的外发光，而不是新造一套配色——
+   * 一旦两处颜色不同源，迟早会互相打架（主题切换时尤其明显）。
+   * glow 半径刻意压小：透明窗口上大半径 box-shadow 是逐像素算的，
+   * 半径翻倍功耗大概翻两番，80px 的物件上 12px 已经够看。
+   */
+  .machine > .skin-host {
+    --glow: transparent;
+    transition: filter .5s ease;
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  .machine[data-state="starting"] > .skin-host,
+  .machine[data-state="washing"] > .skin-host,
+  .machine[data-state="rinsing"] > .skin-host,
+  .machine[data-state="spinning"] > .skin-host,
+  .machine[data-state="draining"] > .skin-host {
+    --glow: rgba(58, 160, 255, .55);
+    filter: drop-shadow(0 0 7px var(--glow));
+  }
+  .machine[data-state="waiting"] > .skin-host { filter: drop-shadow(0 0 7px rgba(245, 185, 58, .5)); }
+  .machine[data-state="error"] > .skin-host { filter: drop-shadow(0 0 8px rgba(229, 72, 77, .6)); }
+  .machine[data-state="done"] > .skin-host { filter: drop-shadow(0 0 6px rgba(46, 224, 106, .45)); }
+  /* 待机不要发光，静就得真的静 */
+  .machine[data-state="idle"] > .skin-host,
+  .machine[data-state="off"] > .skin-host { filter: none; }
+  body[data-size="tiny"] .machine > .skin-host { filter: none; }
+
+  /* ---------- 减弱动态 / 不可见时暂停 ---------- */
+  /*
+   * 减弱动态效果时，门外道具只保留"亮/不亮"的静态信息，不再飘、不再抖。
+   * 必须自己写：style.css 里那几条 @media 只覆盖 dock 的 sprite，
+   * 浮窗是另一个页面，样式表不通。
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .machine, .machine[data-pop="1"], .props > * { animation: none !important; }
+    .machine[data-state="waiting"] .props .p-q,
+    .machine[data-state="error"] .props .p-bolt,
+    .machine[data-state="done"] .props .p-stars,
+    .machine[data-state="idle"] .props .p-glow { opacity: .9; }
+  }
+  /*
+   * 窗口不可见时停掉动画。
+   * 透明置顶窗口被完全遮住时 Chromium 不一定停合成器，动画照跑、白烧电。
+   * visibilitychange 是这里唯一可靠的信号（见脚本里的监听）。
+   */
+  html[data-hidden="1"] .machine,
+  html[data-hidden="1"] .props > *,
+  html[data-hidden="1"] .px-wheel { animation-play-state: paused !important; }
 
 </style>
 </head>
@@ -279,6 +500,13 @@
   <div class="machine" id="machine" data-blink="0" data-shake="0"
        style="--water:7;--foam:0;--led:#7c8896;--spin-dur:0s;--spin-play:paused">
     <div class="grab" id="grab"></div>
+    <!-- 门外道具层：问号 / 闪电 / 三颗星 / 待机呼吸光，全部由 data-state 驱动 -->
+    <div class="props" aria-hidden="true">
+      <span class="p-q">?</span>
+      <span class="p-bolt">⚡</span>
+      <span class="p-stars"><i></i><i></i><i></i></span>
+      <span class="p-glow"></span>
+    </div>
     <div class="skin-host washerskin" id="skinHost"></div>
   </div>
   <div class="bubble" id="bubble">
@@ -353,8 +581,16 @@
   function render(snap) {
     var s = snap.state || 'off';
     var v = VISUAL[s] || VISUAL.idle;
+    var prev = machine.dataset.state;
 
-    el('st').textContent = LABEL[s] || s;
+    /*
+     * 故障时别再只写「故障」二字——用户看不到主界面的详情面板，
+     * 光一个红灯加两个字，什么也判断不了。快照里的 errorCode 是
+     * Host 端从 turn/end 的 reason 里翻译出来的（E-10 账号、E-30 上下文、
+     * E-40 中断……），拼在状态文字后面，一眼就知道该干嘛。
+     */
+    var errCode = s === 'error' && snap.errorCode ? snap.errorCode : '';
+    el('st').textContent = (LABEL[s] || s) + (errCode ? ' · ' + errCode : '');
     el('st').dataset.s = s;
     el('tm').textContent = snap.durationText || '--:--';
 
@@ -372,6 +608,24 @@
     // 甩干抖得最厉害，洗涤时轻微抖——这是"在干活"的体感
     machine.dataset.shake = s === 'spinning' ? '2' : (s === 'washing' || s === 'draining' ? '1' : '0');
     machine.dataset.blink = v.blink > 0 ? (v.blink < 0.5 ? '2' : '1') : '0';
+
+    // 状态落到 .machine 上，门外道具层靠它选表情（问号/闪电/星星/呼吸光）
+    machine.dataset.state = s;
+
+    /*
+     * 切状态的"预备动作"。
+     * 静态切换在任何屏幕上都会显得假——真实的东西动之前会先蓄一下。
+     * 这里只在"真的换了状态"时打一次 one-shot 动画，避免每帧重放。
+     * 重启 CSS 动画必须先删属性再强制 reflow，同一帧里连着设不会重播。
+     */
+    if (prev !== undefined && prev !== s && s !== 'off') {
+      delete machine.dataset.pop;
+      void machine.offsetWidth;
+      machine.dataset.pop = '1';
+      setTimeout(function () {
+        delete machine.dataset.pop;
+      }, 260);
+    }
   }
 
   /*
@@ -443,9 +697,25 @@
       curState = null;
       if (lastSnap !== null) { buildMachine(lastSnap); paintLamp(lastSnap.state || 'off'); }
     }
-    // 档位变了窗口尺寸也变了，角落矩形得重新上报
-    reportCorner();
+    /*
+     * 这里原本有一行 reportCorner()——「可点的洞」那套做法删掉之后，
+     * 主进程的 setCornerRect / preload 里的桥一起没了，只剩这个调用点。
+     * 结果是每次切档位/皮肤都抛 ReferenceError，把 applyPrefs 后半段全部
+     * 吞掉（现在它正好是最后一行所以看不出来，但之后再往下加逻辑就会静默失效）。
+     * 窗口尺寸由主进程自己 setSize 管，页面不需要上报任何矩形。
+     */
   }
+  /*
+   * 不可见就停动画（见样式表 html[data-hidden] 那段）。
+   * 浮窗是常驻进程，切到别的 Space、被全屏应用盖住时都收不到别的信号，
+   * 只有 visibilitychange 会告诉我们"现在没人看"。
+   */
+  function syncHidden() {
+    document.documentElement.dataset.hidden = document.hidden ? '1' : '0';
+  }
+  document.addEventListener('visibilitychange', syncHidden);
+  syncHidden();
+
   if (host) {
     host.state().then(function (st) {
       if (st) applyPrefs({ size: st.size, skin: st.skin, dark: st.dark });

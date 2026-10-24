@@ -32,8 +32,15 @@ const SIZES = {
   normal: { width: 132, height: 200 },
   tiny: { width: 76, height: 96 },
 };
-const WIN_WIDTH = SIZES.normal.width;
-const WIN_HEIGHT = SIZES.normal.height;
+/*
+ * 尺寸**不能**用一组常量。窗口会切档（normal 132x200 / tiny 76x96），
+ * 曾经这里固定写 SIZES.normal，结果极简态下贴边、详情面板定位全按
+ * normal 算：贴边差 56px，详情面板在机身右侧错开一大截。
+ * 一律用 winSize() 取当前档位，别再引回常量。
+ */
+function winSize() {
+  return SIZES[sizeMode] || SIZES.normal;
+}
 /** 详情面板尺寸 */
 const DETAIL_WIDTH = 260;
 const DETAIL_HEIGHT = 380;
@@ -75,13 +82,39 @@ let visible = true;
 let reduceMotion = false;
 
 /**
- * 读端点文件，并且**确认写它的进程还活着**。
+ * 读端点文件，并且**确认那一头的宿主真的在听**。
  *
  * 文件是插件卸载时故意留下的（见 index.js 的注释），所以里面可能是一份
  * 上一代宿主的记录，端口早就不通了。光看文件会把悬浮窗送到死端口上，
  * 表现就是永远"未连接"——这个坑实测踩过一次。
- * 用 process.kill(pid, 0) 探活：不杀进程，只是问"这个 pid 存在吗"。
+ *
+ * 早先这里用 process.kill(pid, 0) 探活：不杀进程，只是问"这个 pid 存在吗"。
+ * 那是错的——**pid 会被复用**。宿主崩溃重启后新进程可能拿到同一个 pid，
+ * 于是旧端点文件被判成有效，浮窗连到一个没人监听的端口上，症状和"文件过期"
+ * 一模一样，却根本查不出来。
+ * 现在改成发一次真请求：能回 200 就说明那头有个活着的宿主，pid 对不对不重要。
+ *
+ * 同步调用（Atomics.wait 睡的是主进程线程）：探活最多等 300ms，可以接受，
+ * 换来的是调用方不用改成 async——那条链路上全是同步代码。
  */
+const HEALTH_TIMEOUT_MS = 300;
+
+function probeHealth(info) {
+  const { spawnSync } = require('node:child_process');
+  const script = "const h=require('node:http');"
+    + `const r=h.get({host:'127.0.0.1',port:${info.port},path:'/dsh-washer/health',`
+    + `headers:{authorization:'Bearer ${info.token}'},timeout:${HEALTH_TIMEOUT_MS}},`
+    + 's=>{let b="";s.on("data",c=>{b+=c});s.on("end",()=>{process.exit(s.statusCode===200?0:1)})});'
+    + 'r.on("error",()=>process.exit(1));r.on("timeout",()=>{r.destroy();process.exit(1)});';
+  const res = spawnSync(process.execPath, ['-e', script], {
+    timeout: HEALTH_TIMEOUT_MS + 700,
+    stdio: 'ignore',
+    // 这里只是探活，不需要 Electron 的运行时
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  });
+  return res.status === 0;
+}
+
 function readEndpoint() {
   let info = null;
   try {
@@ -90,6 +123,10 @@ function readEndpoint() {
     return null;
   }
   if (info === null || typeof info.port !== 'number' || typeof info.token !== 'string') return null;
+  /*
+   * pid 只作为**快速排除**：进程明确不存在时不必再花 300ms 探活。
+   * 活着也不能直接放行，还得问端口那头是不是同一个宿主（see probeHealth）。
+   */
   if (typeof info.pid === 'number') {
     try {
       process.kill(info.pid, 0);
@@ -98,7 +135,7 @@ function readEndpoint() {
       if (err.code === 'ESRCH') return null;
     }
   }
-  return info;
+  return probeHealth(info) ? info : null;
 }
 
 /**
@@ -147,19 +184,65 @@ function notifyHost(patch) {
  */
 const PREFS_FILE = join(homedir(), '.dsh', 'dsh-washer-float-prefs.json');
 
+/**
+ * 读偏好文件。三种结果，区别很重要：
+ *   对象       = 正常读到的内容
+ *   undefined  = 文件不存在（可以全新创建）
+ *   null       = 文件存在但读不出来（坏了 / 正被对面进程替换）
+ *
+ * 早先这里 catch 里统一回退成 `{}`，于是 watchdog 在文件被非原子写
+ * 撕成半截 JSON 的那一瞬间读到空对象，接着 writeFloatPrefs 拿 `{}` 做
+ * 合并基底写回去——**一次抹掉全部偏好**。宁可不写也不能抹盘。
+ */
 function readFloatPrefs() {
+  let raw;
   try {
-    const p = JSON.parse(readFileSync(PREFS_FILE, 'utf8'));
-    return p !== null && typeof p === 'object' ? p : {};
-  } catch { return {}; }
+    raw = readFileSync(PREFS_FILE, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return undefined;
+    return null;
+  }
+  try {
+    const p = JSON.parse(raw);
+    return p !== null && typeof p === 'object' && !Array.isArray(p) ? p : null;
+  } catch { return null; }
 }
 
+/**
+ * 原子写：临时文件 + rename。
+ *
+ * 宿主编排进程也会写这个文件（设置页改尺寸/皮肤时），而且它是用
+ * writeFileSync 直接覆盖的——truncate 之后、写完之前存在一个可被读到的
+ * 空窗。两进程并发时读的一方能拿到半截 JSON 或空文件。两边都改成
+ * 原子写之后，读的一方永远只会看到完整的旧值或完整的新值。
+ *
+ * 同目录的临时文件是必须的：跨文件系统 rename 会退化成复制+删除。
+ */
 function writeFloatPrefs(patch) {
-  const next = Object.assign({}, readFloatPrefs(), patch);
+  const base = readFloatPrefs();
+  // 读失败就放弃这次写入，别拿空对象当基底把文件清空
+  if (base === null) {
+    console.warn('[dsh-washer] 偏好文件读不出来，跳过这次写入以免覆盖');
+    return null;
+  }
+  const next = Object.assign({}, base, patch);
+  const tmp = `${PREFS_FILE}.${process.pid}.tmp`;
+  const fsMod = require('node:fs');
   try {
-    require('node:fs').writeFileSync(PREFS_FILE, JSON.stringify(next), { mode: 0o600 });
-  } catch { /* 记不住不是致命问题 */ }
+    fsMod.writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 });
+    fsMod.chmodSync(tmp, 0o600);
+    fsMod.renameSync(tmp, PREFS_FILE);
+  } catch {
+    try { fsMod.rmSync(tmp, { force: true }); } catch { /* noop */ }
+    return null;
+  }
   return next;
+}
+
+/** 只读不问：拿不到就当没有，不触发写入路径 */
+function floatPrefsOrEmpty() {
+  const p = readFloatPrefs();
+  return p === null || p === undefined ? {} : p;
 }
 
 /** 启动参数优先，其次本地记的，最后默认 */
@@ -195,10 +278,11 @@ function snapToEdges() {
   // 实测窗口会被一路推到屏幕外。
   if (snapping) return;
   const [x, y] = win.getPosition();
-  const display = screen.getDisplayMatching({ x, y, width: WIN_WIDTH, height: WIN_HEIGHT });
+  const { width, height } = winSize();
+  const display = screen.getDisplayMatching({ x, y, width, height });
   const a = display.workArea;
-  const right = a.x + a.width - WIN_WIDTH;
-  const bottom = a.y + a.height - WIN_HEIGHT;
+  const right = a.x + a.width - width;
+  const bottom = a.y + a.height - height;
   let nx = x;
   let ny = y;
   if (Math.abs(x - a.x) < SNAP_DISTANCE) nx = a.x;
@@ -229,8 +313,9 @@ function savePosition() {
  */
 function defaultPosition() {
   const area = screen.getPrimaryDisplay().workArea;
+  const { width } = winSize();
   return {
-    x: Math.round(area.x + area.width - WIN_WIDTH - 24),
+    x: Math.round(area.x + area.width - width - 24),
     y: Math.round(area.y + 24),
   };
 }
@@ -336,8 +421,19 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   win.once('ready-to-show', () => {
-    // 启动时就该隐着的话别先亮一下再藏（会闪一帧）
-    if (visible) win.show();
+    /*
+     * 启动时就该隐着的话别先亮一下再藏（会闪一帧）。
+     *
+     * 这里必须显式 show()/hide()，不能只写 `if (visible) win.show()` 然后
+     * 指望 watchPrefs 兜后路——那正是曾经的坑：
+     *   app.whenReady 里 `visible = prefs.show`（true），
+     *   setVisible 里第一行 `if (want === visible) return;`，
+     *   于是 watchFile 每次读到 show=true 都和 visible 相等、直接 return，
+     *   窗口虽然创建了却从来没被 show 过，表现为「设置里开关是开的，
+     *   但屏幕上什么都没有」，而窗口句柄一直存在（onscreen=false）。
+     * 现在两个方向都落一次，让状态和实际可见性强制对齐。
+     */
+    if (visible) win.show(); else win.hide();
     /*
      * 启动时恢复上次的穿透状态。
      *
@@ -346,7 +442,7 @@ function createWindow() {
      * 不能走 setClickThrough 的完整路径——那条路会写回偏好文件，
      * 触发 watchFile 再反过来调一次，绕圈。这里直接设状态 + 落一次区域规则。
      */
-    const p = readFloatPrefs();
+    const p = floatPrefsOrEmpty();
     if (p.clickThrough === true) {
       clickThrough = true;
       win.setIgnoreMouseEvents(true, { forward: true });
@@ -492,7 +588,7 @@ function setSizeMode(mode) {
   const size = SIZES[next];
   // 宽度变了，贴边的窗口要跟着挪，否则会被屏幕边缘裁掉
   const [x, y] = win.getPosition();
-  const display = screen.getDisplayMatching({ x, y, width: WIN_WIDTH, height: WIN_HEIGHT });
+  const display = screen.getDisplayMatching({ x, y, width: size.width, height: size.height });
   const a = display.workArea;
   let nx = x;
   if (x + size.width > a.x + a.width) nx = a.x + a.width - size.width;
@@ -543,11 +639,12 @@ function openDetail() {
     return;
   }
   const pos = readPosition() || defaultPosition();
-  const display = screen.getDisplayMatching({ x: pos.x, y: pos.y, width: WIN_WIDTH, height: WIN_HEIGHT });
+  const { width, height } = winSize();
+  const display = screen.getDisplayMatching({ x: pos.x, y: pos.y, width, height });
   const a = display.workArea;
   const gap = 10;
   let dx = pos.x - DETAIL_WIDTH - gap;
-  if (dx < a.x) dx = pos.x + WIN_WIDTH + gap;
+  if (dx < a.x) dx = pos.x + width + gap;
   if (dx + DETAIL_WIDTH > a.x + a.width) dx = Math.max(a.x, a.x + a.width - DETAIL_WIDTH);
   // 底边对齐洗衣机，但不许超出工作区
   let dy = pos.y;
@@ -648,9 +745,18 @@ function watchPrefs() {
     // 用 watchFile 的轮询代替：只在文件确实存在后才 watch 简单可靠。
     prefWatcher = require('node:fs').watchFile(PREFS_FILE, { interval: 400 }, (cur, prev) => {
       if (cur.mtimeMs === prev.mtimeMs && cur.size === prev.size) return;
+      /*
+       * 读不出来（null）就**整段跳过**这次回调，不要用 {} 兜底：
+       * 对面进程可能正在原子替换这个文件，此刻读到的是过渡态。
+       * 400ms 后下一次轮询会再试，晚一拍远好于拿空对象做判断
+       * （空对象会让 nextShow 回落到当前值、nextSize 回落到当前值，
+       *  看着无害，但接着若有任何 writeFloatPrefs 就会把盘抹干净）。
+       */
       const p = readFloatPrefs();
-      const nextSize = SIZES[p.size] !== undefined ? p.size : sizeMode;
-      const nextSkin = typeof p.skin === 'string' ? p.skin : skin;
+      if (p === null) return;
+      const prefs = p === undefined ? {} : p;
+      const nextSize = SIZES[prefs.size] !== undefined ? prefs.size : sizeMode;
+      const nextSkin = typeof prefs.skin === 'string' ? prefs.skin : skin;
       /*
        * show 也要跟。宿主在启动时按设置决定拉不拉进程，但进程起来之后
        * 用户在设置页把开关拨掉，这里必须跟着隐藏——早期版本只处理
@@ -659,18 +765,18 @@ function watchPrefs() {
        * 只有字段确实是布尔值才动：偏好文件是读-合并-写的，
        * 缺字段时不能让窗口莫名其妙闪一下。
        */
-      const nextShow = typeof p.show === 'boolean' ? p.show : visible;
+      const nextShow = typeof prefs.show === 'boolean' ? prefs.show : visible;
       /*
        * 穿透同理。它原来是浮窗上双击切换的，但用户要求整机可拖，
        * 而 Chromium 的拖拽区会吞掉 dblclick —— 两个不能共存，于是入口
        * 挪到设置页：设置页 POST → 宿主写偏好文件 → 这里读到就应用。
        */
-      const nextThrough = typeof p.clickThrough === 'boolean' ? p.clickThrough : clickThrough;
+      const nextThrough = typeof prefs.clickThrough === 'boolean' ? prefs.clickThrough : clickThrough;
       /*
        * 主题：Web 端把宿主 GUI 的明暗 POST 进来。只认布尔值，
        * 缺字段时不动（偏好文件是读-合并-写的，不能让窗口莫名闪一下）。
        */
-      const nextDark = typeof p.dark === 'boolean' ? p.dark : themeDark;
+      const nextDark = typeof prefs.dark === 'boolean' ? prefs.dark : themeDark;
       if (nextSize !== sizeMode) setSizeMode(nextSize);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
@@ -683,7 +789,7 @@ function watchPrefs() {
 app.whenReady().then(() => {
   // 宿主用 --size / --skin 把设置页里的偏好带进来（主进程读不到 localStorage）。
   // 命令行优先，其次是上一次在右键菜单里改的值。
-  const prefs = readFloatPrefs();
+  const prefs = floatPrefsOrEmpty();
   const argSize = argValue('--size');
   const argSkin = argValue('--skin');
   sizeMode = SIZES[argSize] !== undefined
@@ -705,13 +811,20 @@ app.whenReady().then(() => {
   // 启动时的明暗：沿用上一次 Web 端送进来的值，避免启动瞬间先闪一次默认配色。
   if (typeof prefs.dark === 'boolean') themeDark = prefs.dark;
 
-  watchPrefs();
-
-  // 单实例：重复点启动只是把已有窗口提到前面
+  /*
+   * 单实例：重复点启动只是把已有窗口提到前面。
+   *
+   * 这一步必须排在 watchPrefs() **之前**。早先 watchPrefs 在前面，
+   * 拿不到锁的那个副本在 app.quit() 之前已经挂上了偏好文件的轮询，
+   * 一旦这几十毫秒里文件有变动，它会抢着 setSizeMode/setSkin ——
+   * 那些函数会把值写回文件并 notifyHost，等于让一个正在退出的副本
+   * 去改主人的窗口配置。
+   */
   if (!app.requestSingleInstanceLock()) {
     app.quit();
     return;
   }
+  watchPrefs();
   app.on('second-instance', () => {
     if (win === null || win.isDestroyed()) return;
     win.show();
