@@ -526,11 +526,28 @@ function notify(title, body) {
   }
 }
 
-function setVisible(next) {
+/**
+ * 显示 / 隐藏悬浮窗。
+ *
+ * `persist` 决定这次改动算不算"用户的偏好"：
+ *
+ *   用户拨设置页开关、点右键菜单的显示/隐藏 → persist=true，
+ *   写进偏好文件，下次启动照着来。
+ *
+ *   程序退出前顺手把窗口藏起来 → persist=false。
+ *   这时隐藏只是退出的副作用，不代表"用户不想看了"，
+ *   记下来就会变成：下次开机浮窗不出现，而用户从没关过它。
+ *
+ * 这个区分是补一个真实踩过的坑：退出路径原来一律 setVisible(false)，
+ * 于是进程崩溃重启、系统关机、宿主重载插件……任何一次退出都把
+ * show 永久写成了 false。表现是"昨天还好好的，今天浮窗不见了"。
+ */
+function setVisible(next, persist = true) {
   const want = next === true;
   if (want === visible) return;
   visible = want;
-  writeFloatPrefs({ show: want });
+  // 只有用户意图才落盘；退出路径不动偏好文件，下次启动还是上一次的选择
+  if (persist) writeFloatPrefs({ show: want });
   notifyHost({ show: want });
   if (win === null || win.isDestroyed()) return;
   if (want) {
@@ -765,10 +782,11 @@ function showMenu() {
     },
     { type: 'separator' },
     /*
-     * 退出前先把 show 关掉再退。
-     * 否则：点菜单退出 → 窗口没了，但设置页的「显示悬浮窗」还亮着"开"，
-     * 两边状态分叉，用户以为开关失灵。
-     * 先 setVisible(false)（它会写偏好文件 + 通知宿主），再退出进程。
+     * 这是用户主动关掉浮窗，跟拨设置页开关同义，所以要落盘（persist 默认 true）。
+     * 下次启动不该自己冒出来。
+     *
+     * 注意别和 washer:quit 那条路径混为一谈：那条是宿主/程序发起的退出，
+     * 用户的意愿没变，不能写偏好。这里是人点的，意愿变了。
      */
     { label: '退出悬浮窗', click: () => { setVisible(false); app.quit(); } },
   ]);
@@ -911,19 +929,30 @@ app.whenReady().then(() => {
   ipcMain.on('washer:open-detail', () => openDetail());
   ipcMain.on('washer:close-detail', () => closeDetail());
   /*
-   * 退出前先关 show：这条路径同样不能只退进程。
-   * 用 setVisible(false) 而不是裸 app.quit()，让它走"写偏好 + 通知宿主 + 隐藏"这套。
+   * 退出前先藏窗口，避免退出动画期间窗口还杵在那儿。
+   *
+   * persist=false：隐藏是退出的副作用，不是"用户不想看了"。
+   * 写成偏好就会让下一次启动不显示浮窗——用户明明只是重启了一下程序。
    */
-  ipcMain.on('washer:quit', () => { setVisible(false); app.quit(); });
+  ipcMain.on('washer:quit', () => { setVisible(false, false); app.quit(); });
 });
 
 app.on('will-quit', () => {
   /*
-   * 兜底：⌘Q / dock 右键退出 / 系统关机等路径不经过菜单，不会调 setVisible。
-   * 进程都要没了，此时窗口对用户而言就是"关了"，所以补一次 show:false 回传，
-   * 免得设置页留着个"开"的假象。
+   * ⌘Q / dock 右键退出 / 系统关机都会到这里，不经过菜单。
+   *
+   * 早先这里写的是 `if (visible) writeFloatPrefs({ show: false })`，
+   * 理由是"进程都没了，对用户而言就是关了，别让设置页留个开着的假象"。
+   * 这个理由对**这一次会话**成立，但它把结论错误地持久化成了**偏好**：
+   *
+   *   宿主重载插件 → 进程重开 → 读到 show:false → 浮窗不出现
+   *   系统关机再开机 → 同上
+   *
+   * 用户从没关过浮窗，却再也见不到它，而且没有任何提示。
+   *
+   * 现在的约定：偏好文件只记**用户的意图**。程序退出不改它。
+   * 设置页的开关状态由宿主按"进程是否在跑"自己呈现，不需要这里代劳。
    */
-  if (visible) notifyHost({ show: false });
   if (prefWatcher !== null) { require('node:fs').unwatchFile(PREFS_FILE); prefWatcher = null; }
   globalShortcut.unregisterAll();
   closeDetail();

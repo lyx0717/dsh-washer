@@ -1634,6 +1634,55 @@ await test('dock 停靠条无背景无边框（融入原生窗口）', () => {
     '.dw-strip 不应再有阴影');
 });
 
+await test('退出程序不能把「不显示浮窗」写成用户偏好', () => {
+  /*
+   * 用户报「浮窗不见了，是不是版本不对」。
+   *
+   * 真因不是版本：main.cjs 的 will-quit 原来无条件写 show:false，
+   * 于是宿主重载插件、⌘Q、系统关机……任何一次正常退出都被记成
+   * 「用户关掉了浮窗」，下次启动就再也见不到它。
+   * 用户从没点过那个开关，却要自己把它找回来。
+   *
+   * 约定：偏好文件只存**用户的意图**。退出只是副作用，不许改偏好。
+   */
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+
+  // will-quit 里不能再出现写 show 的动作
+  const willQuit = mainSrc.slice(mainSrc.indexOf("app.on('will-quit'"));
+  /*
+   * 先剥掉注释再断言：这段代码的注释里**故意**引用了旧写法
+   * （"早先这里写的是 writeFloatPrefs({ show: false })"），
+   * 不剥离就会把解释文字当成代码，测试假红。
+   */
+  const willQuitBody = willQuit.slice(0, willQuit.indexOf('});') + 3)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  assert.ok(!/writeFloatPrefs\s*\(/.test(willQuitBody),
+    'will-quit 不能写偏好文件——退出不是用户意图，写了下次启动浮窗就消失');
+  assert.ok(!/show\s*:\s*false/.test(willQuitBody),
+    'will-quit 不能把 show 写成 false');
+
+  // setVisible 必须支持"不落盘"，退出路径要用它
+  assert.ok(/function setVisible\s*\(\s*next\s*,\s*persist/.test(mainSrc),
+    'setVisible 需要 persist 参数，区分「用户改偏好」和「退出顺手隐藏」');
+  assert.ok(/setVisible\(\s*false\s*,\s*false\s*\)/.test(mainSrc),
+    '退出路径（washer:quit）必须用 setVisible(false, false) 而不是 setVisible(false)');
+});
+
+await test('用户主动关浮窗仍然要记住', () => {
+  /*
+   * 上一条的反面：右键菜单「退出悬浮窗」是用户明确表态，
+   * 必须落盘，否则下次启动又自己冒出来。别为了修 bug 把这条也删了。
+   */
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+  assert.ok(mainSrc.includes("'退出悬浮窗'"),
+    '右键菜单应保留「退出悬浮窗」入口');
+  // 菜单那一条调用的是不带第二参的 setVisible(false)
+  const menuLine = mainSrc.split('\n').find((l) => l.includes("'退出悬浮窗'"));
+  assert.ok(/setVisible\(\s*false\s*\)/.test(menuLine),
+    '菜单「退出悬浮窗」是用户主动关闭，应写偏好（setVisible(false) 不带 persist=false）');
+});
+
 await test('悬浮窗菜单不再有「打开调试端」', () => {
   /*
    * 正式版把调试入口收起来，普通用户不该在右键菜单里看到"打开调试端"。
