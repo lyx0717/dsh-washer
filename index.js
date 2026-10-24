@@ -803,6 +803,8 @@ export function apply(ctx, config) {
   let port = 0;
   const token = randomBytes(24).toString('base64url');
   let lastPushed = '';
+  /** 上一次真正写进推送流的状态名（心跳据此发现「状态自己变了但没人说」） */
+  let lastPushedState = null;
   let lastPushAt = 0;
   let pushTimer = null;
   /** 由宿主拉起的 Electron 悬浮窗进程 */
@@ -1059,6 +1061,7 @@ export function apply(ctx, config) {
     const text = JSON.stringify(snap);
     if (signature === lastPushed) return;
     lastPushed = signature;
+    lastPushedState = snap.state;
     const frame = encodeWsText(text);
     if (frame === null) return;
     for (const socket of clients) {
@@ -1125,16 +1128,63 @@ export function apply(ctx, config) {
 
   /** 节流推送：连续工具调用时不让每条事件都走一遍序列化 */
   /**
-   * 心跳：没有任何事件时，时长仍然在走，渲染端得看得到秒数。
-   * 只在「有客户端连接 + 轮次进行中」时才定时跑，闲时完全不占 CPU。
+   * 心跳：没有任何事件时也把快照推下去。
+   *
+   * 有两条理由必须推，早先只认了第一条：
+   *
+   * 1. 轮次进行中，时长每秒在变，渲染端得看得到秒数。
+   * 2. **「洗完了」是个会自己过期的状态**（doneUntil）——
+   *    到期那一刻没有任何事件，全靠时间是推手。
+   *
+   * 第二条漏掉会出一个很难查的 bug：turn/end 之后 running 变 false，
+   * 心跳直接 return，于是浮窗永远停在最后收到的 done 上；而网页端有
+   * React 自己的定时器清 sticky，照常回到 idle。两边状态就此分叉，
+   * 用户看到的是「悬浮窗说洗完了、dock 说待机」。
+   *
+   * 空闲且没有保持窗口时完全不占 CPU：那时状态不会自己变。
    */
   let tickTimer = null;
   function ensureTick() {
     if (tickTimer !== null) return;
     tickTimer = setInterval(() => {
-      if (clients.size === 0 || currentSessionId === null) return;
-      const s = sessions.get(currentSessionId);
-      if (s === undefined || !s.running) return;
+      if (clients.size === 0) return;
+      const sessionId = viewSessionId();
+      if (sessionId === null) return;
+      const s = sessions.get(sessionId);
+      if (s === undefined) return;
+      const now = Date.now();
+      /*
+       * 「洗完了」是个**会自己过期**的状态（doneUntil 到点回 idle）。
+       * 到点那一刻没有任何事件——全靠心跳把它推出去。
+       *
+       * 早先这里写的是 `if (!s.running) return;`，于是 turn/end 之后
+       * 心跳直接跳过，浮窗永远停在最后收到的 done 上；网页端有 React
+       * 自己的定时器清 sticky，照常回 idle。两边就此分叉，
+       * 用户看到的就是「悬浮窗说洗完了、dock 说待机」。
+       *
+       * 现在的判据不再是「我这一拍是不是在保持窗口里」（那样会漏掉
+       * 两个心跳之间就过期完的情况——比如 doneHoldMs 比 TICK_MS 还短），
+       * 而是**当前算出来的状态和上次真正推出去的不一样就补推**。
+       * 这个判据不依赖任何时序巧合。
+       */
+      const current = deriveState({
+        sessionId,
+        running: s.running,
+        pending: (pendingApprovals.get(sessionId) || 0) > 0 ? { kind: 'approval' } : undefined,
+        runningCalls: s.runningCalls,
+        partial: s.partial,
+        nodes: s.nodes,
+        outline: s.turn > 0 ? [{ turn: s.turn }] : [],
+        trajectory: undefined,
+        sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
+        now,
+      });
+      if (current === lastPushedState) {
+        // 状态没变。只在「会自己变」的窗口里继续推（秒数在走）
+        if (s.running || s.doneUntil > now) schedulePush(true);
+        return;
+      }
+      // 状态和渲染端手上那份不一样了 —— 立刻补推，别让浮窗停在旧状态上
       schedulePush(true);
     }, TICK_MS);
     if (typeof tickTimer.unref === 'function') tickTimer.unref();

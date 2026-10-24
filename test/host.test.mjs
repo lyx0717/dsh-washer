@@ -219,6 +219,30 @@ function get(port, path, token) {
   });
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 开一条 WebSocket 读推送流。
+ *
+ * 测试里要用真实的 WS 客户端，不能直接调 api.snapshot()：
+ * snapshot() 是按时间现算的，它一直是对的；出问题的是"没人去推"。
+ * 只断言 snapshot 会漏掉整类 bug（用户报的悬浮窗/dock 打架就是这种）。
+ */
+async function openWs(port, onText) {
+  const info = JSON.parse(readFileSync(TEST_ENDPOINT, 'utf8'));
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/dsh-washer/stream?token=${info.token}`);
+  socket.addEventListener('message', (event) => {
+    if (typeof event.data === 'string') onText(event.data);
+  });
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', reject, { once: true });
+  });
+  return socket;
+}
+
 async function waitForPort(api, tries = 100) {
   for (let i = 0; i < tries; i += 1) {
     const p = api.port();
@@ -928,6 +952,50 @@ test('偏好写入是原子的，不会留下半截文件', () => {
  * 它是 **waterfall**，少调一次 next() 整个审批链就断，会话永久卡死。
  * 所以两条都要测：状态要亮，链要通。
  * ------------------------------------------------------------------ */
+
+test('洗完状态过期后必须推一次 idle（否则浮窗永远停在「洗完了」）', async () => {
+  /*
+   * 用户报的 bug：悬浮窗显示「洗完了」，dock 显示「待机」。
+   *
+   * 根因在心跳：turn/end 之后 running 变 false，「洗完了」是靠
+   * doneUntil 倒计时自己过期的，那一刻没有任何事件。
+   * 心跳早先只认 running，一过 turn/end 就 return，于是浮窗
+   * 永远停在最后收到的 done 上；而网页端有 React 自己的定时器
+   * 清 sticky，照常回 idle —— 两边就此分叉。
+   *
+   * 这条测试盯的就是分叉本身：推送序列的最后一条必须和
+   * 服务端当前状态一致。只测 snapshot() 是不够的——
+   * snapshot 一直是按时间现算的，它早就对了，错的是没人去推。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0, doneHoldMs: 250 });
+  const port = await waitForPort(api);
+
+  const received = [];
+  const socket = await openWs(port, (text) => {
+    try { received.push(JSON.parse(text)); } catch { /* 忽略心跳帧 */ }
+  });
+
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  await wait(120);
+  onEvent({ id: 's1' }, ev('turn/end', { turn: 1, reason: { kind: 'complete' } }));
+
+  // 等过 doneHoldMs（250ms）+ 两拍心跳（TICK_MS=500），确保过期那一下有机会推
+  await wait(1600);
+
+  const states = received.map((r) => r.state);
+  assert.ok(states.includes('done'), '应该出现过 done，实际: ' + states.join(','));
+
+  const last = states[states.length - 1];
+  const actual = api.snapshot().state;
+  assert.equal(last, actual,
+    '最后一条推送必须是当前真实状态，否则浮窗和 dock 会打架。收到: ' + states.join(','));
+  assert.equal(last, 'idle', 'done 过期后应停在 idle，实际: ' + last);
+
+  socket.close();
+  ctx.dispose();
+});
 
 test('审批挂起时浮窗亮 waiting（不再恒为 undefined）', async () => {
   const ctx = makeCtx();
