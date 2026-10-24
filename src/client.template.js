@@ -54,7 +54,6 @@ window.__ModuleLoader__.load({
       'overlay.running': '浮窗模式 · 想看得更全请切回 dock',
       'label.skin': '外观',
       'skin.precision': '精密家电',
-      'skin.anime': '动漫',
       'skin.pixel': '像素',
       'set.title': '洗衣机',
       'set.intro': 'Agent 干活时的状态指示。改完立即生效。',
@@ -114,7 +113,6 @@ window.__ModuleLoader__.load({
       'overlay.running': 'Overlay mode - switch back to dock for full detail',
       'label.skin': 'Skin',
       'skin.precision': 'Precision',
-      'skin.anime': 'Anime',
       'skin.pixel': 'Pixel',
       'set.title': 'Washer',
       'set.intro': 'Live status while the agent works. Changes take effect immediately.',
@@ -149,17 +147,15 @@ window.__ModuleLoader__.load({
 
     /* 每状态：水位 / 转速 / 泡沫。机型自己的表，和文案解耦 */
     const PW_WATER = { off: 0, idle: 0, starting: 15, washing: 48, rinsing: 42, spinning: 18, waiting: 35, draining: 4, done: 0, error: 26 };
-    const AW_WATER = { off: 2, idle: 4, starting: 10, washing: 34, rinsing: 30, spinning: 16, waiting: 26, draining: 6, done: 2, error: 20 };
     const SPEED = { off: '0s', idle: '0s', starting: '2.2s', washing: '1.7s', rinsing: '2.6s', spinning: '0.55s', waiting: '0s', draining: '3.4s', done: '0s', error: '0s' };
     const BUBBLE = { off: 0, idle: 0, starting: 0.2, washing: 1, rinsing: 0.5, spinning: 0, waiting: 0.25, draining: 0, done: 0, error: 0 };
 
     // 机型的自然尺寸（headless Chrome 实测，1:1 下的像素盒）。
-    // h 必须把伸出机身的部件算进去：动漫风底脚在 bottom:-3%、电源线在 right:2%/bottom:6%，
-    // 所以机身本身 246 之外还要再留 12；精密家电的底脚同理，397 之外留到 412。
+    // h 必须把伸出机身的部件算进去：底脚、电源线之类的部件在 bottom/right 负偏移里，
+    // 所以精密家电的机身 397 之外还要留到 412。
     const NATURAL = {
       pixel: { w: 256, h: 312 },
       precision: { w: 330, h: 412 },
-      anime: { w: 230, h: 258 },
     };
 
     /*
@@ -178,7 +174,7 @@ window.__ModuleLoader__.load({
        * 但已经没有任何代码读它们——渲染永远是 S 档停靠条。
        */
       /*
-       * 默认皮肤。以前是 'auto'（按尺寸自动挑 pixel/anime），
+       * 默认皮肤。以前是 'auto'（按尺寸自动挑 pixel/precision），
        * 用户要求去掉"自动"选项——那就不能留个默认值让下拉里没有任何一项被选中。
        * 直接落成 pixel：停靠条本身就是像素 sprite，视觉最连贯。
        */
@@ -254,7 +250,7 @@ window.__ModuleLoader__.load({
     function pickSkin(cfg, bucket) {
       if (cfg.skin !== 'auto') return cfg.skin;
       const mapped = cfg.skinBySize ? cfg.skinBySize[bucket] : undefined;
-      return mapped === 'precision' || mapped === 'anime' || mapped === 'pixel' ? mapped : 'pixel';
+      return mapped === 'precision' || mapped === 'pixel' ? mapped : 'pixel';
     }
 
     /**
@@ -308,7 +304,7 @@ window.__ModuleLoader__.load({
      * 不认识的值也一样——不能让停靠条因为一个脏字段变空白。
      */
     function MachineStrip(skin, state, screenTime) {
-      const resolved = skin === 'precision' || skin === 'anime' || skin === 'pixel' ? skin : 'pixel';
+      const resolved = skin === 'precision' || skin === 'pixel' ? skin : 'pixel';
       if (resolved === 'pixel') return PixelSprite(state);
       return BigMachine(resolved, state, WASHER_STRIP_MACHINE_W, screenTime);
     }
@@ -377,45 +373,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'feet' })));
     }
 
-    function AnimeMachine(state, width, screenTime) {
-      const play = SPEED[state] === '0s' ? 'paused' : 'running';
-      // 表情（眼睛）曾经可开关，现在固定为关：在 32px 的停靠条里
-      // 一双眼睛只占几个像素，看不出表情，反而让机器显得脏。
-      const eyes = null;
-      return MachineFrame('anime', state, width,
-        h('div', {
-          className: 'dw-aw',
-          'data-state': state,
-          'data-size': 'lg',
-
-          style: {
-            '--w': Math.round(NATURAL.anime.w) + 'px',
-            '--speed': SPEED[state],
-            '--play': play,
-            '--water': AW_WATER[state] + '%',
-            '--bubble': String(BUBBLE[state]),
-          },
-        },
-        h('div', { className: 'dw-aw-body' }),
-        h('div', { className: 'dw-aw-drawer' }),
-        h('div', { className: 'dw-aw-knob' }),
-        h('div', { className: 'dw-aw-screen' }, screenTime),
-        h('div', { className: 'dw-aw-door' },
-          h('div', { className: 'dw-aw-ring' }),
-          h('div', { className: 'dw-aw-glass' },
-            h('div', { className: 'dw-aw-drum' }),
-            h('div', { className: 'dw-aw-clothes' }, h('i'), h('i'), h('i'), h('i')),
-            h('div', { className: 'dw-aw-water' }),
-            h('div', { className: 'dw-aw-foam' }),
-            eyes),
-          h('div', { className: 'dw-aw-handle' })),
-        h('div', { className: 'dw-aw-filter' }),
-        h('div', { className: 'dw-aw-feet' }, h('i'), h('i')),
-        h('div', { className: 'dw-aw-cord' })));
-    }
-
     function BigMachine(skin, state, width, screenTime) {
-      if (skin === 'anime') return AnimeMachine(state, width, screenTime);
       if (skin === 'pixel') return PixelMachine(state, width);
       return PrecisionMachine(state, width, screenTime);
     }
@@ -761,7 +719,6 @@ window.__ModuleLoader__.load({
 
         row('label.skin', seg(tr('label.skin'), [
           ['precision', tr('skin.precision')],
-          ['anime', tr('skin.anime')],
           ['pixel', tr('skin.pixel')],
         ], cfg.skin, (value) => setPref('skin', value))),
         h('p', { className: 'dw-set-hint' }, tr('set.skinHint')),
@@ -857,7 +814,7 @@ window.__ModuleLoader__.load({
       const tagId = 'dsh-washer/washer.css';
       if (document.querySelector('style[data-plugin-css="' + tagId + '"]') !== null) return;
       const tag = document.createElement('style');
-      tag.dataset.plugin = 'dsh-washer';
+      tag.dataset.plugin = '@lyx0717/dsh-washer';
       tag.dataset.pluginCss = tagId;
       tag.textContent = CSS;
       document.head.appendChild(tag);

@@ -267,10 +267,7 @@
   .dsh-washer .dw-pw .clothes,
   .dsh-washer .dw-pw .door::before,
   .dsh-washer .dw-pw .bubbles b,
-  .dsh-washer .dw-pw[data-state='spinning'],
-  .dsh-washer .dw-aw-drum,
-  .dsh-washer .dw-aw-ring::after,
-  .dsh-washer .dw-aw-clothes i {
+  .dsh-washer .dw-pw[data-state='spinning'] {
     animation: none !important;
   }
 }
@@ -278,10 +275,7 @@
 .dsh-washer[data-reduce-motion='1'] .dw-pw .clothes,
 .dsh-washer[data-reduce-motion='1'] .dw-pw .door::before,
 .dsh-washer[data-reduce-motion='1'] .dw-pw .bubbles b,
-.dsh-washer[data-reduce-motion='1'] .dw-pw[data-state='spinning'],
-.dsh-washer[data-reduce-motion='1'] .dw-aw-drum,
-.dsh-washer[data-reduce-motion='1'] .dw-aw-ring::after,
-.dsh-washer[data-reduce-motion='1'] .dw-aw-clothes i {
+.dsh-washer[data-reduce-motion='1'] .dw-pw[data-state='spinning'] {
   animation: none !important;
 }
 

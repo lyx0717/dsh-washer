@@ -250,7 +250,6 @@
                hover 2.2s ease-in-out .28s infinite;
   }
   .machine[data-state="waiting"] .door,
-  .machine[data-state="waiting"] .dw-aw-ring,
   .machine[data-state="waiting"] .dw-pw .door {
     filter: drop-shadow(0 0 6px rgba(245, 185, 58, .55));
   }
@@ -434,11 +433,6 @@
     --dw-sig-err: #f26064;
     --dw-sig-ok: #3fbf7a;
     --dw-sig-off: #4c5762;
-  }
-  /* 动漫造型的机身是写死的浅色，暗色下压暗一点，别在深桌面上白得刺眼 */
-  body[data-theme="dark"] .dw-aw-body,
-  body:not([data-theme="light"]) .dw-aw-body {
-    background: linear-gradient(172deg, #3d4650 0%, #333b45 52%, #262d35 100%);
   }
   /* ---------- 状态光：整机被状态色"照亮" ---------- */
   /*

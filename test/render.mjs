@@ -368,7 +368,7 @@ const T0 = NOW - 70000;
 
 const baseConfig = (over) => Object.assign({
   enabled: true, mode: 'dock', size: 'S', expandedByDefault: false, skin: 'auto',
-  skinBySize: { xs: 'pixel', sm: 'precision', md: 'precision', lg: 'anime' },
+  skinBySize: { xs: 'pixel', sm: 'precision', md: 'precision', lg: 'precision' },
   face: false, reduceMotion: 'auto', showCost: false, costPerKToken: 0, costCurrency: 'CNY',
   hideWhenIdle: false, overlayOnlyWhenBusy: true, doneHoldMs: 300, toolHistoryLimit: 6,
 }, over || {});
@@ -710,13 +710,12 @@ await test('停靠条跟着皮肤换造型（用户报障：改了皮肤 dock �
    * 还在（BigMachine 没删），但没人调用——皮肤设置对主界面彻底失效。
    *
    * 现在按 skin 选：pixel 走 PixelSprite（本来就是为 32px 画的），
-   * precision/anime 走 BigMachine 缩到 32px。
+   * precision 走 BigMachine 缩到 32px。
    * 'auto' 是老配置残留，兜底成 pixel，不能让条变空白。
    */
   const cases = [
     ['pixel', 'dw-sprite', null],
     ['precision', 'dw-pw', 'dw-sprite'],
-    ['anime', 'dw-aw', 'dw-sprite'],
     ['auto', 'dw-sprite', null],
   ];
   for (const [skin, mustHave, mustNotHave] of cases) {
@@ -737,12 +736,12 @@ await test('表情功能整体删除：不再有 face 配置、DOM 里也没有�
    * 用户要求「去掉表情……的设置项和功能」。
    *
    * 眼睛原本画在动漫大机型（.dw-aw-eyes）里，而大机型只服务已删除的
-   * 展开卡片，所以连带着一起没了。这条测试锁住三件事：
+   * 展开卡片；后来动漫皮肤整体删除，眼睛更不可能存在。这条测试锁住三件事：
    *   ① 停靠条 DOM 里没有眼睛节点
    *   ② 设置页没有「表情」开关
    *   ③ DEFAULT_CONFIG 里没有 face 字段（防止哪天又被加回来）
    */
-  const m = mount(streaming({ config: baseConfig({ skin: 'anime' }) }));
+  const m = mount(streaming({ config: baseConfig({ skin: 'precision' }) }));
   await m.settle(450);
   assert.ok(!m.html.includes('dw-aw-eyes'), '停靠条不该有眼睛节点');
   m.unmount();
@@ -842,7 +841,6 @@ await test('A4 减弱动效：只停装饰运动，不停指示灯和水位（AC
   assert.ok(media, '必须有 @media (prefers-reduced-motion: reduce)');
   const mediaBody = media[1];
   assert.ok(/\.dw-pw \.drum/.test(mediaBody), '减弱时必须停掉精密家电滚筒');
-  assert.ok(/\.dw-aw-drum/.test(mediaBody), '减弱时必须停掉动漫滚筒');
 
   // ③ 配置态兜底（data-reduce-motion='1'）同样只停装饰运动
   const flagRule = css.match(/\.dsh-washer\[data-reduce-motion='1'\][\s\S]*?\{[^}]*\}/);
@@ -858,7 +856,7 @@ await test('A4 减弱动效：只停装饰运动，不停指示灯和水位（AC
 });
 
 await test('所有 animation 名都能找到 @keyframes（滚筒真的会转）', async () => {
-  // 回归保护：skin-precision.css / skin-anime.css 曾整段丢失 @keyframes，
+  // 回归保护：skin-precision.css 曾整段丢失 @keyframes（动漫皮肤已整体删除），
   // 浏览器对未定义的动画名静默忽略，测试全绿但滚筒是静止的。
   const cl = readFileSync(join(root, 'client.js'), 'utf8');
   const m = cl.match(/const CSS = ("(?:[^"\\]|\\.)*");/);
@@ -866,7 +864,7 @@ await test('所有 animation 名都能找到 @keyframes（滚筒真的会转）'
   const css = JSON.parse(m[1]);
   const used = [...new Set([...css.matchAll(/animation:\s*([a-zA-Z][\w-]*)/g)].map((m) => m[1]))]
     .filter((n) => !['none', 'inherit', 'initial'].includes(n));
-  assert.ok(used.length >= 8, '应从 client.js 里解析出多个动画名，实际 ' + used.length);
+  assert.ok(used.length >= 7, '应从 client.js 里解析出多个动画名，实际 ' + used.length);
   const missing = used.filter((n) => !new RegExp('@keyframes\\s+' + n + '\\s*\\{').test(css));
   assert.deepStrictEqual(missing, [], '这些动画没有 @keyframes 定义（会静默不动）：' + missing.join(', '));
 });
@@ -964,10 +962,10 @@ await test('换肤要推给宿主：真实 writePref 会 POST skin（一份皮�
   assert.equal(typeof real.washerSetPref, 'function', '设置页 entry 应注入真实 washerSetPref');
 
   FETCH_CALLS.length = 0;
-  real.washerSetPref('skin', 'anime');
+  real.washerSetPref('skin', 'precision');
 
   const posts = FETCH_CALLS.filter((c) => c.method === 'POST');
-  const skinPost = posts.find((c) => c.body && JSON.parse(c.body).skin === 'anime');
+  const skinPost = posts.find((c) => c.body && JSON.parse(c.body).skin === 'precision');
   assert.ok(skinPost, '换肤必须 POST 给宿主，实际发出的：' + JSON.stringify(FETCH_CALLS));
 });
 
@@ -1002,11 +1000,11 @@ await test('设置页：每项配置都能改，且回写到宿主配置', () =>
   let m; const hits = [];
   while ((m = re.exec(html)) !== null) {
     const label = m[2].replace(/<[^>]+>/g, '').trim();
-    if (label === '动漫') hits.push(Number(m[1]));
+    if (label === '精密家电') hits.push(Number(m[1]));
   }
-  assert.equal(hits.length, 1, '皮肤合并后「动漫」只该出现一次，实际 ' + hits.length);
+  assert.equal(hits.length, 1, '皮肤合并后「精密家电」只该出现一次，实际 ' + hits.length);
   BUTTON_HANDLERS[hits[0]].handler({ stopPropagation() {} });
-  assert.deepEqual(writes, [['skin', 'anime']], '点一下就把 skin 写回宿主配置');
+  assert.deepEqual(writes, [['skin', 'precision']], '点一下就把 skin 写回宿主配置');
 });
 
 await test('设置页：皮肤只有一组，同时控制主界面和悬浮窗（合并后不许拆回去）', () => {
@@ -1105,7 +1103,7 @@ await test('设置页：每个设置项都能双向同步（初始值读对 + �
    * 「减少动态效果」按用户要求整个删除（只跟随系统）。
    */
   const radios = [
-    { name: '皮肤', group: '外观', cfg: { skin: 'anime' }, label: '像素', key: 'skin', value: 'pixel' },
+    { name: '皮肤', group: '外观', cfg: { skin: 'precision' }, label: '像素', key: 'skin', value: 'pixel' },
     { name: '悬浮窗大小', group: '悬浮窗大小', cfg: { desktopOverlaySize: 'tiny' }, label: '正常', key: 'desktopOverlaySize', value: 'normal' },
   ];
   for (const item of radios) {
@@ -1245,8 +1243,8 @@ await test('设置页订阅 SSE：宿主推来新偏好要合并并重渲染', a
   const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
   render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
 
-  // 模拟「用户在悬浮窗右键菜单把造型换成动漫」
-  sse.emit({ size: 'tiny', skin: 'anime', show: true });
+  // 模拟「用户在悬浮窗右键菜单把造型换成精密家电」
+  sse.emit({ size: 'tiny', skin: 'precision', show: true });
   await new Promise((r) => setTimeout(r, 0));
 
   // 再渲一次设置页，看是否吃到了新值（liveConfig 从 prefs 现取）
@@ -1290,7 +1288,7 @@ await test('皮肤组只有三套造型，没有「自动」选项', () => {
   /*
    * 用户要求「外观去掉自动选项」。
    *
-   * 「自动」原来是按尺寸自动挑皮肤的策略（xs→pixel、lg→anime），
+   * 「自动」原来是按尺寸自动挑皮肤的策略（xs→pixel、lg→precision），
    * 但停靠条现在固定小尺寸、悬浮窗又有自己的大小设置，"按尺寸挑"这件事
    * 用户根本没法预期结果。去掉它，让用户直接选。
    *
@@ -1302,7 +1300,7 @@ await test('皮肤组只有三套造型，没有「自动」选项', () => {
   assert.ok(!/>自动</.test(html), '设置页不该再有「自动」这个皮肤选项');
   assert.ok(!html.includes('skin.auto'), '不该漏出未翻译的 skin.auto');
   assert.notEqual(plugin.__defaults.skin, 'auto', '默认皮肤不能还是 auto，否则默认态没有选项被选中');
-  assert.ok(['precision', 'anime', 'pixel'].includes(plugin.__defaults.skin),
+  assert.ok(['precision', 'pixel'].includes(plugin.__defaults.skin),
     '默认皮肤必须是三套之一，实际: ' + plugin.__defaults.skin);
 });
 
@@ -1368,7 +1366,7 @@ const CASES = {
 
 const levelCfg = (level) => ({
   size: level, expandedByDefault: false, skin: 'auto',
-  skinBySize: { xs: 'pixel', sm: 'precision', md: 'precision', lg: 'anime' },
+  skinBySize: { xs: 'pixel', sm: 'precision', md: 'precision', lg: 'precision' },
   face: false, reduceMotion: 'auto', showCost: false, costPerKToken: 0, costCurrency: 'CNY',
   hideWhenIdle: false, doneHoldMs: 6000, toolHistoryLimit: 6,
 });

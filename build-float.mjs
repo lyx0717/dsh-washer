@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-washer 悬浮窗构建脚本：把三套皮肤移植进 debug/float.html。
+ * dsh-washer 悬浮窗构建脚本：把两套皮肤移植进 debug/float.html。
  *
  * 为什么悬浮窗页面要单独构建：
  * 浮窗是独立 HTML，加载不了 client.js（那份是宿主插件的浏览器半，依赖
@@ -8,7 +8,7 @@
  * 而这三套的 CSS 和 DOM 结构全在 src/ 里——与其手抄一份迟早跟主界面
  * 变形，不如构建时从同一份源生成。
  *
- * 生成物：debug/float.machines.js（机器造型渲染函数 + 三套皮肤 CSS）
+ * 生成物：debug/float.machines.js（机器造型渲染函数 + 两套皮肤 CSS）
  * float.html 只负责 <script src="./float.machines.js"></script>。
  *
  * 用法：node build-float.mjs   （幂等，不会改 src/）
@@ -35,7 +35,6 @@ function grabTable(name) {
 }
 
 const PW_WATER = grabTable('PW_WATER');
-const AW_WATER = grabTable('AW_WATER');
 const SPEED = grabTable('SPEED');
 const BUBBLE = grabTable('BUBBLE');
 const SCREEN_WORD = (() => {
@@ -123,8 +122,6 @@ function skinCss() {
     '/* dsh-washer · skin-precision.css */',
     src('skin-precision.css'),
     '',
-    '/* dsh-washer · skin-anime.css */',
-    src('skin-anime.css'),
   ].join('\n');
 }
 
@@ -139,7 +136,6 @@ const out = `/**
 
   var VISUAL = ${grabVisual()};
   var PW_WATER = ${PW_WATER};
-  var AW_WATER = ${AW_WATER};
   var SPEED = ${SPEED};
   var BUBBLE = ${BUBBLE};
   var SCREEN_WORD = ${SCREEN_WORD};
@@ -250,42 +246,8 @@ const out = `/**
     return frame('precision', state, width, pw);
   }
 
-  function animeMachine(state, width, screenTime, face) {
-    var play = SPEED[state] === '0s' ? 'paused' : 'running';
-    var aw = el('div', 'dw-aw');
-    aw.setAttribute('data-state', state);
-    aw.setAttribute('data-size', 'lg');
-    aw.setAttribute('data-face', face ? 'on' : 'off');
-    aw.style.setProperty('--w', Math.round(NATURAL.anime.w) + 'px');
-    aw.style.setProperty('--speed', SPEED[state]);
-    aw.style.setProperty('--play', play);
-    aw.style.setProperty('--water', AW_WATER[state] + '%');
-    aw.style.setProperty('--bubble', String(BUBBLE[state]));
-
-    var eyes = face ? el('div', 'dw-aw-eyes', [el('i'), el('i')]) : null;
-    var glass = el('div', 'dw-aw-glass', [
-      el('div', 'dw-aw-drum'),
-      el('div', 'dw-aw-clothes', [el('i'), el('i'), el('i'), el('i')]),
-      el('div', 'dw-aw-water'),
-      el('div', 'dw-aw-foam'),
-      eyes,
-    ]);
-
-    aw.appendChild(el('div', 'dw-aw-body'));
-    aw.appendChild(el('div', 'dw-aw-drawer'));
-    aw.appendChild(el('div', 'dw-aw-knob'));
-    aw.appendChild(text('div', 'dw-aw-screen', screenTime));
-    aw.appendChild(el('div', 'dw-aw-door', [
-      el('div', 'dw-aw-ring'), glass, el('div', 'dw-aw-handle'),
-    ]));
-    aw.appendChild(el('div', 'dw-aw-filter'));
-    aw.appendChild(el('div', 'dw-aw-feet', [el('i'), el('i')]));
-    aw.appendChild(el('div', 'dw-aw-cord'));
-    return frame('anime', state, width, aw);
-  }
-
   /**
-   * 造一台机器。三种造型共用同一份状态，只是长得不一样。
+   * 造一台机器。两种造型共用同一份状态，只是长得不一样。
    *
    * width 是目标显示宽度（CSS 像素）。窗口固定 132px 时三套造型都缩到
    * 这个宽度以内——方案 B：窗口不跟着皮肤变，代价是精密家电的细节会糊。
@@ -295,11 +257,10 @@ const out = `/**
     var s = VISUAL[state] ? state : 'idle';
     var holder;
     if (skin === 'precision') holder = precisionMachine(s, width, screenTime);
-    else if (skin === 'anime') holder = animeMachine(s, width, screenTime, face);
     else holder = pixelMachine(s, width);
 
-    // 像素造型靠外层变量驱动，另外两套是自带动画的 DOM 结构
-    if (skin === 'pixel' || skin === 'precision' || skin === 'anime') {
+    // 像素造型靠外层变量驱动，精密家电是自带动画的 DOM 结构
+    if (skin === 'pixel' || skin === 'precision') {
       var v = VISUAL[s];
       holder.setAttribute('data-shake', s === 'spinning' ? '2' : (s === 'washing' || s === 'draining' ? '1' : '0'));
       holder.setAttribute('data-blink', v.blink > 0 ? (v.blink < 0.5 ? '2' : '1') : '0');
@@ -315,7 +276,7 @@ const out = `/**
 
   window.WasherMachines = {
     build: build,
-    shapes: ['precision', 'anime', 'pixel'],
+    shapes: ['precision', 'pixel'],
     ledColor: function (state) {
       var v = VISUAL[state];
       return v ? v.led : VISUAL.idle.led;

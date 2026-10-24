@@ -32,8 +32,6 @@ const css = [
   src('style.css'),
   '/* dsh-washer · skin-precision.css */',
   src('skin-precision.css'),
-  '/* dsh-washer · skin-anime.css */',
-  src('skin-anime.css'),
 ].join('\n');
 
 const out = template

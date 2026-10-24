@@ -37,11 +37,13 @@
 
 ## 三档密度
 
-| 档位 | 尺寸 | 内容 | 皮肤（`skin: 'auto'` 时） |
-|---|---|---|---|
-| `S` | 322×52 停靠条 | 32px 像素 sprite + 一行状态 + 计时 | 像素风 |
-| `M` | 322×206 卡片 | 96px 精密家电 + 状态/工具流水 | 精密家电 |
-| `L` | 322×343 卡片 | 176px 大机器 + 工具流水 + token/耗时/成本 | 动漫风 |
+| 档位 | 尺寸 | 内容 |
+|---|---|---|
+| `S` | 322×52 停靠条 | 32px 像素 sprite + 一行状态 + 计时 |
+| `M` | 322×206 卡片 | 96px 精密家电 + 状态/工具流水 |
+| `L` | 322×343 卡片 | 176px 大机器 + 工具流水 + token/耗时/成本 |
+
+造型（`skin`）只有两套：**像素风**（`'pixel'`，默认）和**精密家电**（`'precision'`）。原有的动漫风已删除。
 
 点停靠条展开 / 收起。
 
@@ -100,10 +102,8 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 | `mode` | `'dock'` | `'dock'` 挂在输入框上方；`'overlay'` 挂到 `shell.overlay`（全局浮层） |
 | `size` | `'S'` | 初始档位 `'S'` / `'M'` / `'L'` |
 | `expandedByDefault` | `false` | 等价于 `size: 'M'`（旧名，保留兼容） |
-| `skin` | `'auto'` | `'auto'` / `'pixel'` / `'precision'` / `'anime'` |
-| `skinBySize` | `{xs:pixel, sm:precision, md:precision, lg:anime}` | `auto` 模式下尺寸→皮肤 |
-| `face` | `false` | 动漫风是否显示那双眼睛（默认关） |
-| `reduceMotion` | `'auto'` | `'auto'` 跟随系统 `prefers-reduced-motion`；`'always'` / `'never'` 强制 |
+| `skin` | `'pixel'` | `'pixel'` / `'precision'`（动漫风已删除；老配置里的 `'auto'` 按 `'pixel'` 处理） |
+| `skinBySize` | `{xs:pixel, lg:pixel}` | `auto` 模式下尺寸→皮肤（`sm`/`md` 是旧三档时代的残留，已无人使用） |
 | `showCost` | `false` | L 档显示成本（需配合 `costPerKToken`） |
 | `costPerKToken` | `0` | 每千 token 单价 |
 | `costCurrency` | `'CNY'` | `'CNY'` → `¥`，`'USD'` → `$` |
@@ -120,7 +120,6 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
       config:
         size: 'M'
         skin: 'precision'
-        face: true
         showCost: true
         costPerKToken: 0.004
 ```

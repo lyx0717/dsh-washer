@@ -600,7 +600,7 @@ function setSizeMode(mode) {
 }
 
 /** 换肤：只把 skin 名发给页面，具体颜色由页面 CSS 决定 */
-const SKINS = ['precision', 'anime', 'pixel'];
+const SKINS = ['precision', 'pixel'];
 
 function setSkin(next) {
   // 老版本存的是 classic/mono/warm/cool 这几套调色皮肤，现在已经换成

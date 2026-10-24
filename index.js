@@ -836,7 +836,7 @@ export function apply(ctx, config) {
        * 概念（它只有一个固定尺寸）。这里落成具体造型，避免把 'auto'
        * 传给浮窗后它不认识、回落到 precision 而和设置页显示的不一致。
        */
-      skin: cfg.skin === 'precision' || cfg.skin === 'anime' || cfg.skin === 'pixel'
+      skin: cfg.skin === 'precision' || cfg.skin === 'pixel'
         ? cfg.skin
         : 'precision',
     });
