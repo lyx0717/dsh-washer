@@ -1304,19 +1304,19 @@ await test('皮肤组只有三套造型，没有「自动」选项', () => {
     '默认皮肤必须是三套之一，实际: ' + plugin.__defaults.skin);
 });
 
-/*
- * 这里不再打印汇总、也不提前 exitCode：CSS_TEXT 之后还有用例要跑，
- * 汇总统一放在文件末尾。提前 print 会让「后面的用例没跑」看起来像全绿。
- */
-
 /* ================================================================== *
  * 截图素材
+ *
+ * 注意：这里绝不能 process.exit()。CSS_TEXT 之后还有 13 条用例（停靠条三档、
+ * 指示灯配色、package.json files 覆盖、浮窗明暗判定……），提前退出会让它们
+ * 「没跑」却静默通过（退出码 0、无汇总行）。--no-shots 只跳过写盘，不跳过用例，
+ * 所以 CSS_TEXT 在块外读：后面的用例全靠它做断言。
  * ================================================================== */
-if (noShots) process.exit(process.exitCode || 0);
-
 const css = readFileSync(join(root, 'client.js'), 'utf8').match(/const CSS = ("(?:[^"\\]|\\.)*");/);
 assert.ok(css, 'client.js 里应有内联 CSS 常量');
 const CSS_TEXT = JSON.parse(css[1]);
+
+if (!noShots) {
 writeFileSync(join(outDir, 'washer.css'), CSS_TEXT);
 
 const THEME = `
@@ -1405,6 +1405,7 @@ for (const { name, level, html } of cells) {
 
 console.log('shots →', outDir, '(' + cells.length + ' cells × light/dark)');
 console.log('CSS bytes:', CSS_TEXT.length);
+}
 
 await test('停靠条位置：靠 order 排到宿主药丸之前，不用 auto 边距（会打乱居中布局）', () => {
   /*
