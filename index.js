@@ -31,6 +31,7 @@ import {
   turnEndTimeOf,
   latestTurnOf,
   formatDuration,
+  stalledForOf,
 } from './src/core.js';
 
 export const name = 'dsh-washer';
@@ -864,6 +865,9 @@ export function apply(ctx, config) {
     return null;
   }
 
+  /** sessionId -> 挂起中的审批数（snapshot() 要读，声明必须在它之前） */
+  const pendingApprovals = new Map();
+
   function stateFor(sessionId) {
     let state = sessions.get(sessionId);
     if (state === undefined) {
@@ -901,7 +905,9 @@ export function apply(ctx, config) {
     const derived = deriveState({
       sessionId,
       running: s.running,
-      pending: undefined, // 审批等待由宿主 pendingInteraction 给，Host 侧暂不订阅
+      // 有审批挂在等人类回答就是 waiting。没订阅时这里恒 undefined，
+      // 浮窗永远不会亮"等你确认"——最该提醒的时刻不提醒。
+      pending: (pendingApprovals.get(sessionId) || 0) > 0 ? { kind: 'approval' } : undefined,
       runningCalls: s.runningCalls,
       partial: s.partial,
       nodes: s.nodes,
@@ -915,6 +921,7 @@ export function apply(ctx, config) {
 
     const turn = latestTurnOf(outline);
     const elapsedMs = elapsedOf(s.turnTimings, turn, now) || 0;
+    const speed = speedOf(s.tokenSamples, now);
     return {
       version: 1,
       sessionId,
@@ -922,6 +929,8 @@ export function apply(ctx, config) {
       turn,
       elapsedMs,
       durationText: formatDuration(elapsedMs),
+      // 看着在转、其实没动静。没卡是 null，前端据此决定要不要改副标题。
+      stalledMs: stalledForOf(s.tokenSamples, derived, now),
       tools: recentTools(s.nodes, 6).map((t) => ({
         name: t.name,
         ms: t.ms === undefined ? null : t.ms,
@@ -935,7 +944,7 @@ export function apply(ctx, config) {
       // 详情面板用：模型、速度、token 用量。tokenUsage 早先是恒 null，
       // 现在 assistant/message 的 usage 能填上了。
       model: s.model,
-      speed: speedOf(s.tokenSamples, now),
+      speed,
       tokenUsage: s.usage,
       // errorCodeOf(null) 会返回 'E-00'，所以只在确实有错误节点时才问它
       errorCode: hasError(s.nodes) ? errorCodeOf(lastErrorNode(s.nodes)) : null,
@@ -960,6 +969,8 @@ export function apply(ctx, config) {
     const signature = [
       snap.state, snap.turn, snap.toolCount, snap.durationText, snap.errorCode,
       snap.model, Math.round(snap.speed === null ? -1 : snap.speed), tokenSig,
+      // 卡住与否是个开关，不是时长：把秒数进签名会让推送节流失效
+      snap.stalledMs === null ? 0 : 1,
     ].join('|');
     const text = JSON.stringify(snap);
     if (signature === lastPushed) return;
@@ -1401,6 +1412,45 @@ export function apply(ctx, config) {
     const state = stateFor(sessionId);
     state.running = status === 'running';
     schedulePush();
+  });
+
+  /*
+   * 审批等待 —— 桌面悬浮窗唯一拿不到的状态。
+   *
+   * 网页端从 `useSessionStatus().pendingInteraction` 就能知道"在等你批准"，
+   * 但那是**客户端** uiSession 的投影：客户端插件靠 `ctx.remote.$on('approval/request')`
+   * 拦截到审批请求才有值。Host 侧没有那个投影，于是浮窗这一路一直写死
+   * `pending: undefined`，最该提醒的时刻反而不提醒。
+   *
+   * Host 侧其实有同一条事件：宿主自己（ACP 桥）就是这么接的。
+   * 注意它是 **waterfall**——必须把 `next()` 的结果原样返回，
+   * 否则审批链在这里断掉，整个会话卡死。所以我们只做观察，不做决策。
+   *
+   * 生命周期：请求进来记一条，promise settle（批准/拒绝/取消/中断都算）就删掉。
+   * 用计数而不是布尔，是因为同一会话理论上可能同时挂多个审批。
+   */
+  function bumpPending(sessionId, delta) {
+    const next = (pendingApprovals.get(sessionId) || 0) + delta;
+    if (next <= 0) pendingApprovals.delete(sessionId);
+    else pendingApprovals.set(sessionId, next);
+    schedulePush();
+  }
+
+  ctx.on('approval/request', (request, next) => {
+    const sessionId = resolveSessionId(request && request.agent && request.agent.session)
+      ?? resolveSessionId(request && request.agent)
+      ?? currentSessionId;
+    if (sessionId === null) return next();
+    bumpPending(sessionId, 1);
+    let result;
+    try {
+      result = next();
+    } catch (error) {
+      bumpPending(sessionId, -1);
+      throw error;
+    }
+    // next() 正常会返回 promise；万一返回同步值也要收尾，不能少减一次
+    return Promise.resolve(result).finally(() => bumpPending(sessionId, -1));
   });
 
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态

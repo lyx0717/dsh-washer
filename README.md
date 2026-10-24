@@ -25,7 +25,7 @@
 | `washing` | 洗涤，泡多水满 | `running` 且正在流式出字（`partial` 非空），或上一步是工具 |
 | `rinsing` | 漂洗，反转 | `running` 且有工具在跑（`runningCalls` 非空），卡片显示最后一个工具名 |
 | `spinning` | 脱水，高速抖动 | `running` 且无工具无流式，本轮最后一个节点是模型输出（收尾） |
-| `waiting` | 暂停，灯闪琥珀 | `sessionStatus.pendingInteraction` 有值（等批准 / 等回答） |
+| `waiting` | 暂停，灯闪琥珀 | 网页端：`sessionStatus.pendingInteraction` 有值；桌面悬浮窗：宿主 `approval/request` 事件（批准 / 拒绝 / 取消后自动恢复） |
 | `draining` | 排水换水 | 上下文压缩进行中（`useTrajectory` 快照里最后一条 `purpose: 'compaction'` 的 request 状态为 `running`） |
 | `done` | 洗完了 | 本轮正常结束，停 `doneHoldMs` 后自动回 `idle` |
 | `error` | 故障 | `turn-error` 节点、或**本轮最后一条**工具 `isError`（失败后自愈重试成功不报故障） |
@@ -35,17 +35,37 @@
 
 > 只认**本轮最后一条**节点的成败：Agent 工具失败后自己重试成功，不报故障——避免假警报。
 
-## 三档密度
+## 面板形态
 
-| 档位 | 尺寸 | 内容 |
-|---|---|---|
-| `S` | 322×52 停靠条 | 32px 像素 sprite + 一行状态 + 计时 |
-| `M` | 322×206 卡片 | 96px 精密家电 + 状态/工具流水 |
-| `L` | 322×343 卡片 | 176px 大机器 + 工具流水 + token/耗时/成本 |
+主界面里只有一个**固定形态的停靠条**：32px 机器小图 + 一行状态 + 计时/件数。
+不展开、不点击、不循环档位——它要回答的是"洗到哪了"，不是"打开看看"。
+要看得更全，用**桌面悬浮窗**（见下方「悬浮窗」）或设置页。
 
-造型（`skin`）只有两套：**像素风**（`'pixel'`，默认）和**精密家电**（`'precision'`）。原有的动漫风已删除。
+造型（`skin`）两套：**像素风**（`'pixel'`，默认）和**精密家电**（`'precision'`）。
 
-点停靠条展开 / 收起。
+> 曾经有过 S/M/L 三档可展开卡片（L 档带工具流水和 token/成本）。
+> 已整体删除：一个状态条不需要点开，详情交给了悬浮窗和详情面板。
+> 相关配置项保留为**废弃字段**（见配置表），写进老配置不会报错，但不再有任何效果。
+
+### 关于 `mode: 'overlay'`
+
+网页内的浮层座位。它没有 `useChat`，拿不到节点和轨迹，所以**只报它确实知道的两件事**：
+有待处理交互 → `waiting`（在等你），在跑 → `starting`（在忙，不猜细分阶段）。
+
+「等你确认」时它一定会出现（那正是唯一需要看它的时候）；其余情况默认只在忙碌时浮现，
+由 `overlayOnlyWhenBusy` 控制。
+
+> 早先这里写死 `state = 'washing'`，不管实际在干什么都报「洗涤中」，且 `pending` 时直接隐藏。
+> 那违背了本项目的原则——每个动作都要对应一个可验证的宿主信号。
+
+## 无进展提示
+
+机器在转，不代表它在干活。停靠条在 `washing` / `rinsing` / `spinning` 状态下，
+如果连续 **45 秒**没有任何可见变化（节点数、流式文本长度、在跑的工具数都不动），
+副标题会从「已运行时长」换成卡住提示——用户真正想问的是"它是不是死了"，
+只报时长等于没回答。
+
+阈值故意偏保守：模型长思考、跑一个大构建/测试都可能安静几十秒，报假警比不报更烦人。
 
 ## 安装
 
@@ -99,14 +119,14 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `true` | `false` 时完全不挂载（连样式都不注册） |
-| `mode` | `'dock'` | `'dock'` 挂在输入框上方；`'overlay'` 挂到 `shell.overlay`（全局浮层） |
-| `size` | `'S'` | 初始档位 `'S'` / `'M'` / `'L'` |
-| `expandedByDefault` | `false` | 等价于 `size: 'M'`（旧名，保留兼容） |
+| `mode` | `'dock'` | `'dock'` 挂在输入框上方。`'overlay'` 挂到 `shell.overlay`（网页内浮层，与桌面悬浮窗无关） |
+| `size` | — | **已废弃**。三档删除后没有任何代码读它 |
+| `expandedByDefault` | — | **已废弃**，同上 |
 | `skin` | `'pixel'` | `'pixel'` / `'precision'`（动漫风已删除；老配置里的 `'auto'` 按 `'pixel'` 处理） |
-| `skinBySize` | `{xs:pixel, lg:pixel}` | `auto` 模式下尺寸→皮肤（`sm`/`md` 是旧三档时代的残留，已无人使用） |
-| `showCost` | `false` | L 档显示成本（需配合 `costPerKToken`） |
-| `costPerKToken` | `0` | 每千 token 单价 |
-| `costCurrency` | `'CNY'` | `'CNY'` → `¥`，`'USD'` → `$` |
+| `skinBySize` | — | **已废弃**，随三档一起删除 |
+| `showCost` | — | **已废弃**：成本面板随 L 档删除，暂未重新接入 |
+| `costPerKToken` | — | **已废弃**，同上 |
+| `costCurrency` | — | **已废弃**，同上 |
 | `hideWhenIdle` | `false` | 待机时整个隐藏 |
 | `doneHoldMs` | `6000` | 「洗完了」停留时长 |
 | `toolHistoryLimit` | `6` | 工具流水最多显示几条 |
@@ -118,16 +138,16 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
     - id: washer
       name: '@lyx0717/dsh-washer'
       config:
-        size: 'M'
         skin: 'precision'
-        showCost: true
-        costPerKToken: 0.004
+        hideWhenIdle: true
+        doneHoldMs: 8000
 ```
 
 ## 设计约束
 
 - **只读**：不往会话里写任何事件，不改其他插件的 DOM。
-- **不抢焦点**：停靠条是一个 `<button>`，键盘可达，`:focus-visible` 有描边。
+- **不抢焦点**：停靠条是静态 `<div role="status">`，不进 tab 序列、不响应点击——
+  它不是可交互控件，读屏只把它当状态播报。
 - **尊重动效偏好**：`prefers-reduced-motion: reduce` 时全部动画降到 0.001ms。
 - **颜色**：容器/文字走宿主 `--dsw-alias-*` token；只有机身材质用自有 `--dw-*`（暗色由 `[data-ds-dark-theme]` 切换）。
 - **零依赖**：不打包 React，直接 `require('react')` 用宿主那一份。

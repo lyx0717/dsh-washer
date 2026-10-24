@@ -918,3 +918,93 @@ test('偏好写入是原子的，不会留下半截文件', () => {
   const leftovers = readdirSync('/tmp').filter((f) => f.startsWith('dsh-washer-test-prefs.json.') && f.endsWith('.tmp'));
   assert.deepEqual(leftovers, [], '原子写不能留临时文件');
 });
+
+/* ------------------------------------------------------------------ *
+ * 审批等待：桌面悬浮窗唯一拿不到的状态
+ *
+ * 网页端靠 useSessionStatus().pendingInteraction 就知道"在等你批准"，
+ * 那是客户端 uiSession 的投影；Host 侧没有，于是浮窗写死 pending: undefined，
+ * 最该提醒的时刻从不提醒。这条事件来自 ctx.on('approval/request')——
+ * 它是 **waterfall**，少调一次 next() 整个审批链就断，会话永久卡死。
+ * 所以两条都要测：状态要亮，链要通。
+ * ------------------------------------------------------------------ */
+
+test('审批挂起时浮窗亮 waiting（不再恒为 undefined）', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+
+  const onApproval = ctx.handlers.get('approval/request');
+  assert.ok(typeof onApproval === 'function', '必须订阅 approval/request');
+
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  assert.notEqual(api.snapshot().state, 'waiting', '没审批时不该是 waiting');
+
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const handled = onApproval({ agent: { session: { id: 's1' } } }, () => gate);
+
+  const pendingSnap = api.snapshot();
+  assert.equal(pendingSnap.state, 'waiting', '审批挂起时必须亮 waiting');
+
+  release(undefined);
+  await handled;
+  // 批准/拒绝/取消之后要自己恢复，不能一直挂着"等你确认"
+  assert.notEqual(api.snapshot().state, 'waiting', '审批结束后必须恢复');
+
+  ctx.dispose();
+});
+
+test('审批 waterfall：必须把 next() 的结果原样传下去', async () => {
+  const ctx = makeCtx();
+  apply(ctx, { desktopOverlay: false });
+  const onApproval = ctx.handlers.get('approval/request');
+
+  const nextResult = { ok: true };
+  const returned = onApproval({ agent: { session: { id: 's1' } } }, () => nextResult);
+  assert.equal(await returned, nextResult, 'next() 的返回值必须原样传给宿主，否则审批链断开');
+});
+
+test('审批 waterfall：next() 抛错时也要清掉等待态', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onApproval = ctx.handlers.get('approval/request');
+
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+
+  assert.throws(() => {
+    onApproval({ agent: { session: { id: 's1' } } }, () => { throw new Error('boom'); });
+  }, /boom/);
+
+  // 已经抛出去了，等待计数不能留在那儿——否则浮窗会永远停在"等你确认"
+  assert.notEqual(api.snapshot().state, 'waiting', '异常路径也要清等待态');
+  ctx.dispose();
+});
+
+test('同一会话多个审批并行时，全部结束才恢复', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onApproval = ctx.handlers.get('approval/request');
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+
+  let releaseA;
+  let releaseB;
+  const gateA = new Promise((r) => { releaseA = r; });
+  const gateB = new Promise((r) => { releaseB = r; });
+  const a = onApproval({ agent: { session: { id: 's1' } } }, () => gateA);
+  const b = onApproval({ agent: { session: { id: 's1' } } }, () => gateB);
+
+  assert.equal(api.snapshot().state, 'waiting');
+
+  releaseA(undefined);
+  await a;
+  assert.equal(api.snapshot().state, 'waiting', '还剩一个审批，不能提前恢复');
+
+  releaseB(undefined);
+  await b;
+  assert.notEqual(api.snapshot().state, 'waiting', '全部结束才恢复');
+
+  ctx.dispose();
+});

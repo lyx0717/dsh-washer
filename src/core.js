@@ -362,6 +362,39 @@ export const STATE_COLOR = {
 };
 
 /**
+ * 一个时长。
+ *
+ * 默认 45 秒：低于这个数多半是模型在长思考或一个大工具（构建、测试、
+ * 网络请求）正在跑，报"卡住"是误报；超过它，用户盯着转圈却看不到任何
+ * 输出，就是真的需要一句真话的时候。
+ */
+const STALL_AFTER_MS = 45000;
+
+/**
+ * 判断"看着在转、其实没动静"。
+ *
+ * 停靠条只显示已运行时长，于是卡住 5 分钟和正常跑 5 分钟长得一模一样。
+ * 洗衣机转得再好看，回答不了用户真正想问的那句"它是不是死了"。
+ *
+ * 口径（宁可漏报不误报）：
+ *   1. 只在真的该有产出时才判——running 且状态是 washing/rinsing/spinning。
+ *      starting 是新轮刚起，draining 是压缩（本来就不出字），都不算。
+ *   2. 先要求"曾经有过产出"（samples 里至少两个点）。第一轮还没吐第一个字
+ *      的长思考不该被叫卡住。
+ *   3. 距最后一次**有增长**的采样超过 STALL_AFTER_MS 才算。
+ *
+ * @returns {number | null} 卡了多久（毫秒）；没卡返回 null。
+ */
+export function stalledForOf(samples, state, now, thresholdMs = STALL_AFTER_MS) {
+  if (state !== 'washing' && state !== 'rinsing' && state !== 'spinning') return null;
+  if (!Array.isArray(samples) || samples.length < 2) return null;
+  const last = samples[samples.length - 1];
+  const idleMs = now - last.at;
+  if (idleMs <= thresholdMs) return null;
+  return idleMs;
+}
+
+/**
  * 毫秒 → mm:ss。
  * @param {number | undefined} ms
  * @returns {string}

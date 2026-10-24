@@ -379,6 +379,39 @@ const STATE_COLOR = {
 };
 
 /**
+ * 一个时长。
+ *
+ * 默认 45 秒：低于这个数多半是模型在长思考或一个大工具（构建、测试、
+ * 网络请求）正在跑，报"卡住"是误报；超过它，用户盯着转圈却看不到任何
+ * 输出，就是真的需要一句真话的时候。
+ */
+const STALL_AFTER_MS = 45000;
+
+/**
+ * 判断"看着在转、其实没动静"。
+ *
+ * 停靠条只显示已运行时长，于是卡住 5 分钟和正常跑 5 分钟长得一模一样。
+ * 洗衣机转得再好看，回答不了用户真正想问的那句"它是不是死了"。
+ *
+ * 口径（宁可漏报不误报）：
+ *   1. 只在真的该有产出时才判——running 且状态是 washing/rinsing/spinning。
+ *      starting 是新轮刚起，draining 是压缩（本来就不出字），都不算。
+ *   2. 先要求"曾经有过产出"（samples 里至少两个点）。第一轮还没吐第一个字
+ *      的长思考不该被叫卡住。
+ *   3. 距最后一次**有增长**的采样超过 STALL_AFTER_MS 才算。
+ *
+ * @returns {number | null} 卡了多久（毫秒）；没卡返回 null。
+ */
+function stalledForOf(samples, state, now, thresholdMs = STALL_AFTER_MS) {
+  if (state !== 'washing' && state !== 'rinsing' && state !== 'spinning') return null;
+  if (!Array.isArray(samples) || samples.length < 2) return null;
+  const last = samples[samples.length - 1];
+  const idleMs = now - last.at;
+  if (idleMs <= thresholdMs) return null;
+  return idleMs;
+}
+
+/**
  * 毫秒 → mm:ss。
  * @param {number | undefined} ms
  * @returns {string}
@@ -468,6 +501,7 @@ function shouldSwitch(from, to, heldMs) {
       'sub.idleLast': '上次洗完 {time}',
       'sub.starting': '正在起转 · {elapsed}',
       'sub.washing': '{elapsed} · 第 {n} 件',
+      'sub.stalled': '已经 {stalled} 没动静，卡住了?',
       'sub.rinsing': '{tool} · {elapsed}',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': '收尾整理 · {elapsed}',
@@ -527,6 +561,7 @@ function shouldSwitch(from, to, heldMs) {
       'sub.idleLast': 'Last run {time}',
       'sub.starting': 'Spinning up · {elapsed}',
       'sub.washing': '{elapsed} · {n} pcs',
+      'sub.stalled': 'nothing for {stalled} — stuck?',
       'sub.rinsing': '{tool} · {elapsed}',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': 'Wrapping up · {elapsed}',
@@ -893,6 +928,36 @@ function shouldSwitch(from, to, heldMs) {
         return () => clearTimeout(id);
       }, [candidate]);
 
+      /*
+       * 「看着在转、其实没动静」的本地计时。
+       *
+       * 浏览器端没有 token 采样（useChat 的 legacy 里只有 nodes/turnTimings/
+       * partial/runningCalls，没有 usage），所以不能像宿主那样靠产出算速度。
+       * 这里退一步用**可见动静**：本轮节点数、流式文本长度、在跑的工具数，
+       * 任一变化就认为它还在动。这三样之外的东西（长思考、一个卡住的工具）
+       * 本来也不会产生新的视觉反馈——用户看到的画面确实冻住了，报"卡住"不是撒谎。
+       *
+       * 只在 washing/rinsing/spinning 计时：starting 是新轮刚起，长思考正常；
+       * draining 是压缩，本来就不出字。两者都不该被叫卡住。
+       */
+      const STALL_AFTER_MS = 45000;
+      const motionSig = [
+        nodes === undefined ? 0 : nodes.length,
+        partial === undefined || partial === null ? -1 : (typeof partial.text === 'string' ? partial.text.length : -2),
+        Array.isArray(runningCalls) ? runningCalls.length : 0,
+      ].join('/');
+      const lastMotion = React.useRef({ sig: motionSig, at: Date.now() });
+      /*
+       * 在 effect 里更新，不在 render 里直接写 ref。
+       * render 期间改 ref 是副作用：并发渲染下可能渲染了却没提交，
+       * 计时就被凭空重置，卡住的判断永远不触发。
+       */
+      React.useEffect(() => {
+        if (lastMotion.current.sig !== motionSig) {
+          lastMotion.current = { sig: motionSig, at: Date.now() };
+        }
+      }, [motionSig]);
+
       /* running 由 true → false 且这一轮没有错误：进入 done 保持窗口 */
       React.useEffect(() => {
         if (running === true) {
@@ -970,6 +1035,15 @@ function shouldSwitch(from, to, heldMs) {
       } else if (state !== 'off' && state !== 'waiting') {
         sub = fill(tr('sub.' + state), parts);
       }
+
+      /*
+       * 画面已经冻住了，就别再只报时长。
+       * 用户真正想问的是"它是不是死了"，只报"已运行 3:20"等于没回答。
+       */
+      const motionIdleMs = now - lastMotion.current.at;
+      const stalled = (state === 'washing' || state === 'rinsing' || state === 'spinning')
+        && motionIdleMs >= STALL_AFTER_MS;
+      if (stalled) sub = fill(tr('sub.stalled'), { stalled: formatDuration(motionIdleMs) });
 
       const tone = state === 'error' ? 'error' : (state === 'waiting' ? 'warn' : (state === 'done' ? 'ok' : undefined));
 
@@ -1204,14 +1278,24 @@ function shouldSwitch(from, to, heldMs) {
 
       if (cfg.enabled === false) return null;
       if (sessionId === undefined) return null;
-      if (pending !== undefined) return null;           // 等你确认由 composer 区自己说
-      // 浮层会盖住内容，空闲时不该出现。这是浮层独有的默认，
-      // 不复用 hideWhenIdle（那个在 dock 下默认 false，语义相反）。
-      if (running !== true && cfg.overlayOnlyWhenBusy !== false) return null;
 
-      const state = 'washing';                           // 浮层不推导细分阶段，只表示「在忙」
-      const title = tr('state.washing');
-      const sub = tr('overlay.running');
+      /*
+       * 浮层拿不到 nodes / trajectory（它是挂到 shell.overlay 的独立座位，
+       * 没有 useChat），所以推导不出 washing / rinsing / spinning 的细分——
+       * 那就不假装推导，只报它确确实实知道的两件事：
+       *
+       *   pending 有值 → waiting（在等你）
+       *   running 为真 → starting（在忙，细分不猜）
+       *
+       * 早先这里写死 state = 'washing'，不管实际在干什么都报"洗涤中"。
+       * 那违背了这台洗衣机的第一条原则：每个动作都要对应一个可验证的宿主信号。
+       */
+      const state = pending !== undefined ? 'waiting' : 'starting';
+      const title = tr('state.' + state);
+      const sub = pending !== undefined ? tr('sub.waiting') : tr('overlay.running');
+      // 等你确认时必须出现——那正是用户唯一需要看它的时候。
+      // 其余情况盖住内容不合适，忙碌才浮现（浮层独有的默认，不复用 hideWhenIdle）。
+      if (pending === undefined && running !== true && cfg.overlayOnlyWhenBusy !== false) return null;
 
       return h('div', {
         className: 'dsh-washer dw-overlay-root',

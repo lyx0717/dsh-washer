@@ -1467,6 +1467,40 @@ await test('停靠条三档：@media 规则要写在 .dw-t1 / .dw-t2 基础规�
   assert.ok(mini > t2, '迷你档必须写在 .dw-t2 之后，否则副标题规则不生效');
 });
 
+await test('无进展提示：正常出字时不误报（副标题还是时长/件数）', async () => {
+  /*
+   * 这条测的是**不误报**，不是"卡住能显示"。
+   * 45 秒阈值要真等 45 秒，不值得为它拖慢整个套件；
+   * 而"正常在动却被叫卡住"才是这个功能真正会翻车的地方
+   * （用户一看到假警报就不信这台机器了）。
+   * 阈值判定本身由 core.test.mjs 的 stalledForOf 用例覆盖。
+   */
+  const m = mount(streaming({ config: baseConfig() }));
+  await m.settle(420);
+  const text = m.text();
+  assert.ok(!text.includes('没动静'), '刚起轮的正常流式不该报卡住: ' + text);
+  assert.ok(text.includes('洗涤中') || text.includes('漂洗中') || text.includes('脱水中'),
+    '状态词应是运行态，实际: ' + text);
+  m.unmount();
+});
+
+await test('无进展提示：空闲/等待/压缩态都不报卡住', async () => {
+  for (const world of [
+    makeWorld({}),
+    makeWorld({ running: true, pendingInteraction: { kind: 'approval' } }),
+    makeWorld({ running: true, partial: null, nodes: [], outline: [{ turn: 1, seq: 1, prompt: 'x', response: '' }] }),
+  ]) {
+    const m = mount(world, 'dock', baseConfig());
+    await m.settle(30);
+    const text = m.text();
+    // 这些状态本来就不该有产出，安静是正常的
+    if (text.includes('等你确认') || text.includes('待机')) {
+      assert.ok(!text.includes('没动静'), '这些状态不该报卡住: ' + text);
+    }
+    m.unmount();
+  }
+});
+
 await test('停靠条三档：渲染出的结构能让三档生效（无 dw-dot，t2 带 compact 标记）', async () => {
   /*
    * 三档全靠 CSS 换档，DOM 必须一次吐全：

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   deriveState, latestTurnOf, turnProduced, findTurnError, findToolFailure, activeTool, recentTools,
   toolCountOf, errorCodeOf, elapsedOf, formatDuration, formatToolMs, formatTokens,
-  shouldSwitch, VISUAL, compactionRunning,
+  shouldSwitch, VISUAL, compactionRunning, stalledForOf,
 } from '../src/core.js';
 
 const NOW = 1_700_000_000_000;
@@ -266,4 +266,35 @@ test('压缩上下文 → draining（优先于 rinsing/washing）', () => {
   assert.equal(deriveState({ ...base, running: true,
     trajectory: { requests: [{ purpose: 'compaction', status: 'complete' }] },
     runningCalls: [{ name: 'bash', callId: 'c1' }] }), 'rinsing');
+});
+
+/* ------------------------------------------------------------------ *
+ * 无进展信号（stalledForOf）
+ * ------------------------------------------------------------------ */
+
+test('stalledForOf：非产出态一律不判卡住', () => {
+  const samples = [{ at: NOW - 60000, output: 10 }, { at: NOW - 60000, output: 20 }];
+  for (const state of ['off', 'idle', 'starting', 'draining', 'waiting', 'done', 'error']) {
+    assert.equal(stalledForOf(samples, state, NOW), null, state);
+  }
+});
+
+test('stalledForOf：采样不足两点不叫卡住（长思考不误报）', () => {
+  assert.equal(stalledForOf([], 'washing', NOW), null);
+  assert.equal(stalledForOf([{ at: NOW - 300000, output: 5 }], 'washing', NOW), null);
+});
+
+test('stalledForOf：距最后一次产出超过阈值才叫卡住', () => {
+  const fresh = [{ at: NOW - 20000, output: 1 }, { at: NOW - 5000, output: 9 }];
+  assert.equal(stalledForOf(fresh, 'washing', NOW), null);
+
+  const stale = [{ at: NOW - 40000, output: 1 }, { at: NOW - 50000, output: 9 }];
+  assert.equal(stalledForOf(stale, 'washing', NOW), 50000);
+});
+
+test('stalledForOf：阈值边界（等于阈值不算卡住）', () => {
+  const samples = [{ at: NOW - 90000, output: 1 }, { at: NOW - 45000, output: 9 }];
+  assert.equal(stalledForOf(samples, 'rinsing', NOW), null);
+  assert.equal(stalledForOf(samples, 'rinsing', NOW, 45000), null);
+  assert.equal(stalledForOf(samples, 'rinsing', NOW + 1), 45001);
 });
