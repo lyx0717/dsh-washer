@@ -147,6 +147,32 @@ node debug/e2e.mjs               # 端到端：起真服务 + 模拟事件流，
 - `src/client.template.js` 组件源码，`build.mjs` 把 core/CSS/SVG 内联成单文件 `client.js`。
 - `test/render.mjs` 是最小 React hooks 运行时：真跑 hooks、真 re-render，能测到时间轴行为。
 
+### ⚠️ 改包名时的唯一硬约束
+
+`src/client.template.js` 第 10 行的模块 id **必须等于 `package.json` 的 `name`**：
+
+```js
+window.__ModuleLoader__.load({
+  id: '@lyx0717/dsh-washer',   // ← 必须 == package.json 的 name
+```
+
+宿主按 `insert.name`（即包名）去 `__ModuleLoader__` 的注册表里查客户端模块。两者不一致时，**查不到的那一边不会报任何错**：服务端半照常工作、日志干净，只是 dock 座位不出现、`settings.section` 不注册——用户在界面上看到的是「插件装了但设置页里连入口都没有」。
+
+`build.mjs` 已加构建期硬断言：模块 id 与包名不符直接构建失败并指出该改哪一行。所以正常情况你改错就会当场发现——**如果看到上面这个症状，先怀疑是不是绕过了构建直接用了旧的 `client.js`。**
+
+改包名时还要同步（`grep -rn "dsh-washer" src/ cordis.patch.yml` 能全部列出来）：
+
+| 位置 | 字段 |
+|---|---|
+| `package.json` | `name` |
+| `cordis.patch.yml` | `insert.name`、`disabled` 表达式里的 `options.name` |
+| `src/client.template.js` | `__ModuleLoader__.load` 的 `id`、插件对象的 `name`、各处 `registrant` |
+
+另外，npm 与插件市场是两套东西，别混：
+
+- **npm 包名**改了就是 breaking change，必须**先卸旧包再装新包**——`disabled` 表达式只认新包名，新旧并存会在两个 entry 上都挂 `id: washer`，插件被初始化两次（监听器重复注册、SSE 推送翻倍）。
+- **插件市场**（`awesome-dsh-plugin`）那条 `lyx0717__dsh-washer.yml` 的 `url` 字段**只能填 GitHub 仓库地址**，不要改成 npm 链接。npm 源是官方 CI 的 `probe-npm.mjs` 自动探测的：它读仓库根 `package.json` 的 `name`，再核对 npm 上该包的 `repository.url` 是否指回同一个 GitHub 仓库。所以只要 `name` 和 `repository` 都对，不用提 PR 改任何东西，等流水线跑一轮即可。
+
 ### 发布到插件市场
 
 改代码 → 刷新索引 → push，一步别少：`node scripts/refresh-market.mjs && git add docs/index.json && git commit -m "docs: 刷新市场索引" && git push`（索引钉当前 commit/版本，push 到 `main` 后 GitHub Pages 自动更新；pre-push 钩子会在"代码变了但索引没刷"时拦下并自动重写 `docs/index.json`）。
