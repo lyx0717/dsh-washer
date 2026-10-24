@@ -702,7 +702,6 @@ function showMenu() {
       label: '造型',
       submenu: [
         { label: skin === 'precision' ? '✓ 精密家电' : '精密家电', click: () => setSkin('precision') },
-        { label: skin === 'anime' ? '✓ 动漫' : '动漫', click: () => setSkin('anime') },
         { label: skin === 'pixel' ? '✓ 像素' : '像素', click: () => setSkin('pixel') },
       ],
     },

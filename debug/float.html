@@ -363,7 +363,7 @@
   /*
    * 以前浮窗在机器右上角外挂了一颗独立的圆灯。问题是三套造型本来就
    * 各自带着自己的指示灯——像素是机身上的 .px-led、精密家电是面板上的
-   * .led、动漫是液晶屏那道发光条——再挂一颗悬在最外层的灯，
+   * .led、精密家电是液晶屏那道发光条——再挂一颗悬在最外层的灯，
    * 怎么看都是贴在机器身上的异物，而不是机器的一部分。
    *
    * 现在只用造型自带的灯：把状态色注入 --led，由各造型的 CSS 自己消化。
@@ -389,7 +389,7 @@
    */
   .machine .dw-frame { display: block; position: relative; }
   .machine .dw-frame .dw-frame-inner { transform-origin: 0 0; }
-  /* 精密家电和动漫造型靠自带的 transition 表达水位，像素图靠 --water */
+  /* 精密家电造型靠自带的 transition 表达水位，像素图靠 --water */
   body[data-size="tiny"] .machine > .dw-frame { transform-origin: top left; }
 
   /* ---------- 主题：跟随宿主 GUI（dock 同款明暗） ---------- */

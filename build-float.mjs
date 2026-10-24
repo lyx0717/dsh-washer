@@ -77,7 +77,7 @@ const MACHINE_SVG = src('machine.svg').trim();
 function grabPxBlock() {
   const style = src('style.css');
   const start = style.indexOf('/* ---------- 32px 像素 sprite 的三个可动图层 ---------- */');
-  const end = style.indexOf('/* ---------- 精密家电 / 动漫风', start);
+  const end = style.indexOf('/* ---------- 精密家电：按宽度缩放', start);
   if (start < 0 || end < 0) throw new Error('style.css 里找不到像素 sprite 段落');
   /*
    * --dw-water / --dw-foam / --dw-led 是主界面的变量名，浮窗用的是

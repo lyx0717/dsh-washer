@@ -307,7 +307,7 @@
 .dw-px[data-blink='1'] .px-led { animation: dw-blink 0.6s steps(2, end) infinite; }
 .dw-px[data-blink='2'] .px-led { animation: dw-blink 0.35s steps(2, end) infinite; }
 
-/* ---------- 精密家电 / 动漫风：按宽度缩放，不重排 ---------- */
+/* ---------- 精密家电：按宽度缩放，不重排 ---------- */
 
 .dw-frame {
   position: relative;
