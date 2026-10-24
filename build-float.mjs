@@ -42,10 +42,54 @@ const SCREEN_WORD = (() => {
   if (m === null) throw new Error('找不到 SCREEN_WORD');
   return m[1];
 })();
+/**
+ * 从源码里抠一个对象字面量，靠**括号配平**找结尾。
+ *
+ * 不能用 /\{[\s\S]*?\};/ 这种非贪婪正则：碰到对象里有方法体
+ * （`get pixel() { ... }`）就会在第一个 `};` 处提前截断——那是方法体的
+ * 结尾，不是对象的。截断后生成的 float.machines.js 整段语法错误，
+ * 浏览器里 window.WasherMachines 变 undefined，浮窗就画不出洗衣机。
+ */
+function grabObject(body, marker, label) {
+  const start = body.indexOf(marker);
+  if (start < 0) throw new Error(`找不到 ${label}`);
+  const open = body.indexOf('{', start);
+  if (open < 0) throw new Error(`${label} 没有对象字面量`);
+  let depth = 0;
+  let inString = null;
+  for (let i = open; i < body.length; i += 1) {
+    const ch = body[i];
+    if (inString !== null) {
+      if (ch === '\\') { i += 1; continue; }
+      if (ch === inString) inString = null;
+      continue;
+    }
+    if (ch === '\'' || ch === '"' || ch === '`') { inString = ch; continue; }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return body.slice(open, i + 1);
+    }
+  }
+  throw new Error(`${label} 没有闭合`);
+}
+
+/**
+ * 浮窗只用到 NATURAL[skin].w / .h 两个数。
+ *
+ * 源码里的 NATURAL 是**带 getter 的对象**，getter 读 SKIN_REGISTRY ——
+ * 那个注册表在主界面的模块作用域里，浮窗这份独立脚本里没有。
+ * 原样搬过来会在 NATURAL[skin] 那行抛 ReferenceError: SKIN_REGISTRY is not defined。
+ *
+ * 所以在构建期就把 getter 求值成本常量再输出：浮窗要的是尺寸，不是
+ * 可扩展性。注册表仍是主界面的事，两边只有尺寸这一个事实来源。
+ */
 const NATURAL = (() => {
-  const m = src('client.template.js').match(/const NATURAL = (\{[\s\S]*?\});/);
-  if (m === null) throw new Error('找不到 NATURAL');
-  return m[1];
+  const literal = grabObject(src('client.template.js'), 'const NATURAL =', 'NATURAL');
+  const skinNames = [...literal.matchAll(/get\s+(\w+)\s*\(\s*\)\s*\{[\s\S]*?\{`?\s*w\s*:\s*(\d+)\s*,\s*h\s*:\s*(\d+)\s*`?\s*\}/g)];
+  if (skinNames.length === 0) throw new Error('NATURAL 里找不到尺寸兜底值');
+  const entries = skinNames.map(([, name, w, h]) => `    ${name}: { w: ${w}, h: ${h} },`);
+  return `{\n${entries.join('\n')}\n  }`;
 })();
 
 /** 直接从 core.js 抠 VISUAL（浮窗只需要 water/foam/led/blink/spin 四个量） */
