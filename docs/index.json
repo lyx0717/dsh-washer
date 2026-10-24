@@ -6,7 +6,7 @@
   },
   "plugins": [
     {
-      "name": "dsh-washer",
+      "name": "@lyx0717/dsh-washer",
       "title": {
         "en": "Washer · Agent status machine",
         "zh": "滚筒洗衣机"
@@ -23,12 +23,12 @@
       },
       "versions": [
         {
-          "version": "0.2.5",
-          "publishTimestamp": 1792829126,
+          "version": "0.3.0",
+          "publishTimestamp": 1792830586,
           "source": {
             "type": "git",
             "url": "https://github.com/lyx0717/dsh-washer",
-            "commit": "1e9a424d722de0af4025374853a68c9f5e7c1eb7"
+            "commit": "c647b464fb42cb7857de7dddf0fd816a4af91e5a"
           }
         }
       ]
