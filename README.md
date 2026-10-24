@@ -48,13 +48,40 @@
 ## 安装
 
 ```bash
-# 本地目录安装（插件管理器等价命令）
+# 从 npm 安装（推荐）
+dsh plugin --profile desktop add @lyx0717/dsh-washer
+
+# 或者从 GitHub 固定 commit 安装（跟最新发布但可复现）
+dsh plugin --profile desktop add github:lyx0717/dsh-washer#<commit>
+
+# 或者本地目录安装（开发用，改完即时生效）
 dsh plugin --profile desktop add /path/to/dsh-washer
 ```
 
-装完在 profile 的 `cordis.patch.yml` 里会多出一行 bundle 引用。改完重启 Harness（替换已装包需要重启，新装包由 HMR 接管）。
+装完在 profile 的 `package.json` 里会多出一条依赖。改完重启 Harness（替换已装包需要重启，新装包由 HMR 接管）。
 
-**卸载**：`dsh plugin --profile desktop remove dsh-washer`
+**卸载**：
+
+```bash
+dsh plugin --profile desktop remove @lyx0717/dsh-washer
+```
+
+> ### 从 0.2.x（旧包名 `dsh-washer`）升级
+>
+> 0.3.0 起包名改为 `@lyx0717/dsh-washer`。`cordis.patch.yml` 里防止重复挂载的
+> `disabled` 表达式**只认新包名**，所以旧包名和新包名同时装会在两个
+> entry 上都挂出 `id: washer`，插件被初始化两次（监听器重复注册、SSE 推送翻倍）。
+>
+> 升级必须**先卸旧的再装新的**：
+>
+> ```bash
+> dsh plugin --profile desktop remove dsh-washer
+> dsh plugin --profile web     remove dsh-washer
+> dsh plugin --profile desktop add @lyx0717/dsh-washer
+> ```
+>
+> 偏好文件 `~/.dsh/dsh-washer-float-prefs.json` 和浏览器 `localStorage` 的
+> key 都没变，卸载不会丢设置。
 
 ## 配置
 
@@ -89,7 +116,7 @@ dsh plugin --profile desktop add /path/to/dsh-washer
 ```yaml
 - insert:
     - id: washer
-      name: 'dsh-washer'
+      name: '@lyx0717/dsh-washer'
       config:
         size: 'M'
         skin: 'precision'

@@ -9,8 +9,8 @@
 # 行下的插件，走 `insert` 的第三方 bundle 拿到的控制器永远是 unavailable。
 - insert:
     - id: washer
-      name: 'dsh-washer'
-      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === 'dsh-washer' && e.options.id !== 'washer' && !e.disabled)"
+      name: '@lyx0717/dsh-washer'
+      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === '@lyx0717/dsh-washer' && e.options.id !== 'washer' && !e.disabled)"
       config:
         enabled: true
         mode: dock

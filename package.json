@@ -1,13 +1,39 @@
 {
-  "name": "dsh-washer",
-  "version": "0.2.5",
-  "private": true,
-  "type": "module",
+  "name": "@lyx0717/dsh-washer",
+  "version": "0.3.0",
   "description": "滚筒洗衣机 · 用一台洗衣机的运转状态显示 Agent 的工作状态",
+  "type": "module",
   "icon": "./icon.svg",
   "main": "index.js",
+  "license": "MIT",
+  "author": {
+    "name": "李永轩",
+    "url": "https://github.com/lyx0717"
+  },
+  "homepage": "https://github.com/lyx0717/dsh-washer#readme",
+  "bugs": {
+    "url": "https://github.com/lyx0717/dsh-washer/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lyx0717/dsh-washer.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "widget",
+    "overlay",
+    "desktop",
+    "status",
+    "ui"
+  ],
   "engines": {
     "dsh": ">=0.2.0-rc.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "exports": {
     ".": "./index.js",
@@ -35,6 +61,11 @@
     "debug/detail.html",
     "debug/overlay.html"
   ],
+  "scripts": {
+    "build": "node build.mjs && node build-float.mjs",
+    "test": "node --test --test-force-exit test/core.test.mjs test/host.test.mjs",
+    "prepublishOnly": "npm run build && npm test"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
