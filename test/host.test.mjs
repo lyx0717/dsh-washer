@@ -714,7 +714,7 @@ test('偏好双向同步：POST 进来的偏好要能通过 GET 读回（浮窗 
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
   const port = await waitForPort(api);
 
-  const saved = api.syncOverlayPrefs({ size: 'tiny', skin: 'anime' });
+  const saved = api.syncOverlayPrefs({ size: 'tiny', skin: 'precision' });
   assert.equal(saved.size, 'tiny');
 
   // 走真实 HTTP GET（端点带 token，从闭包里拿不到，直接用内部函数比
@@ -722,7 +722,7 @@ test('偏好双向同步：POST 进来的偏好要能通过 GET 读回（浮窗 
   const { readOverlayPrefs } = await import('../index.js');
   const current = readOverlayPrefs();
   assert.equal(current.size, 'tiny', '写进去的要能读回来');
-  assert.equal(current.skin, 'anime');
+  assert.equal(current.skin, 'precision');
 
   ctx.dispose();
 });
