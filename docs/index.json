@@ -24,11 +24,11 @@
       "versions": [
         {
           "version": "0.3.2",
-          "publishTimestamp": 1792836930,
+          "publishTimestamp": 0,
           "source": {
             "type": "git",
             "url": "https://github.com/lyx0717/dsh-washer",
-            "commit": "ac19be14b9e6169a18a35a5511c0b6f0e85d3a01"
+            "commit": "6470bb30b1ee6f23bbf6764540ada0d2d6cf177a"
           }
         }
       ]
