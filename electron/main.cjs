@@ -452,7 +452,17 @@ function createWindow() {
     }
   });
 
-  // 'moved' 在拖动结束时才稳定触发，正好是磁吸的时机
+  /*
+   * 'moved' 在拖动结束时才稳定触发，正好是磁吸的时机。
+   *
+   * 注意一个 system-level 的坑：macOS「台前调度」（Stage Manager，
+   * 默认 com.apple.WindowManager GloballyEnabled=1）开启时，系统会接管
+   * 窗口摆位，把窗口往侧边栏挪。表现就是本函数把窗口贴到屏幕左边缘
+   * (x=0) 之后，窗口又自己往右弹开一段，看起来像代码 bug。
+   * snapToEdges 的判定本身没错（逐点验算过：距边缘 <24pt 吸附，24pt 不动），
+   * 是系统在贴边之后又把窗口挪了。关掉台前调度即不再复现。
+   * 不要试图用代码对抗它——试过 'move' 防抖和静默期判定，都是错的方向。
+   */
   win.on('moved', () => {
     snapToEdges();
     savePosition();
