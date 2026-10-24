@@ -1,5 +1,13 @@
+/*
+ * 模块 id 必须与 package.json 的 name 完全一致。
+ *
+ * 宿主按 insert.name（= 包名）去 __ModuleLoader__ 的注册表里查这个模块，
+ * 查不到就等于客户端半从没加载过：dock 座位不出现、settings.section 也不注册，
+ * 表现就是"插件装了但设置页里连入口都没有"——而服务端半是好的，
+ * 日志里看不出任何报错。改包名时这里最容易漏。
+ */
 window.__ModuleLoader__.load({
-  id: 'dsh-washer',
+  id: '@lyx0717/dsh-washer',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
@@ -859,7 +867,7 @@ window.__ModuleLoader__.load({
      * 插件
      * ------------------------------------------------------------------ */
     return {
-      name: 'dsh-washer',
+      name: '@lyx0717/dsh-washer',
       // 只要 slots 与 locale：配置改动存 localStorage，不再依赖 configForms。
       inject: ['slots', 'locale'],
       /**
@@ -1283,7 +1291,7 @@ window.__ModuleLoader__.load({
           order: 80,
           label: (typeof ctx.locale.bind === 'function' ? (ctx.locale.bind(LOCALE_NS)('set.nav')) : '洗衣机'),
           locale: LOCALE_NS,
-          registrant: 'dsh-washer',
+          registrant: '@lyx0717/dsh-washer',
           inject: () => ({ washerGetConfig: liveConfig, washerSetPref: writePref, washerSubscribePrefs: subscribePrefs }),
         }, WasherSettings));
         ctx.effect(() => () => {
@@ -1297,7 +1305,7 @@ window.__ModuleLoader__.load({
             id: ENTRY_ID,
             order: 40,
             locale: LOCALE_NS,
-            registrant: 'dsh-washer',
+            registrant: '@lyx0717/dsh-washer',
             inject: () => ({ washerGetConfig: liveConfig, washerSubscribePrefs: subscribePrefs }),
           }, WasherOverlay));
           ctx.effect(() => () => {
@@ -1319,7 +1327,7 @@ window.__ModuleLoader__.load({
            */
           order: -10,
           locale: LOCALE_NS,
-          registrant: 'dsh-washer',
+          registrant: '@lyx0717/dsh-washer',
           inject: () => ({ washerGetConfig: liveConfig, washerVariant: 'dock', washerSetPref: writePref, washerSubscribePrefs: subscribePrefs }),
         }, WasherDock));
 
@@ -1330,7 +1338,7 @@ window.__ModuleLoader__.load({
           id: ENTRY_ID + '-waiting',
           order: 60,
           locale: LOCALE_NS,
-          registrant: 'dsh-washer',
+          registrant: '@lyx0717/dsh-washer',
           inject: () => ({ washerGetConfig: liveConfig, washerVariant: 'header', washerSubscribePrefs: subscribePrefs }),
         }, WasherDock));
 
