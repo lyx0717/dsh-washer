@@ -137,14 +137,16 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 ```bash
 node build.mjs                   # src/ → client.js（内联 core/css/svg，约 128KB）
 node --test test/core.test.mjs   # 状态机单测（29 条）
-node --test test/host.test.mjs   # 宿主半单测（42 条；会起本地服务，按需手动跑）
-node test/render.mjs             # 行为测试（41 条）+ 生成 /tmp/washer-render 截图素材
+node --test test/host.test.mjs   # 宿主半单测（49 条；会起本地服务，按需手动跑）
+node test/render.mjs             # 行为测试（48 条）+ 生成 /tmp/washer-render 截图素材
 node debug/e2e.mjs               # 端到端：起真服务 + 模拟事件流，逐行打印状态迁移
 ```
 
 - `src/core.js` 纯函数状态机，node 下可直接测。
 - `src/client.template.js` 组件源码，`build.mjs` 把 core/CSS/SVG 内联成单文件 `client.js`。
 - `test/render.mjs` 是最小 React hooks 运行时：真跑 hooks、真 re-render，能测到时间轴行为。
+  加 `--no-shots` 只跳过截图写盘，**用例照跑满 48 条**（别在中间 `process.exit()`，
+  否则后面的用例没跑也显示通过）。
 
 ### ⚠️ 改包名时的唯一硬约束
 
