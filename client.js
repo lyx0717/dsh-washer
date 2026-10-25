@@ -442,6 +442,16 @@ function stateWeight(state) {
 }
 
 /**
+ * 迟滞窗口：降级切换要在这个状态停留多久才放行。
+ *
+ * 导出是因为另外两处也要用同一个数：
+ *   - 悬浮窗（index.js 的 settleState）到点要重算一次，得知道等多久
+ *   - 客户端 dock 的 setTimeout 补偿（src/client.template.js）同理
+ * 各写一个 400 迟早会漂。
+ */
+const SWITCH_HOLD_MS = 400;
+
+/**
  * 迟滞：从旧状态切到新状态是否值得（避免 rinsing/washing 之间高频抖动）。
  * @param {string} from
  * @param {string} to
@@ -453,7 +463,7 @@ function shouldSwitch(from, to, heldMs) {
   if (URGENT_STATES[to] === 1) return true;
   if (URGENT_STATES[from] === 1) return true;
   if (stateWeight(to) > stateWeight(from)) return true;
-  return heldMs >= 400;
+  return heldMs >= SWITCH_HOLD_MS;
 }
 
     /* ------------------------------------------------------------------ *
@@ -465,6 +475,45 @@ function shouldSwitch(from, to, heldMs) {
 
     const LOCALE_NS = 'washer';
     const ENTRY_ID = 'washer';
+
+    /* ------------------------------------------------------------------ *
+     * 把「在不在等人」报给宿主
+     *
+     * 悬浮窗是独立 Electron 进程，只能从宿主事件自己推断 pending；
+     * dock 手上这份 pendingInteraction 才是宿主认可的权威值。两边判据不同，
+     * 时序上差几十毫秒，表现就是「dock 说等你确认、浮窗还在漂洗」。
+     *
+     * 走 /dsh-washer/pending（127.0.0.1 上那个带 token 的服务）。不放到
+     * webServer 的同源路由，是因为那条路给页面用、没有 token——
+     * 改状态的东西不该是裸的。
+     *
+     * 拿不到端点就安静失败：这只是锦上添花的同步，不该影响 dock 本身。
+     * 同一 (sessionId, kind) 连续报两次会跳过：React 严格模式会重复调
+     * effect，宿主那边虽然也挡了，但没必要白发一次请求。
+     * ------------------------------------------------------------------ */
+    let lastReportedPending = null;
+    /*
+     * 必须用同源相对路径，和 /dsh-washer/prefs 一个道理：客户端插件拿不到
+     * 端点信息（props.washerEndpoint 那个注入项根本不存在，早期为它写过一次
+     * 代码，首行就 return，一次都没发出去）。宿主用 ctx.webServer 注册了
+     * 同源路由，页面和它同一个 origin，相对路径直接打过去就行——
+     * 不用端口、不用 token、不受 connect-src 的 CSP 限制。
+     */
+    const PENDING_REPORT_PATH = '/dsh-washer/pending';
+    function postPendingToHost(sessionId, kind) {
+      const tag = String(sessionId) + '\u0000' + String(kind);
+      if (tag === lastReportedPending) return;
+      lastReportedPending = tag;
+      try {
+        fetch(PENDING_REPORT_PATH, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: String(sessionId), kind }),
+        }).catch(() => { lastReportedPending = null; });
+      } catch {
+        lastReportedPending = null;
+      }
+    }
 
     const ZH = {
       'state.off': '未连接',
@@ -906,6 +955,26 @@ function shouldSwitch(from, to, heldMs) {
         sessionId, running, pending, runningCalls, partial, nodes, outline, trajectory, sticky, now,
       });
 
+      /*
+       * 把「到底在不在等人」报给宿主。
+       *
+       * 为什么需要这一步：悬浮窗在独立 Electron 进程里，它只能从宿主事件
+       * 自己推断 pending（approval/request 计数 + ask_user_question 在不在跑）。
+       * dock 手上这份 pendingInteraction 才是宿主认可的权威值。两边判据不同，
+       * 时序上差几十毫秒——用户看到的就是「dock 说等你确认、浮窗还在漂洗」。
+       *
+       * 性能：依赖只认 kind，不认对象身份。宿主每帧都可能在 status 里放一个
+       * 新对象，按身份比会每个渲染周期都发一次请求。按 kind 比，一次任务
+       * 实际只发两次（弹出、回答）。没有定时器、没有轮询。
+       */
+      const pendingKind = pending === undefined || pending === null
+        ? null
+        : (typeof pending.kind === 'string' && pending.kind !== '' ? pending.kind : 'approval');
+      React.useEffect(() => {
+        if (sessionId === undefined || sessionId === null) return;
+        postPendingToHost(sessionId, pendingKind);
+      }, [sessionId, pendingKind]);
+
       /* 迟滞：washing ↔ rinsing 之间不抖，紧急态立即切 */
       React.useEffect(() => {
         const current = shownRef.current;
@@ -924,7 +993,7 @@ function shouldSwitch(from, to, heldMs) {
         const id = setTimeout(() => {
           shownRef.current = { state: candidate, at: Date.now() };
           setShown(candidate);
-        }, Math.max(0, 400 - held));
+        }, Math.max(0, SWITCH_HOLD_MS - held));
         return () => clearTimeout(id);
       }, [candidate]);
 

@@ -36,6 +36,7 @@ import {
   typicalTurnMs,
   remainingOf,
   shouldSwitch,
+  SWITCH_HOLD_MS,
 } from './src/core.js';
 
 export const name = 'dsh-washer';
@@ -80,6 +81,20 @@ const PREF_BODY_LIMIT = 4096;
 const WEB_PREFS_EVENTS_PATH = '/dsh-washer/prefs/events';
 /** SSE 心跳。中间层（各种代理/休眠）会掐掉长时间无数据的连接。 */
 const SSE_HEARTBEAT_MS = 25000;
+/**
+ * 客户端上报「这个会话现在到底在不在等人」。
+ *
+ * 为什么需要它：悬浮窗的 pending 是自己推断的（approval/request 计数 +
+ * ask_user_question 在不在跑），dock 用的是宿主投影 pendingInteraction。
+ * 两边判据不同，时序上差几十毫秒——用户看到的就是「dock 说等你确认、
+ * 浮窗还在漂洗」。
+ *
+ * 频次：只在 pending 真的变化时发一次，一次任务两次（弹出、回答）。
+ * 没有定时器、没有轮询，所以不存在性能问题。
+ */
+const WEB_PENDING_PATH = '/dsh-washer/pending';
+/** 上报体上限。就两个字段，1KB 已经非常宽松。 */
+const PENDING_BODY_LIMIT = 1024;
 
 /* ------------------------------------------------------------------ *
  * 事件 → deriveState 输入
@@ -826,6 +841,8 @@ export function apply(ctx, config) {
    */
   let shownState = null;
   let shownStateAt = 0;
+  /** 迟滞窗口到点重算用的定时器（见 settleState 末尾） */
+  let pendingSwitchTimer = null;
   let lastPushAt = 0;
   let pushTimer = null;
   /** 由宿主拉起的 Electron 悬浮窗进程 */
@@ -895,6 +912,12 @@ export function apply(ctx, config) {
 
   /** sessionId -> 挂起中的审批数（snapshot() 要读，声明必须在它之前） */
   const pendingApprovals = new Map();
+  /**
+   * 客户端报上来的待人工状态：sessionId -> { kind } | null。
+   * 与 pendingApprovals 并存而不是合并：一个是"宿主侧看到的审批请求数"，
+   * 一个是"浏览器那边渲染时认定在等"，来源不同，判据要能分别看。
+   */
+  const clientPending = new Map();
 
   /*
    * 正在等人回答的提问工具。
@@ -917,6 +940,13 @@ export function apply(ctx, config) {
    * 审批优先：它比提问更需要人立刻动手。
    */
   function pendingFor(sessionId, state) {
+    /*
+     * 客户端报上来的最准——它就是 dock 手上那份 pendingInteraction。
+     * 但只在"报在等"时采信：它报 null 不代表本地看到的提问工具可以忽略，
+     * 那边可能只是还没收到。取并集才不会被一边的滞后熄灭。
+     */
+    const reported = clientPending.get(sessionId);
+    if (reported !== undefined && reported !== null) return reported;
     if ((pendingApprovals.get(sessionId) || 0) > 0) return { kind: 'approval' };
     return awaitingAnswer(state) ? { kind: 'question' } : undefined;
   }
@@ -1105,6 +1135,22 @@ export function apply(ctx, config) {
       shownState = candidate;
       shownStateAt = now;
       return shownState;
+    }
+    /*
+     * 还不能切，但迟早要切 —— 补一个到点重算的定时器。
+     *
+     * 没有这一步，迟滞会变成"可能永远不切"：settleState 只在推送时被调，
+     * 而推送有签名去重，窗口期内状态没别的变化就不会再推一次，
+     * 于是"等满 400ms 该切了"这一刻根本没人来采样。
+     * dock 那边是 setTimeout 补偿的（src/client.template.js:544），这里对齐。
+     */
+    if (pendingSwitchTimer === null) {
+      const delay = Math.max(0, SWITCH_HOLD_MS - (now - shownStateAt));
+      pendingSwitchTimer = setTimeout(() => {
+        pendingSwitchTimer = null;
+        schedulePush(true);
+      }, delay + 16);
+      if (typeof pendingSwitchTimer.unref === 'function') pendingSwitchTimer.unref();
     }
     return shownState;
   }
@@ -1524,6 +1570,7 @@ export function apply(ctx, config) {
    * 那种请求不该有副作用。
    */
   if (ctx.webServer !== undefined) {
+
     /*
      * 偏好变化推送（SSE）：设置页长连着这条，收到就重渲染。
      *
@@ -1627,6 +1674,74 @@ export function apply(ctx, config) {
         });
       },
     }), 'dsh-washer: web overlay-prefs route');
+
+    /*
+     * 客户端 → 宿主：这个会话现在在不在等人。
+     *
+     * 走同源 HTTP，和 /dsh-washer/prefs 一套路子：不加端口、不加 token、
+     * 不碰 CSP。客户端只在 pending **变化**时 POST 一次（一次任务两次），
+     * 没有定时器、没有轮询，所以这个端点的负载按 0 算。
+     */
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: WEB_PENDING_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405, { 'content-type': 'application/json', allow: 'POST' });
+          res.end(JSON.stringify({ error: 'method not allowed' }));
+          return;
+        }
+        let body = '';
+        let tooBig = false;
+        req.on('data', (chunk) => {
+          if (tooBig) return;
+          body += chunk;
+          if (body.length > PENDING_BODY_LIMIT) {
+            tooBig = true;
+            res.writeHead(413, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'payload too large' }));
+            req.destroy();
+          }
+        });
+        req.on('end', () => {
+          if (tooBig) return;
+          let payload = null;
+          try { payload = JSON.parse(body); } catch { payload = null; }
+          if (payload === null || typeof payload !== 'object') {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'bad request' }));
+            return;
+          }
+          const rawId = payload.sessionId;
+          if (typeof rawId !== 'string' || rawId === '') {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'sessionId required' }));
+            return;
+          }
+          // kind 只认两种；null/undefined 表示"不等了"
+          const rawKind = payload.kind;
+          if (rawKind !== null && rawKind !== undefined && rawKind !== 'approval' && rawKind !== 'question') {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'bad kind' }));
+            return;
+          }
+          const next = rawKind === null || rawKind === undefined ? null : { kind: rawKind };
+          const prev = clientPending.get(rawId);
+          const changed = next === null
+            ? prev !== undefined
+            : (prev === undefined || prev.kind !== next.kind);
+          /*
+           * 值没变就不写、不推。客户端已经保证了只在变化时发，
+           * 这里再挡一道：重复投递不该让浮窗白闪一下。
+           */
+          if (next === null) clientPending.delete(rawId);
+          else clientPending.set(rawId, next);
+          if (changed) schedulePush(true);
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, changed }));
+        });
+      },
+    }), 'dsh-washer: client pending route');
 
   }
 

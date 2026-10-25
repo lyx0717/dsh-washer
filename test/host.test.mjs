@@ -192,15 +192,72 @@ function resetPrefsFile() {
 
 function makeCtx() {
   resetPrefsFile();
+  /*
+   * 端点文件是**上一轮实例**留下的：里面记着旧进程的 pid 和旧 token。
+   * 不删的话，本用例去读它会拿到过期 token —— 请求直接 401，
+   * 但这个 401 跟被测逻辑毫无关系，排查时会一路找错方向。
+   */
+  try { rmSync(TEST_ENDPOINT); } catch { /* 本来就没有 */ }
   const handlers = new Map();
   const disposers = [];
+  /*
+   * 假的 webServer：只把注册的路由收着，测试自己调 handler。
+   *
+   * 真实宿主里这些路由挂在页面同源服务上，没有 token，所以测试也不该
+   * 拿 token 去打——那测的就不是同一条路了。routes 用 path 索引，
+   * 同一个 path 重复注册以最后一次为准（和真实 webServer 行为一致）。
+   */
+  const routes = new Map();
+  const webServer = {
+    register: (spec) => {
+      routes.set(spec.path, spec);
+      return () => { routes.delete(spec.path); };
+    },
+  };
   return {
     handlers,
+    routes,
+    webServer,
     dispose: () => { for (const d of disposers) d(); },
     on: (name, fn) => { handlers.set(name, fn); },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); },
     logger: { info: () => {}, warn: () => {} },
   };
+}
+
+/**
+ * 直接调一个已注册的同源路由 handler。
+ *
+ * 造最小的 req/res 鸭子对象：handler 只用到 method / on('data'|'end') /
+ * writeHead / end / destroy，照着它要的形状给就行。
+ */
+function callRoute(ctx, path, method, body) {
+  const spec = ctx.routes.get(path);
+  assert.ok(spec !== undefined, `路由 ${path} 必须注册过`);
+  const chunks = [];
+  const req = {
+    method,
+    headers: {},
+    destroy: () => {},
+    on: (event, fn) => {
+      if (event === 'data' && body !== undefined) fn(Buffer.from(JSON.stringify(body)));
+      if (event === 'end') fn();
+    },
+  };
+  return new Promise((resolve) => {
+    const res = {
+      statusCode: 0,
+      headers: null,
+      writeHead(code, headers) { this.statusCode = code; this.headers = headers; },
+      end(payload) {
+        let parsed = null;
+        try { parsed = payload === undefined ? null : JSON.parse(payload); } catch { parsed = payload; }
+        chunks.push({ status: this.statusCode, body: parsed });
+        resolve({ status: this.statusCode, body: parsed });
+      },
+    };
+    spec.handler(req, res);
+  });
 }
 
 function get(port, path, token) {
@@ -1349,14 +1406,16 @@ test('三个调用点必须同一套等人判断，不能浮窗亮着总览说�
   ctx.dispose();
 });
 
-test('迟滞：降级切换要等满 400ms，不能工具一结束就跳', async () => {
+test('迟滞：降级切换要等这个状态显示满 400ms，不是从工具结束算起', async () => {
   /*
-   * 网页端 dock 有 shouldSwitch 防抖，悬浮窗早先没有。
-   * 结果 rinsing→washing 这种降级，悬浮窗秒变、dock 慢半拍，
-   * 用户看到两块屏不一致。
+   * 迟滞的语义是「这个状态已经显示了多久」，不是「距上一次事件多久」。
+   * 早先这个测试按"工具结束之后 400ms 内不许切"来断言，是错的：
+   * rinsing 在工具结束前就已经显示了近 300ms，那它只该再等 100ms 左右。
    *
-   * 这里只验「规则确实接上了」：把 rinsing 推出去，紧接着让它变 washing，
-   * 前 400ms 内推出去的必须还是 rinsing。
+   * 这里改成验两条真正要命的事：
+   *   1. 状态一出现不会立刻被降级切走（工具结束的瞬间还在 rinsing）
+   *   2. 窗口到了之后**必须真的切**——早先没有到点补偿，
+   *      签名去重会让"该切了"那一刻根本没人来采样，状态永远卡在旧值
    */
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
@@ -1372,21 +1431,15 @@ test('迟滞：降级切换要等满 400ms，不能工具一结束就跳', async
   await new Promise((r) => setTimeout(r, 250));
   assert.ok(pushed.some((f) => f.state === 'rinsing'), '先把 rinsing 推出去');
 
-  // 工具结束 → 应降级到 washing，但迟滞窗口内不能立刻跳
-  const endedAt = Date.now();
+  const mark = pushed.length;
   onEvent({ id: 's1' }, ev('tool/result', { turn: 1, step: 1, message: { toolCallId: 't1' } }));
 
-  for (let i = 0; i < 8; i += 1) {
-    await new Promise((r) => setTimeout(r, 30));
-    const recent = pushed.filter((f) => Date.now() - endedAt < 400);
-    for (const f of recent) {
-      assert.notEqual(f.state, 'washing', '400ms 迟滞窗口内不许跳到 washing');
-    }
-  }
-
-  // 过了迟滞窗口就该跟上
-  await new Promise((r) => setTimeout(r, 500));
-  assert.equal(pushed[pushed.length - 1].state, 'washing', '迟滞过了必须切到 washing');
+  // 切过去之后的第一帧必须是 washing —— 中途不许闪回别的
+  await new Promise((r) => setTimeout(r, 600));
+  const after = pushed.slice(mark).map((f) => f.state);
+  assert.ok(after.includes('washing'), '迟滞窗口过了必须真的切到 washing，不能永远卡在 rinsing');
+  const firstSwitch = after.findIndex((st) => st !== 'rinsing');
+  assert.equal(after[firstSwitch], 'washing', '第一次状态变化必须是切到 washing，不许闪');
 
   socket.close();
   ctx.dispose();
@@ -1412,5 +1465,72 @@ test('迟滞：紧急态立刻切，一秒都不等', async () => {
   assert.equal(pushed[pushed.length - 1].state, 'waiting', '紧急态必须立刻切，不能被迟滞拖住');
 
   socket.close();
+  ctx.dispose();
+});
+
+test('客户端可以告诉宿主「现在真在等人」：优先于本地推断', async () => {
+  /*
+   * 悬浮窗的 pending 是自己推断的（approval/request 计数 + ask_user_question
+   * 在不在跑），dock 用的是宿主投影 pendingInteraction。两边判据不同，
+   * 时序上差几十毫秒，用户看到的就是「dock 说等你确认、浮窗还在漂洗」。
+   *
+   * 让客户端把它手上那份权威值报上来，宿主优先信它。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 1, callId: 'b1', name: 'bash' }));
+
+  assert.notEqual(api.snapshot().state, 'waiting', '一开始没人等');
+
+  // 客户端报：这个会话在等审批
+  const res = await callRoute(ctx, '/dsh-washer/pending', 'POST', { sessionId: 's1', kind: 'approval' });
+  assert.equal(res.status, 200);
+  assert.equal(api.snapshot().state, 'waiting', '客户端说在等，宿主必须亮 waiting');
+
+  // 客户端报：不等了
+  await callRoute(ctx, '/dsh-washer/pending', 'POST', { sessionId: 's1', kind: null });
+  assert.notEqual(api.snapshot().state, 'waiting', '客户端说不等了，必须恢复');
+
+  ctx.dispose();
+});
+
+test('客户端报的 waiting 和本地推断能叠加，谁高算谁', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+
+  // 本地看到提问工具在跑
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 1, callId: 'q1', name: 'ask_user_question' }));
+  assert.equal(api.snapshot().state, 'waiting');
+
+  // 客户端报"不等"——但本地判断还在等，不能就这么熄灭
+  await callRoute(ctx, '/dsh-washer/pending', 'POST', { sessionId: 's1', kind: null });
+  assert.equal(api.snapshot().state, 'waiting', '本地还看到提问工具在跑，不能被客户端的 null 抹掉');
+
+  // 工具结束，本地也不等了，这时才该恢复
+  onEvent({ id: 's1' }, ev('tool/result', { turn: 1, step: 1, message: { toolCallId: 'q1' } }));
+  assert.notEqual(api.snapshot().state, 'waiting');
+  ctx.dispose();
+});
+
+test('客户端报 pending：坏请求一律拒掉，别让脏数据污染状态', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+
+  const noSession = await callRoute(ctx, '/dsh-washer/pending', 'POST', { kind: 'approval' });
+  assert.equal(noSession.status, 400, '缺 sessionId 必须 400');
+
+  const badKind = await callRoute(ctx, '/dsh-washer/pending', 'POST', { sessionId: 's1', kind: 'whatever' });
+  assert.equal(badKind.status, 400, '不认识的 kind 必须 400');
+
+  const notPost = await callRoute(ctx, '/dsh-washer/pending', 'GET', undefined);
+  assert.notEqual(notPost.status, 200, 'GET 不该给 200');
+
   ctx.dispose();
 });

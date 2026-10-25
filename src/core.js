@@ -425,6 +425,16 @@ export function stateWeight(state) {
 }
 
 /**
+ * 迟滞窗口：降级切换要在这个状态停留多久才放行。
+ *
+ * 导出是因为另外两处也要用同一个数：
+ *   - 悬浮窗（index.js 的 settleState）到点要重算一次，得知道等多久
+ *   - 客户端 dock 的 setTimeout 补偿（src/client.template.js）同理
+ * 各写一个 400 迟早会漂。
+ */
+export const SWITCH_HOLD_MS = 400;
+
+/**
  * 迟滞：从旧状态切到新状态是否值得（避免 rinsing/washing 之间高频抖动）。
  * @param {string} from
  * @param {string} to
@@ -436,5 +446,5 @@ export function shouldSwitch(from, to, heldMs) {
   if (URGENT_STATES[to] === 1) return true;
   if (URGENT_STATES[from] === 1) return true;
   if (stateWeight(to) > stateWeight(from)) return true;
-  return heldMs >= 400;
+  return heldMs >= SWITCH_HOLD_MS;
 }

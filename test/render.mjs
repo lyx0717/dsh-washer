@@ -1925,6 +1925,25 @@ await test('浮窗明暗：透明背景（rgba alpha=0）不算黑，落到 toke
  * 提前 process.exit 会让它们"没跑却显示通过"。
  */
 const finalFailed = results.filter((r) => !r.ok);
+await test('客户端要真的把 pending 报给宿主，而且只在变化时报', () => {
+  /*
+   * 悬浮窗的 pending 是自己推断的，dock 手上那份 pendingInteraction 才是
+   * 权威值。不把 dock 的报上去，两边永远差几十毫秒。
+   *
+   * 但报多了就是性能问题：宿主每次渲染都可能给个新对象，按对象身份比
+   * 会每个渲染周期发一次请求。所以依赖必须收敛到 kind。
+   */
+  const src = readFileSync(join(root, 'client.js'), 'utf8');
+  assert.ok(src.includes('/dsh-washer/pending'), '必须真的往这个端点发');
+
+  // effect 的依赖里只能是 pendingKind，不能是整个 pending 对象
+  const m = src.match(/React\.useEffect\(\(\) => \{[\s\S]{0,200}?postPendingToHost[\s\S]{0,200}?\}, \[([^\]]*)\]\)/);
+  assert.ok(m !== null, '必须存在把 pending 报给宿主的 effect');
+  const deps = m[1];
+  assert.ok(deps.includes('pendingKind'), '依赖里要有 pendingKind');
+  assert.ok(!/\bpending\b(?!Kind)/.test(deps), '依赖里不能直接放 pending 对象，否则每帧都发');
+});
+
 if (finalFailed.length > 0) {
   for (const f of finalFailed) console.error('  ✗ ' + f.name + '\n      ' + f.error);
 }
