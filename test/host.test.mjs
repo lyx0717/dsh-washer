@@ -1023,6 +1023,75 @@ test('审批挂起时浮窗亮 waiting（不再恒为 undefined）', async () =>
   ctx.dispose();
 });
 
+test('提问挂起时浮窗也要亮 waiting，不能继续显示漂洗中', async () => {
+  /*
+   * 用户报的问题：确认弹窗开着时，网页端 dock 显示「等你确认」，
+   * 桌面悬浮窗却还在「漂洗中」。两边打架。
+   *
+   * 根因：宿主有**两条**独立事件，我只接了 approval/request。
+   * ask_user_question 走的是 user-questions/request，浮窗完全不知道。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+
+  const onQuestion = ctx.handlers.get('user-questions/request');
+  assert.ok(typeof onQuestion === 'function', '必须订阅 user-questions/request，否则提问时浮窗不知道');
+
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  // 提问发生时模型还在"干活"，浮窗会算成 rinsing
+  assert.notEqual(api.snapshot().state, 'waiting');
+
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const handled = onQuestion({ agent: { session: { id: 's1' } }, questions: [] }, () => gate);
+
+  assert.equal(api.snapshot().state, 'waiting', '提问挂起时必须亮 waiting');
+
+  release(undefined);
+  await handled;
+  assert.notEqual(api.snapshot().state, 'waiting', '回答完必须恢复');
+  ctx.dispose();
+});
+
+test('提问 waterfall：必须把 next() 的结果原样传下去', async () => {
+  const ctx = makeCtx();
+  apply(ctx, { desktopOverlay: false });
+  const onQuestion = ctx.handlers.get('user-questions/request');
+
+  const nextResult = { answers: [{ id: 'q1', value: 'a' }] };
+  const returned = onQuestion({ agent: { session: { id: 's1' } } }, () => nextResult);
+  assert.equal(await returned, nextResult, 'next() 的返回值必须原样传给宿主，否则没人收到答案');
+  ctx.dispose();
+});
+
+test('审批和提问同时挂着，按两个计数算，都结束才恢复', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onApproval = ctx.handlers.get('approval/request');
+  const onQuestion = ctx.handlers.get('user-questions/request');
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+
+  let releaseA;
+  let releaseQ;
+  const gateA = new Promise((r) => { releaseA = r; });
+  const gateQ = new Promise((r) => { releaseQ = r; });
+  const a = onApproval({ agent: { session: { id: 's1' } } }, () => gateA);
+  const q = onQuestion({ agent: { session: { id: 's1' } } }, () => gateQ);
+
+  assert.equal(api.snapshot().state, 'waiting');
+
+  releaseA(undefined);
+  await a;
+  assert.equal(api.snapshot().state, 'waiting', '提问还挂着，不能提前恢复');
+
+  releaseQ(undefined);
+  await q;
+  assert.notEqual(api.snapshot().state, 'waiting', '两个都结束才恢复');
+  ctx.dispose();
+});
+
 test('审批 waterfall：必须把 next() 的结果原样传下去', async () => {
   const ctx = makeCtx();
   apply(ctx, { desktopOverlay: false });
@@ -1221,5 +1290,61 @@ test('钉住接口：脏 sessionId 拒绝，不能写进去', async () => {
   const wrongType = await post(port, '/dsh-washer/pin', info.token, { sessionId: 123 });
   assert.equal(wrongType.status, 400, '非字符串必须拒绝');
 
+  ctx.dispose();
+});
+
+test('提问工具在跑就等于在等人：不依赖 user-questions/request 也能亮 waiting', async () => {
+  /*
+   * 为什么要有这条兜底。
+   *
+   * 宿主的 user-questions/request 是 agent-scoped waterfall，且经 ctx.remote
+   * 转发给浏览器端消费。实测：Host 侧 ctx.on 挂上监听、弹了三次确认框，
+   * 处理器一次都没被调用（日志文件根本没生成）。
+   *
+   * 但 session/event 里能实实在在看到 ask_user_question 这个工具在跑，
+   * 它挂多久人就犹豫了多久。所以不能只靠那条事件——
+   * 宿主怎么改转发都漏不掉 session/event。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onEvent = ctx.handlers.get('session/event');
+
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  assert.notEqual(api.snapshot().state, 'waiting');
+
+  // 工具调用开始：人开始对着弹窗发呆
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 1, callId: 'q1', name: 'ask_user_question' }));
+  assert.equal(api.snapshot().state, 'waiting', '提问工具在跑就是在等人，浮窗必须亮 waiting');
+
+  // 人答完了
+  onEvent({ id: 's1' }, ev('tool/result', { turn: 1, step: 1, message: { toolCallId: 'q1' } }));
+  assert.notEqual(api.snapshot().state, 'waiting', '答完必须立刻恢复');
+  ctx.dispose();
+});
+
+test('普通工具在跑不算等人：别把跑 bash 当成等你确认', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onEvent = ctx.handlers.get('session/event');
+
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 1, callId: 'b1', name: 'bash' }));
+  assert.notEqual(api.snapshot().state, 'waiting', 'bash 在跑就是干活，不是等人');
+  ctx.dispose();
+});
+
+test('三个调用点必须同一套等人判断，不能浮窗亮着总览说在洗', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onEvent = ctx.handlers.get('session/event');
+
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 1, callId: 'q1', name: 'ask_user_question' }));
+
+  const snap = api.snapshot();
+  assert.equal(snap.state, 'waiting', '快照说在等人');
+  const row = (snap.sessions || []).find((x) => x.sessionId === 's1');
+  assert.ok(row, '总览里必须有这个会话');
+  assert.equal(row.state, 'waiting', '总览也得说在等人，两边不能打架');
   ctx.dispose();
 });

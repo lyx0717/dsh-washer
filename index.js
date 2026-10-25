@@ -296,29 +296,53 @@ export function foldEvent(state, event, now) {
   const data = event && event.data ? event.data : {};
   const type = event ? event.type : undefined;
 
+  /*
+   * 别只盯着 `turn/start`——宿主根本不发它。
+   *
+   * 插件装在 Host 侧，收到的是**已经落盘**的 session/event。实测 71 条事件里
+   * `turn/start` 出现 0 次，而 `step/start`、`tool/call`、`assistant/message`
+   * 这些的 `data.turn` 都明明白白带着轮号（一轮里永远是同一个数，例如 13）。
+   *
+   * 原实现只在 `case 'turn/start'` 里写 `state.turn`，那条分支永远走不到，
+   * 于是 state.turn 恒为 0，连带整条链路失效：
+   *   - outline 靠 `s.turn > 0` 构造，恒为空 → 快照里找不到"当前轮"
+   *   - elapsedOf / turnEndTimeOf 拿到 turn 0 → elapsedMs 恒 0、durationText 恒 00:00
+   *   - 浮窗永远显示"待机"，哪怕正在跑工具
+   *
+   * 所以改成：任何一个带着**比当前更大**的 turn 号的事件，都当成新一轮开始。
+   * 用"大于"而不是"不等于"，是因为乱序或重复投递的旧事件不该把轮次往回拨。
+   */
+  function beginTurn(state, turn, now) {
+    state.turn = turn;
+    state.partial = null;
+    state.runningCalls = [];
+    state.callStartedAt.clear();
+    state.turnTimings.set(turn, { startTime: now });
+    // 新一轮开始了，「洗完了」必须立刻让位，否则转起来的机器还挂着绿勾
+    state.doneUntil = 0;
+    /*
+     * turnTimings 只增不删，长跑会话下会无界增长（一轮一条，一个月几千条）。
+     * 实际只有两个消费者：elapsedOf/turnEndTimeOf 看当前轮，
+     * 外加详情面板的历史。留最近 50 轮足够，多的直接丢。
+     */
+    while (state.turnTimings.size > TURN_TIMINGS_LIMIT) {
+      const oldest = state.turnTimings.keys().next();
+      if (oldest.done) break;
+      state.turnTimings.delete(oldest.value);
+    }
+    // 新 turn 开始，旧节点不再参与「这一步走到哪」的判定
+    state.nodes = [];
+    pushNode(state, { kind: 'turn-start', turn });
+  }
+
+  if (type !== 'turn/start' && typeof data.turn === 'number' && data.turn > state.turn) {
+    beginTurn(state, data.turn, now);
+  }
+
   switch (type) {
     case 'turn/start': {
       const turn = typeof data.turn === 'number' ? data.turn : state.turn + 1;
-      state.turn = turn;
-      state.partial = null;
-      state.runningCalls = [];
-      state.callStartedAt.clear();
-      state.turnTimings.set(turn, { startTime: now });
-      // 新一轮开始了，「洗完了」必须立刻让位，否则转起来的机器还挂着绿勾
-      state.doneUntil = 0;
-      /*
-       * turnTimings 只增不删，长跑会话下会无界增长（一轮一条，一个月几千条）。
-       * 实际只有两个消费者：elapsedOf/turnEndTimeOf 看当前轮，
-       * 外加详情面板的历史。留最近 50 轮足够，多的直接丢。
-       */
-      while (state.turnTimings.size > TURN_TIMINGS_LIMIT) {
-        const oldest = state.turnTimings.keys().next();
-        if (oldest.done) break;
-        state.turnTimings.delete(oldest.value);
-      }
-      // 新 turn 开始，旧节点不再参与「这一步走到哪」的判定
-      state.nodes = [];
-      pushNode(state, { kind: 'turn-start', turn });
+      beginTurn(state, turn, now);
       return state;
     }
     case 'tool/call': {
@@ -862,6 +886,31 @@ export function apply(ctx, config) {
   /** sessionId -> 挂起中的审批数（snapshot() 要读，声明必须在它之前） */
   const pendingApprovals = new Map();
 
+  /*
+   * 正在等人回答的提问工具。
+   *
+   * 宿主的 `user-questions/request` 走 ctx.remote 转发到浏览器端消费，
+   * Host 侧 ctx.on 收不到（实测挂上监听、弹了三次确认框，日志一条没有）。
+   * 但 `session/event` 里能实实在在看到这个工具在跑——它挂多久，
+   * 人就犹豫了多久，正好就是"等你确认"的时长。
+   *
+   * 所以退一步：直接看 runningCalls 里有没有在跑的提问工具。
+   * 这条路不依赖 scope、不依赖 waterfall，宿主怎么改转发都漏不掉。
+   */
+  function awaitingAnswer(state) {
+    return state.runningCalls.some((c) => c.name === 'ask_user_question');
+  }
+
+  /**
+   * 这个会话是不是在等人。三处调用点（快照、总览、推送）必须同一套判断，
+   * 否则会出现"浮窗亮着、总览说在洗"这种自相矛盾。
+   * 审批优先：它比提问更需要人立刻动手。
+   */
+  function pendingFor(sessionId, state) {
+    if ((pendingApprovals.get(sessionId) || 0) > 0) return { kind: 'approval' };
+    return awaitingAnswer(state) ? { kind: 'question' } : undefined;
+  }
+
   function stateFor(sessionId) {
     let state = sessions.get(sessionId);
     if (state === undefined) {
@@ -906,7 +955,7 @@ export function apply(ctx, config) {
       const state = deriveState({
         sessionId: id,
         running: s.running,
-        pending: (pendingApprovals.get(id) || 0) > 0 ? { kind: 'approval' } : undefined,
+        pending: pendingFor(id, s),
         runningCalls: s.runningCalls,
         partial: s.partial,
         nodes: s.nodes,
@@ -965,7 +1014,7 @@ export function apply(ctx, config) {
       running: s.running,
       // 有审批挂在等人类回答就是 waiting。没订阅时这里恒 undefined，
       // 浮窗永远不会亮"等你确认"——最该提醒的时刻不提醒。
-      pending: (pendingApprovals.get(sessionId) || 0) > 0 ? { kind: 'approval' } : undefined,
+      pending: pendingFor(sessionId, s),
       runningCalls: s.runningCalls,
       partial: s.partial,
       nodes: s.nodes,
@@ -1157,7 +1206,7 @@ export function apply(ctx, config) {
       const current = deriveState({
         sessionId,
         running: s.running,
-        pending: (pendingApprovals.get(sessionId) || 0) > 0 ? { kind: 'approval' } : undefined,
+        pending: pendingFor(sessionId, s),
         runningCalls: s.runningCalls,
         partial: s.partial,
         nodes: s.nodes,
@@ -1583,19 +1632,26 @@ export function apply(ctx, config) {
   });
 
   /*
-   * 审批等待 —— 桌面悬浮窗唯一拿不到的状态。
+   * 「在等你」这件事有**两条**独立的事件，别只接一条。
    *
-   * 网页端从 `useSessionStatus().pendingInteraction` 就能知道"在等你批准"，
-   * 但那是**客户端** uiSession 的投影：客户端插件靠 `ctx.remote.$on('approval/request')`
-   * 拦截到审批请求才有值。Host 侧没有那个投影，于是浮窗这一路一直写死
+   * 网页端从 `useSessionStatus().pendingInteraction` 就能知道在等用户，
+   * 但那是**客户端** uiSession 的投影：客户端插件分别靠
+   * `ctx.remote.$on('approval/request')` 和 `ctx.remote.$on('user-questions/request')`
+   * 拦截到请求才有值。Host 侧没有那个投影，浮窗这一路原本写死
    * `pending: undefined`，最该提醒的时刻反而不提醒。
    *
-   * Host 侧其实有同一条事件：宿主自己（ACP 桥）就是这么接的。
-   * 注意它是 **waterfall**——必须把 `next()` 的结果原样返回，
-   * 否则审批链在这里断掉，整个会话卡死。所以我们只做观察，不做决策。
+   * 两条的语义不一样，用户都要看到：
+   *   approval/request       —— 工具授权，批不批
+   *   user-questions/request —— ask_user_question 在向你提问
    *
-   * 生命周期：请求进来记一条，promise settle（批准/拒绝/取消/中断都算）就删掉。
-   * 用计数而不是布尔，是因为同一会话理论上可能同时挂多个审批。
+   * 只接审批那条的话，模型一提问，浮窗就会显示"漂洗中"继续转，
+   * 而网页端明明停在"等你确认"——两边打架。
+   *
+   * 两条都是 **waterfall**：必须把 `next()` 的结果原样返回，
+   * 否则审批/提问链在这里断掉，整个会话卡死。所以我们只做观察，不做决策。
+   *
+   * 生命周期：请求进来记一条，promise settle（回答/批准/拒绝/取消/中断都算）
+   * 就删掉。用计数而不是布尔，是因为同一会话可能同时挂着多个。
    */
   function bumpPending(sessionId, delta) {
     const next = (pendingApprovals.get(sessionId) || 0) + delta;
@@ -1604,22 +1660,35 @@ export function apply(ctx, config) {
     schedulePush();
   }
 
-  ctx.on('approval/request', (request, next) => {
-    const sessionId = resolveSessionId(request && request.agent && request.agent.session)
-      ?? resolveSessionId(request && request.agent)
-      ?? currentSessionId;
-    if (sessionId === null) return next();
-    bumpPending(sessionId, 1);
-    let result;
-    try {
-      result = next();
-    } catch (error) {
-      bumpPending(sessionId, -1);
-      throw error;
-    }
-    // next() 正常会返回 promise；万一返回同步值也要收尾，不能少减一次
-    return Promise.resolve(result).finally(() => bumpPending(sessionId, -1));
-  });
+  /**
+   * 挂一个只观察、不干预的 waterfall 监听。
+   *
+   * 两条事件的结构一致（请求对象上都带 `agent`，见宿主里
+   * `{...request, agent}` 的构造），所以共用这一段。
+   */
+  function watchPendingRequest(eventName) {
+    ctx.on(eventName, (request, next) => {
+      const sessionId = resolveSessionId(request && request.agent && request.agent.session)
+        ?? resolveSessionId(request && request.agent && request.agent.id)
+        ?? resolveSessionId(request && request.agent)
+        ?? currentSessionId;
+      if (sessionId === null) return next();
+      bumpPending(sessionId, 1);
+      let result;
+      try {
+        result = next();
+      } catch (error) {
+        bumpPending(sessionId, -1);
+        throw error;
+      }
+      // next() 正常会返回 promise；万一返回同步值也要收尾，不能少减一次
+      return Promise.resolve(result).finally(() => bumpPending(sessionId, -1));
+    });
+  }
+
+  watchPendingRequest('approval/request');
+  watchPendingRequest('user-questions/request');
+
 
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态
   const instanceToken = token;
