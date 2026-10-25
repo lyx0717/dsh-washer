@@ -12,10 +12,36 @@
         "zh": "滚筒洗衣机"
       },
       "description": {
-        "en": "Show what the Agent is doing as a front-loading washing machine: wash = streaming, rinse = tool running, spin = wrapping up, pause = waiting for your approval.",
-        "zh": "用一台滚筒洗衣机的运转状态实时显示 Agent 在干什么：洗涤=出字、漂洗=工具在跑、脱水=收尾、暂停=等你批准。"
+        "en": "Watch the Agent work from anywhere: a floating washing machine that pings you when it is done or stuck. Multi-session, pinned view, done/error/stuck alerts.",
+        "zh": "不用盯着屏幕也知道 Agent 跑到哪了：桌面悬浮窗实时显示，洗完 / 卡住 / 等你确认会主动提醒。支持多会话与钉住。"
       },
-      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImRzaC13YXNoZXIiPiA8ZGVmcz4gPGxpbmVhckdyYWRpZW50IGlkPSJib2R5IiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+IDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI0ZGRkZGRiIvPiA8c3RvcCBvZmZzZXQ9IjAuNTUiIHN0b3AtY29sb3I9IiNFRUYzRjgiLz4gPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRDZFMEVBIi8+IDwvbGluZWFyR3JhZGllbnQ+IDxyYWRpYWxHcmFkaWVudCBpZD0iZ2xhc3MiIGN4PSIwLjM0IiBjeT0iMC4yOCIgcj0iMC43OCI+IDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzhGQzlFQyIvPiA8c3RvcCBvZmZzZXQ9IjAuNDUiIHN0b3AtY29sb3I9IiMzRTdGQTgiLz4gPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTIzMDQ3Ii8+IDwvcmFkaWFsR3JhZGllbnQ+IDxsaW5lYXJHcmFkaWVudCBpZD0id2F0ZXIiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj4gPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjOUFEQ0Y1Ii8+IDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzJDODJBRSIvPiA8L2xpbmVhckdyYWRpZW50PiA8Y2xpcFBhdGggaWQ9ImJvd2wiPiA8Y2lyY2xlIGN4PSIzMiIgY3k9IjM3IiByPSIxNC41Ii8+IDwvY2xpcFBhdGg+IDwvZGVmcz4gPHJlY3QgeD0iNiIgeT0iNSIgd2lkdGg9IjUyIiBoZWlnaHQ9IjU0IiByeD0iOSIgZmlsbD0idXJsKCNib2R5KSIgc3Ryb2tlPSIjMzM0NjVGIiBzdHJva2Utd2lkdGg9IjIuNiIvPiA8cmVjdCB4PSIxMiIgeT0iMTEiIHdpZHRoPSIyNiIgaGVpZ2h0PSI1IiByeD0iMi41IiBmaWxsPSIjRkZGRkZGIiBzdHJva2U9IiMzMzQ2NUYiIHN0cm9rZS13aWR0aD0iMS44Ii8+IDxjaXJjbGUgY3g9IjQ3LjUiIGN5PSIxMy41IiByPSI0LjYiIGZpbGw9IiNFQUYyRkEiIHN0cm9rZT0iIzMzNDY1RiIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4gPHBhdGggZD0iTTQ3LjUgMTAuNHYzLjIiIHN0cm9rZT0iIzRBN0JBNiIgc3Ryb2tlLXdpZHRoPSIxLjYiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPiA8Y2lyY2xlIGN4PSIzMiIgY3k9IjM3IiByPSIxNy41IiBmaWxsPSIjQ0ZFOEZBIiBzdHJva2U9IiMzMzQ2NUYiIHN0cm9rZS13aWR0aD0iMi40Ii8+IDxjaXJjbGUgY3g9IjMyIiBjeT0iMzciIHI9IjE0LjUiIGZpbGw9InVybCgjZ2xhc3MpIi8+IDxnIGNsaXAtcGF0aD0idXJsKCNib3dsKSI+IDxwYXRoIGQ9Ik0xNy41IDQyLjVjNC0yLjQgOC0yLjQgMTIgMHM4IDIuNCAxMiAwdjExaC0yNHoiIGZpbGw9InVybCgjd2F0ZXIpIi8+IDxjaXJjbGUgY3g9IjI1LjUiIGN5PSIzMy41IiByPSIyLjIiIGZpbGw9IiNFN0Y4RkYiIG9wYWNpdHk9IjAuOSIvPiA8Y2lyY2xlIGN4PSIzNyIgY3k9IjMwLjUiIHI9IjEuNSIgZmlsbD0iI0U3RjhGRiIgb3BhY2l0eT0iMC43Ii8+IDxwYXRoIGQ9Ik0yNCA0Ny41YzQuNi0yLjYgOS40LTIuNiAxNCAwIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iMS40IiBzdHJva2UtbGluZWNhcD0icm91bmQiIGZpbGw9Im5vbmUiIG9wYWNpdHk9IjAuNTUiLz4gPC9nPiA8cGF0aCBkPSJNMjUgMjcuMmE5LjUgOS41IDAgMCAxIDktNC4zIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iMi4yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIGZpbGw9Im5vbmUiIG9wYWNpdHk9IjAuOCIvPiA8Y2lyY2xlIGN4PSI1NS41IiBjeT0iNTUuNSIgcj0iMi40IiBmaWxsPSIjMkVFMDZBIi8+IDwvc3ZnPg==",
+      "metadata": {
+        "keywords": [
+          "washer",
+          "washing machine",
+          "status",
+          "agent status",
+          "progress",
+          "overlay",
+          "always on top",
+          "floating window",
+          "multi-session",
+          "notification",
+          "sound",
+          "alert",
+          "stuck",
+          "eta",
+          "洗衣机",
+          "状态",
+          "悬浮窗",
+          "进度",
+          "多会话",
+          "通知",
+          "提醒",
+          "卡住"
+        ]
+      },
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImRzaC13YXNoZXIiPiA8dGl0bGU+ZHNoLXdhc2hlcjwvdGl0bGU+IDwhLS0g5biC5Zy66YeM6L+Z5Liq5Zu+5qCHKirlj6rku6UgNDjDlzQ4IOWHuueOsCoq77yI5YiX6KGo5ZKM6K+m5oOF6aG15YWx55So5LiA5LiqIC5pY29uIOexu++8ieOAgiDmiYDku6XmlbTlpZflm77lvaLmjIkgNDhweCDlj43mjqjvvJrog73lnKjov5nkuKrlsLrlr7jmtLvkuIvmnaXnmoTmiY3nlLvjgIIg5LiK5LiA54mI5Lii5o6J55qE57uG6IqC77yM6YO95pivIjY0cHgg5aW955yL44CBNDhweCDlj5johI8i55qE6YKj57G777yaIMK3IOe7v+eBryByPTIuNCDihpIg57yp5a6MIDEuOHB477yM57OK5oiQ5LiA5Liq6ISP54K5IMK3IOaPj+i+uSAyLjR+Mi42IOKGkiDnvKnlroznuqYgMS45cHjvvIzlj5jmiJDlj4jnspflj4jpu5HnmoTmoYYgwrcg5peL6ZKu5Yi75bqm44CB5rC06Z2i5rOi57q5IOKGkiDlhajns4rmiJDkuIDniYcg6L+Z5LiA54mI77ya5o+P6L6557uf5LiA6ZmN5YiwIDIuMe+8jOacuuWZqOS4u+S9k+aSkeWIsCA1NiDlrr3vvIznu7/nga/mlL7lpKfliLAgcj01LjQg5bm25Yqg55m95o+P6L655Y6L5L2P5bqV5LiL55qE5py66Lqr77yI5ZCm5YiZ5ZKM5py66Lqr5o+P6L655o6l5Zyo5LiA6LW377yM5YOP6LS05LqG5Liq5rOl54K577yJ44CCIC0tPiA8ZGVmcz4gPGxpbmVhckdyYWRpZW50IGlkPSJib2R5IiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+IDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI0ZGRkZGRiIvPiA8c3RvcCBvZmZzZXQ9IjAuNSIgc3RvcC1jb2xvcj0iI0VGRjRGOSIvPiA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNEM0RGRUIiLz4gPC9saW5lYXJHcmFkaWVudD4gPHJhZGlhbEdyYWRpZW50IGlkPSJnbGFzcyIgY3g9IjAuMzQiIGN5PSIwLjI2IiByPSIwLjgiPiA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiM4RkM5RUMiLz4gPHN0b3Agb2Zmc2V0PSIwLjQyIiBzdG9wLWNvbG9yPSIjM0U3RkE4Ii8+IDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzEzMzI0QSIvPiA8L3JhZGlhbEdyYWRpZW50PiA8bGluZWFyR3JhZGllbnQgaWQ9IndhdGVyIiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+IDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzlBRENGNSIvPiA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMyQzgyQUUiLz4gPC9saW5lYXJHcmFkaWVudD4gPGNsaXBQYXRoIGlkPSJib3dsIj4gPGNpcmNsZSBjeD0iMzIiIGN5PSIzNyIgcj0iMTYiLz4gPC9jbGlwUGF0aD4gPC9kZWZzPiA8IS0tIOacuui6q++8muavlOS4iuS4gOeJiOabtOWkp++8jDQ4cHgg5LiL5omN5Y2g5b6X5L2PIC0tPiA8cmVjdCB4PSI0IiB5PSIzIiB3aWR0aD0iNTYiIGhlaWdodD0iNTgiIHJ4PSIxMSIgZmlsbD0idXJsKCNib2R5KSIgc3Ryb2tlPSIjMkMzRTU1IiBzdHJva2Utd2lkdGg9IjIuMSIvPiA8IS0tIOmdouadv++8muWPqueVmeS4gOadoeaoquadoO+8jOS4jeWGjeeUu+aXi+mSruWIu+W6pu+8iOmCo+S4quWwuuWvuOS4i+WwseaYr+WZqueCue+8iSAtLT4gPHJlY3QgeD0iMTEiIHk9IjEwIiB3aWR0aD0iMjgiIGhlaWdodD0iNS41IiByeD0iMi43NSIgZmlsbD0iI0ZGRkZGRiIgc3Ryb2tlPSIjMkMzRTU1IiBzdHJva2Utd2lkdGg9IjEuNyIvPiA8IS0tIOaXi+mSru+8muWunuW/g+Whq+WFhe+8jOi/nOeci+aYr+S4gOS4quaYjuehrueahOWchueCuSAtLT4gPGNpcmNsZSBjeD0iNDgiIGN5PSIxMi43NSIgcj0iNC40IiBmaWxsPSIjRENFOUY1IiBzdHJva2U9IiMyQzNFNTUiIHN0cm9rZS13aWR0aD0iMS43Ii8+IDwhLS0g6Iix6Zeo77yaOCDlrZfpq5jlhYnlj6rnlZnkuIDpgZPvvIzkuI3ns4ogLS0+IDxjaXJjbGUgY3g9IjMyIiBjeT0iMzciIHI9IjE5IiBmaWxsPSIjRDhFQ0ZCIiBzdHJva2U9IiMyQzNFNTUiIHN0cm9rZS13aWR0aD0iMi4xIi8+IDxjaXJjbGUgY3g9IjMyIiBjeT0iMzciIHI9IjE2IiBmaWxsPSJ1cmwoI2dsYXNzKSIvPiA8ZyBjbGlwLXBhdGg9InVybCgjYm93bCkiPiA8cGF0aCBkPSJNMTYgNDMuNWM1LjMtMyAxMC43LTMgMTYgMHMxMC43IDMgMTYgMHYxMWgtMzJ6IiBmaWxsPSJ1cmwoI3dhdGVyKSIvPiA8IS0tIOawlOazoe+8muWPqueVmeS4pOmil+Wkp+eahO+8jOWwj+awlOazoeWcqCA0OHB4IOS4i+aYr+eBsOeCueeCuSAtLT4gPGNpcmNsZSBjeD0iMjUiIGN5PSIzMyIgcj0iMyIgZmlsbD0iI0VBRjlGRiIgb3BhY2l0eT0iMC45Ii8+IDxjaXJjbGUgY3g9IjM3LjUiIGN5PSIzMCIgcj0iMiIgZmlsbD0iI0VBRjlGRiIgb3BhY2l0eT0iMC43Ii8+IDwvZz4gPHBhdGggZD0iTTIzLjUgMjZhMTEgMTEgMCAwIDEgMTAuNS01IiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iMi42IiBzdHJva2UtbGluZWNhcD0icm91bmQiIGZpbGw9Im5vbmUiIG9wYWNpdHk9IjAuODUiLz4gPCEtLSDnirbmgIHnu7/nga/vvJrku44gMS44cHgg55qE6ISP54K55pS+5aSn5YiwIDQ4cHgg5LiL57qmIDhweCDnmoTmmI7noa7kv6Hlj7fvvIznmb3mj4/ovrnpmpTlvIDmnLrouqsgLS0+IDxjaXJjbGUgY3g9IjUzIiBjeT0iNTMiIHI9IjUiIGZpbGw9IiMyRUUwNkEiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSIyLjIiLz4gPC9zdmc+",
       "author": "李永轩",
       "homepage": "https://github.com/lyx0717/dsh-washer#readme",
       "repository": {
@@ -24,11 +50,11 @@
       "versions": [
         {
           "version": "0.5.0",
-          "publishTimestamp": 1792903588,
+          "publishTimestamp": 1792904705,
           "source": {
             "type": "git",
             "url": "https://github.com/lyx0717/dsh-washer",
-            "commit": "440c0825111468708f9cc849070c53685678b148"
+            "commit": "d8af676763ae04b5ff9efc39252ecc7eb062d007"
           }
         }
       ]

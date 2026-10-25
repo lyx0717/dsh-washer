@@ -1,35 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="dsh-washer">
+  <title>dsh-washer</title>
+  <!--
+    市场里这个图标**只以 48×48 出现**（列表和详情页共用一个 .icon 类）。
+    所以整套图形按 48px 反推：能在这个尺寸活下来的才画。
+
+    上一版丢掉的细节，都是"64px 好看、48px 变脏"的那类：
+      · 绿灯 r=2.4 → 缩完 1.8px，糊成一个脏点
+      · 描边 2.4~2.6 → 缩完约 1.9px，变成又粗又黑的框
+      · 旋钮刻度、水面波纹 → 全糊成一片
+    这一版：描边统一降到 2.1，机器主体撑到 56 宽，绿灯放大到 r=5.4
+    并加白描边压住底下的机身（否则和机身描边接在一起，像贴了个泥点）。
+  -->
   <defs>
     <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="0.55" stop-color="#EEF3F8"/>
-      <stop offset="1" stop-color="#D6E0EA"/>
+      <stop offset="0.5" stop-color="#EFF4F9"/>
+      <stop offset="1" stop-color="#D3DFEB"/>
     </linearGradient>
-    <radialGradient id="glass" cx="0.34" cy="0.28" r="0.78">
+    <radialGradient id="glass" cx="0.34" cy="0.26" r="0.8">
       <stop offset="0" stop-color="#8FC9EC"/>
-      <stop offset="0.45" stop-color="#3E7FA8"/>
-      <stop offset="1" stop-color="#123047"/>
+      <stop offset="0.42" stop-color="#3E7FA8"/>
+      <stop offset="1" stop-color="#13324A"/>
     </radialGradient>
     <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#9ADCF5"/>
       <stop offset="1" stop-color="#2C82AE"/>
     </linearGradient>
     <clipPath id="bowl">
-      <circle cx="32" cy="37" r="14.5"/>
+      <circle cx="32" cy="37" r="16"/>
     </clipPath>
   </defs>
-  <rect x="6" y="5" width="52" height="54" rx="9" fill="url(#body)" stroke="#33465F" stroke-width="2.6"/>
-  <rect x="12" y="11" width="26" height="5" rx="2.5" fill="#FFFFFF" stroke="#33465F" stroke-width="1.8"/>
-  <circle cx="47.5" cy="13.5" r="4.6" fill="#EAF2FA" stroke="#33465F" stroke-width="1.8"/>
-  <path d="M47.5 10.4v3.2" stroke="#4A7BA6" stroke-width="1.6" stroke-linecap="round"/>
-  <circle cx="32" cy="37" r="17.5" fill="#CFE8FA" stroke="#33465F" stroke-width="2.4"/>
-  <circle cx="32" cy="37" r="14.5" fill="url(#glass)"/>
+
+  <!-- 机身：比上一版更大，48px 下才占得住 -->
+  <rect x="4" y="3" width="56" height="58" rx="11" fill="url(#body)" stroke="#2C3E55" stroke-width="2.1"/>
+
+  <!-- 面板：只留一条横杠，不再画旋钮刻度（那个尺寸下就是噪点） -->
+  <rect x="11" y="10" width="28" height="5.5" rx="2.75" fill="#FFFFFF" stroke="#2C3E55" stroke-width="1.7"/>
+
+  <!-- 旋钮：实心填充，远看是一个明确的圆点 -->
+  <circle cx="48" cy="12.75" r="4.4" fill="#DCE9F5" stroke="#2C3E55" stroke-width="1.7"/>
+
+  <!-- 舱门：8 字高光只留一道，不糊 -->
+  <circle cx="32" cy="37" r="19" fill="#D8ECFB" stroke="#2C3E55" stroke-width="2.1"/>
+  <circle cx="32" cy="37" r="16" fill="url(#glass)"/>
   <g clip-path="url(#bowl)">
-    <path d="M17.5 42.5c4-2.4 8-2.4 12 0s8 2.4 12 0v11h-24z" fill="url(#water)"/>
-    <circle cx="25.5" cy="33.5" r="2.2" fill="#E7F8FF" opacity="0.9"/>
-    <circle cx="37" cy="30.5" r="1.5" fill="#E7F8FF" opacity="0.7"/>
-    <path d="M24 47.5c4.6-2.6 9.4-2.6 14 0" stroke="#FFFFFF" stroke-width="1.4" stroke-linecap="round" fill="none" opacity="0.55"/>
+    <path d="M16 43.5c5.3-3 10.7-3 16 0s10.7 3 16 0v11h-32z" fill="url(#water)"/>
+    <!-- 气泡：只留两颗大的，小气泡在 48px 下是灰点点 -->
+    <circle cx="25" cy="33" r="3" fill="#EAF9FF" opacity="0.9"/>
+    <circle cx="37.5" cy="30" r="2" fill="#EAF9FF" opacity="0.7"/>
   </g>
-  <path d="M25 27.2a9.5 9.5 0 0 1 9-4.3" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.8"/>
-  <circle cx="55.5" cy="55.5" r="2.4" fill="#2EE06A"/>
+  <path d="M23.5 26a11 11 0 0 1 10.5-5" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" fill="none" opacity="0.85"/>
+
+  <!-- 状态绿灯：从 1.8px 的脏点放大到 48px 下约 8px 的明确信号，白描边隔开机身 -->
+  <circle cx="53" cy="53" r="5" fill="#2EE06A" stroke="#FFFFFF" stroke-width="2.2"/>
 </svg>

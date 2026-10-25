@@ -58,9 +58,32 @@ const index = {
     {
       name: pkg.name,
       title: { en: 'Washer · Agent status machine', zh: '滚筒洗衣机' },
+      /*
+       * 市场描述只放「列表页能看到的一句话」。
+       *
+       * 早版本写的是「洗涤=出字、漂洗=工具在跑」这类状态对照——那是详情页
+       * 该讲的事，塞进列表反而把最该突出的差异点（桌面悬浮窗、多会话、
+       * 卡住检测、完成后提醒）全挤没了。用户扫一眼列表时的判断是
+       * 「这东西能不能解决我的问题」，不是「它的状态机怎么映射」。
+       */
       description: {
-        en: 'Show what the Agent is doing as a front-loading washing machine: wash = streaming, rinse = tool running, spin = wrapping up, pause = waiting for your approval.',
-        zh: '用一台滚筒洗衣机的运转状态实时显示 Agent 在干什么：洗涤=出字、漂洗=工具在跑、脱水=收尾、暂停=等你批准。',
+        en: 'Watch the Agent work from anywhere: a floating washing machine that pings you when it is done or stuck. Multi-session, pinned view, done/error/stuck alerts.',
+        zh: '不用盯着屏幕也知道 Agent 跑到哪了：桌面悬浮窗实时显示，洗完 / 卡住 / 等你确认会主动提醒。支持多会话与钉住。',
+      },
+      /*
+       * keywords 参与模糊搜索，权重仅次于包名和标题（见 dsh-plugin-market 的
+       * MiniSearch 配置：boost name/title 3、keywords 2）。一个词都不填，
+       * 就等于搜「悬浮窗」「状态」「通知」都找不到这个插件——白丢的曝光。
+       *
+       * 中英混填是刻意的：用户可能用任何一种语言搜。
+       */
+      metadata: {
+        keywords: [
+          'washer', 'washing machine', 'status', 'agent status', 'progress',
+          'overlay', 'always on top', 'floating window', 'multi-session',
+          'notification', 'sound', 'alert', 'stuck', 'eta',
+          '洗衣机', '状态', '悬浮窗', '进度', '多会话', '通知', '提醒', '卡住',
+        ],
       },
       icon: iconDataUrl(),
       author: '李永轩',
