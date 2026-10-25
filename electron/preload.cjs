@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld('washerHost', {
    * 判断该不该弹（开关、节流、窗口是否在前台）全在主进程里做，
    * 因为只有它知道窗口焦点状态。
    */
+  /*
+   * 状态提醒（系统通知 + 音效）。主进程那边两者各自判断开关和节流，
+   * 页面只管在状态边沿上报一次，不关心具体响了什么。
+   */
   notify: (kind, text) => ipcRenderer.send('washer:notify', { kind: kind, text: text }),
   /** 切换尺寸档位：'normal' | 'tiny' */
   setSize: (mode) => ipcRenderer.send('washer:set-size', mode),

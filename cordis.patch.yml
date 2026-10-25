@@ -34,3 +34,5 @@
         desktopOverlayClickThrough: false
         # 洗完弹系统通知：只报「完成」和「故障」
         desktopOverlayNotify: false
+        # 状态音效：完成 / 故障 / 等你确认各响一声，中间运转不吵
+        desktopOverlaySound: false

@@ -186,6 +186,11 @@
     background: rgba(58, 16, 20, 0.92);
     border-color: rgba(229, 72, 77, 0.5);
   }
+  /* 等确认用琥珀调，和 waiting 状态的指示灯同色系 */
+  .flash[data-kind="waiting"] {
+    background: rgba(52, 40, 12, 0.92);
+    border-color: rgba(245, 185, 58, 0.5);
+  }
   /* 极简档只有 76px 宽，放不下两行字，直接不出横幅 */
   body[data-size="tiny"] .flash { display: none; }
 
@@ -753,10 +758,20 @@
     var prev = lastNotifiedState;
     lastNotifiedState = s;
     if (prev === null || prev === s) return;   // 首帧不通知，切到同一个状态也不通知
-    if (s !== 'done' && s !== 'error') return;
+    /*
+     * 三个要提醒的状态，中间的 starting/washing/rinsing/spinning/draining 全静音。
+     *
+     * 为什么不是"每个状态都响"：一次任务会依次经过五个状态，
+     * 每个都响的话一轮下来响七八声，用户当天就会把开关关掉，
+     * 然后真正重要的那声"洗完了"也跟着没了。
+     * 只留三种**用户需要行动**的时刻：事情办完了、出事了、等你拍板。
+     */
+    if (s !== 'done' && s !== 'error' && s !== 'waiting') return;
     var text = s === 'error'
       ? ((LABEL[s] || s) + (snap.errorCode ? ' · ' + snap.errorCode : ''))
-      : (snap.durationText ? '用时 ' + snap.durationText : '');
+      : (s === 'waiting'
+        ? (snap.tools && snap.tools.length > 0 ? '等你确认' : '等你回答')
+        : (snap.durationText ? '用时 ' + snap.durationText : ''));
     if (host && typeof host.notify === 'function') host.notify(s, text);
     /*
      * 横幅和系统通知**同时**出，不是二选一。
@@ -783,9 +798,15 @@
     var sub = el('flashS');
     if (!box || !t || !sub) return;
     if (document.body.dataset.size === 'tiny') return;  // 极简档没有位置放
-    t.textContent = kind === 'error' ? '出故障了' : '洗完了';
+    /*
+     * 三种标题，不能再用「不是 error 就是洗完了」那条二分——
+     * waiting 现在也走这里，落到 else 分支会显示成"洗完了"，
+     * 明明是在等你确认，横幅却说洗完了，比不显示更误导。
+     */
+    t.textContent = kind === 'error' ? '出故障了'
+      : (kind === 'waiting' ? '等你确认' : '洗完了');
     sub.textContent = text;
-    box.dataset.kind = kind === 'error' ? 'error' : 'done';
+    box.dataset.kind = kind === 'error' ? 'error' : (kind === 'waiting' ? 'waiting' : 'done');
     box.dataset.on = '1';
     if (flashTimer !== null) clearTimeout(flashTimer);
     flashTimer = setTimeout(function () {

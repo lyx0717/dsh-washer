@@ -89,6 +89,37 @@ let notifyPref = false;
 let lastNotifyAt = 0;
 
 /**
+ * 状态音效开关。和 notifyPref 分开是刻意的：
+ *
+ *   通知是「屏幕角落弹一条」，声音是「房间里响一声」，打扰程度不一样。
+ *   用户可能想要声音但不要通知（浮窗就在眼前，通知只会挡住别的窗口），
+ *   也可能正相反。捆在一个开关里，就逼人二选一。
+ *
+ * 默认关，理由和通知一样：突然出声比错过更烦人。
+ */
+let soundPref = false;
+/** 声音单独节流。比通知的 4 秒短——等待确认可能短时间内来回切。 */
+let lastSoundAt = 0;
+
+/**
+ * 状态 → 系统音效。
+ *
+ * 用 /System/Library/Sounds 里现成的，不打包音频文件：
+ * 零体积、零解码、零许可问题，而且**跟用户自己的音量设置和静音键走**。
+ * 自己塞一个 mp3 进来，反而会出现"系统静音了它还在响"这种事。
+ *
+ * 三个音是刻意挑的，音色差得开，闭着眼能听出是哪个：
+ *   Glass  1.65s  明亮的上行   —— 洗完了，是好事
+ *   Basso  0.77s  低沉的下沉   —— 出故障了，得去看
+ *   Tink   0.56s  最轻的一声   —— 等你确认，高频场景，不能吵
+ */
+const SOUNDS = {
+  done: '/System/Library/Sounds/Glass.aiff',
+  error: '/System/Library/Sounds/Basso.aiff',
+  waiting: '/System/Library/Sounds/Tink.aiff',
+};
+
+/**
  * 读端点文件，并且**确认那一头的宿主真的在听**。
  *
  * 文件是插件卸载时故意留下的（见 index.js 的注释），所以里面可能是一份
@@ -534,6 +565,39 @@ function notify(title, body) {
 }
 
 /**
+ * 播一声状态音效。
+ *
+ * 和 notify 共用"用户是不是在看"这个判断，但**各自独立节流**：
+ * 通知那条 4 秒，声音这条 2 秒。理由不一样——
+ * 通知弹在屏幕角落，连弹三条会挡视线；声音只占 1.6 秒，稍密一点没问题。
+ *
+ * 用 afplay 而不是 Electron 的 Audio：主进程没有 Audio 类，
+ * 要么开一个隐藏的 renderer 专为放音（贵且难查），要么走系统命令。
+ * afplay 是 macOS 自带的，没有额外依赖。
+ *
+ * 失败一律静默：放不出声音不该影响任何别的东西——
+ * 用户可能在别的系统上没有这个文件，也可能删了它。
+ */
+function playSound(kind) {
+  if (soundPref !== true) return;
+  if (win !== null && !win.isDestroyed() && win.isFocused()) return;
+  const file = SOUNDS[kind];
+  if (file === undefined) return;
+  if (lastSoundAt > 0 && Date.now() - lastSoundAt < 2000) return;
+  lastSoundAt = Date.now();
+  try {
+    require('node:child_process').execFile(
+      'afplay',
+      [file],
+      { timeout: 5000 },
+      () => { /* 同上：放不出来就算了 */ },
+    );
+  } catch {
+    /* 同上 */
+  }
+}
+
+/**
  * 用 Electron 自己的 Notification 发。返回是否成功发出。
  *
  * sync 的 show() 不抛错不代表发出去了：没授权时失败是**异步**的
@@ -903,12 +967,15 @@ function watchPrefs() {
       const nextDark = typeof prefs.dark === 'boolean' ? prefs.dark : themeDark;
       // 通知开关也走同一条路：设置页 POST → 宿主写文件 → 这里读到就生效
       const nextNotify = typeof prefs.notify === 'boolean' ? prefs.notify : notifyPref;
+      // 声音开关同一条路：设置页 POST → 宿主写文件 → 这里读到就生效
+      const nextSound = typeof prefs.sound === 'boolean' ? prefs.sound : soundPref;
       if (nextSize !== sizeMode) setSizeMode(nextSize);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
       if (nextThrough !== clickThrough) setClickThrough(nextThrough);
       if (nextDark !== themeDark) setThemeDark(nextDark);
       notifyPref = nextNotify;
+      soundPref = nextSound;
     });
   } catch { prefWatcher = null; }
 }
@@ -939,6 +1006,8 @@ app.whenReady().then(() => {
   if (typeof prefs.dark === 'boolean') themeDark = prefs.dark;
   // 通知默认关：没显式开过就一直关着
   if (typeof prefs.notify === 'boolean') notifyPref = prefs.notify;
+  // 声音同理
+  if (typeof prefs.sound === 'boolean') soundPref = prefs.sound;
 
   /*
    * 单实例：重复点启动只是把已有窗口提到前面。
@@ -977,6 +1046,14 @@ app.whenReady().then(() => {
   ipcMain.on('washer:notify', (_event, payload) => {
     const kind = payload && payload.kind;
     const text = payload && typeof payload.text === 'string' ? payload.text.slice(0, 80) : '';
+    /*
+     * 声音和通知走同一个入口，但各自判断、各自节流。
+     *
+     * 为什么让页面只发一次 IPC：状态边沿检测在页面那边做（它才知道
+     * 上一帧是什么），主进程不该再维护一份"上次是什么状态"——
+     * 两份状态迟早对不上，那就是上一轮 pending 不同步的翻版。
+     */
+    playSound(kind);
     if (kind === 'done') notify('洗完了', text || '这一轮跑完了');
     else if (kind === 'error') notify('出故障了', text || '点开看看');
   });

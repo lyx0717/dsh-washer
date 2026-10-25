@@ -724,6 +724,8 @@ export function writeOverlayPrefs(patch) {
   if (patch.clickThrough === true || patch.clickThrough === false) next.clickThrough = patch.clickThrough;
   // 洗完弹系统通知。默认关，用户显式开了才写进去。
   if (patch.notify === true || patch.notify === false) next.notify = patch.notify;
+  // 状态音效。和通知是两个独立开关，可以只要其中一个。
+  if (patch.sound === true || patch.sound === false) next.sound = patch.sound;
   /*
    * 暗色主题：Web 端量出宿主的实际明暗（读背景色亮度）再 POST 过来，
    * 浮窗据此切浅/深，做到「跟 dock 同步」。宿主（Node）读不到渲染进程的

@@ -112,6 +112,32 @@ Node 进程里没有），所以浮窗默认"谁最后动显示谁"，多开时�
 - 系统通知发不出来时会自动退回 `osascript`（详见 `electron/main.cjs` 里
   `showScriptNotification` 的注释：adhoc 签名的 Electron 拿不到 macOS 通知权限）。
 
+## 状态音效
+
+设置页可开，默认关，和「洗完通知」是**两个独立开关**——通知弹横幅、声音响一声，
+你大可以只要声音不要通知（浮窗就在眼前，通知只会挡别的窗口）。
+
+只在这个三个时刻响，中间运转一律静音：
+
+| 时刻 | 音 | 为什么 |
+|---|---|---|
+| 洗完了 | `Glass` 明亮上行 | 事情办完了，叫你回来看 |
+| 出故障 | `Basso` 低沉 | 和完成听觉上区分开，一听就知道要去处理 |
+| 等你确认 | `Tink` 最轻一声 | 卡在这儿等着，不叫你看不到 |
+
+**为什么不给每个状态都加声音**：一次任务会依次经过
+`starting → washing → rinsing → spinning → done`，每个都响的话一轮七八声，
+比闹钟还烦；然后用户会把开关关掉——连最重要的那声「洗完了」也一起没了。
+只留**用户需要行动**的三个时刻，其余交给画面本身（转速、水位、泡沫都在动，
+本来就不需要声音告诉你它还活着）。
+
+实现上用 macOS 自带的 `afplay` 播 `/System/Library/Sounds/*.aiff`：不打包音频、
+不做解码、不引入许可问题，而且**跟着你系统自己的音量和静音键走**——
+自己塞个 mp3 进来反而会出现「系统静音了它还在响」。
+
+开关、节流、前台静音和通知共用一套判断：窗口在前台时静音（人就在看），
+2 秒内不重复响（状态抖动时不连响）。
+
 ## 安装
 
 ```bash
@@ -175,6 +201,7 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 | `desktopOverlaySize` | `'normal'` | `'normal'` / `'tiny'`（极简：只留指示灯） |
 | `desktopOverlayClickThrough` | `false` | 鼠标穿透，点穿到底下应用；`⌥⌘W` 恢复 |
 | `desktopOverlayNotify` | `false` | 洗完弹系统通知（只报完成和故障） |
+| `desktopOverlaySound` | `false` | 状态音效（完成 / 故障 / 等你确认） |
 
 示例：
 
@@ -200,9 +227,9 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 ## 开发
 
 ```bash
-npm run build     # src/ → client.js + debug/float.machines.js（约 133KB）
-npm test          # core 38 + host 60 + build 4 = 102 条
-node test/render.mjs           # 56 条行为测试 + 生成 /tmp/washer-render 截图素材
+npm run build     # src/ → client.js + debug/float.machines.js（约 140KB）
+npm test          # core 38 + host 71 + build 4 = 113 条
+node test/render.mjs           # 61 条行为测试 + 生成 /tmp/washer-render 截图素材
 node test/render.mjs --no-shots   # 只跑用例不写盘
 node debug/e2e.mjs             # 端到端：起真服务 + 模拟事件流，逐行打印状态迁移
 ```

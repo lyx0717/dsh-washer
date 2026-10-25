@@ -113,6 +113,8 @@ window.__ModuleLoader__.load({
       'set.overlaySizeHint': '「极简」只留指示灯，不显示状态文字，占桌面空间最小。',
       'set.overlayNotify': '洗完弹通知',
       'set.overlayNotifyHint': '只报「洗完了」和「故障」，窗口在前台时不打扰。',
+      'set.overlaySound': '状态音效',
+      'set.overlaySoundHint': '洗完了、出故障、等你确认各响一声，中间运转不吵。窗口在前台时静音。',
       'set.overlayThrough': '鼠标穿透',
       'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
     };
@@ -166,6 +168,8 @@ window.__ModuleLoader__.load({
       'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press Opt+Cmd+W to turn it off.',
       'set.overlayNotify': 'Notify when done',
       'set.overlayNotifyHint': 'Only “done” and “error”. Silent while the window is focused.',
+      'set.overlaySound': 'Sound cues',
+      'set.overlaySoundHint': 'One chime for done, error, and waiting for you. Quiet while it works.',
     };
 
     /* 每状态：水位 / 转速 / 泡沫。机型自己的表，和文案解耦 */
@@ -258,6 +262,12 @@ window.__ModuleLoader__.load({
        * 正常运转的每一步都弹一遍，当天就会被关掉。
        */
       desktopOverlayNotify: false,
+      /*
+       * 状态音效。和通知是两个独立开关：通知弹横幅，声音响一声。
+       * 用户可能只要声音不要通知（浮窗就在眼前），也可能正相反。
+       * 默认关，理由同上——突然出声比错过更烦人。
+       */
+      desktopOverlaySound: false,
     };
 
     /* ------------------------------------------------------------------ *
@@ -876,6 +886,9 @@ window.__ModuleLoader__.load({
         row('set.overlayNotify',
           sw('desktopOverlayNotify', cfg.desktopOverlayNotify === true, tr('set.overlayNotify'))),
         h('p', { className: 'dw-set-hint' }, tr('set.overlayNotifyHint')),
+        row('set.overlaySound',
+          sw('desktopOverlaySound', cfg.desktopOverlaySound === true, tr('set.overlaySound'))),
+        h('p', { className: 'dw-set-hint' }, tr('set.overlaySoundHint')),
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));
     }
 
@@ -1057,6 +1070,8 @@ window.__ModuleLoader__.load({
           desktopOverlayClickThrough: 'clickThrough',
           // 洗完弹系统通知。默认关，用户显式开了才写进偏好文件。
           desktopOverlayNotify: 'notify',
+          // 状态音效，同样的通道、独立的开关
+          desktopOverlaySound: 'sound',
           /*
            * skin 现在同时是主界面皮肤和浮窗造型，所以改它必须推一份给宿主，
            * 否则浮窗要等下次重启才换。反方向由 SSE 回灌（见 applyRemotePrefs）。
@@ -1124,6 +1139,7 @@ window.__ModuleLoader__.load({
             show: 'desktopOverlay', size: 'desktopOverlaySize', skin: 'skin',
             clickThrough: 'desktopOverlayClickThrough',
             notify: 'desktopOverlayNotify',
+            sound: 'desktopOverlaySound',
           };
           let changed = false;
           for (const field of Object.keys(REVERSE)) {
@@ -1132,7 +1148,8 @@ window.__ModuleLoader__.load({
             let value = remote[field];
             // 本地字段名和文件字段名眼瞅着一样，但类型不同：
             // 文件里 size 是 'tiny'/'normal'，页面里是 desktopOverlaySize
-            if ((key === 'desktopOverlay' || key === 'desktopOverlayClickThrough' || key === 'desktopOverlayNotify') && typeof value !== 'boolean') continue;
+            if ((key === 'desktopOverlay' || key === 'desktopOverlayClickThrough'
+              || key === 'desktopOverlayNotify' || key === 'desktopOverlaySound') && typeof value !== 'boolean') continue;
             if (prefs[key] === value) continue;
             prefs[key] = value;
             changed = true;

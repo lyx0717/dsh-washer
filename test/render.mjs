@@ -10,7 +10,7 @@
  *
  * 用法：node test/render.mjs [outDir] [--no-shots]
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -1045,7 +1045,7 @@ await test('设置页的开关是 role=switch 且带内联样式（不靠 class 
 
   const switches = html.match(/role="switch"/g) || [];
   // 四个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知（表情和显示成本已按用户要求删除）
-  assert.equal(switches.length, 4, '四个布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知），实际 ' + switches.length);
+  assert.equal(switches.length, 5, '五个布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知/状态音效），实际 ' + switches.length);
   assert.ok(/aria-checked="true"/.test(html), '开着的开关 aria-checked=true');
   assert.ok(/aria-checked="false"/.test(html), '关着的开关 aria-checked=false');
 
@@ -1182,7 +1182,7 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
 
   // 空配置下，每个开关都得渲染成明确的关/开（不能因为值是 undefined 就没有 aria-checked）
   const switches = [...html.matchAll(/<button[^>]*role="switch"[^>]*aria-checked="(true|false)"[^>]*>/g)];
-  assert.equal(switches.length, 4, '四个布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知）各一个开关');
+  assert.equal(switches.length, 5, '五个布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 状态音效）各一个开关');
   for (const m of switches) {
     if (/悬浮窗/.test(m[0])) assert.equal(m[1], 'false', '空配置下悬浮窗开关必须是关');
   }
@@ -1942,6 +1942,93 @@ await test('客户端要真的把 pending 报给宿主，而且只在变化时�
   const deps = m[1];
   assert.ok(deps.includes('pendingKind'), '依赖里要有 pendingKind');
   assert.ok(!/\bpending\b(?!Kind)/.test(deps), '依赖里不能直接放 pending 对象，否则每帧都发');
+});
+
+await test('状态音效：三个提醒点各一个音，不是每个状态都响', () => {
+  /*
+   * 用户要「各种状态都有声音提示」，真按字面做会立刻被关掉：
+   * 一次任务依次经过 starting→washing→rinsing→spinning→done，
+   * 每步都响，一轮七八声，比闹钟还烦，然后用户把开关一关——
+   * 连最重要的那声「洗完了」也一起没了。
+   *
+   * 所以只留三个**用户需要行动**的时刻，中间运转一律静音。
+   * 这条测试钉的就是这个判断，防止以后有人"顺手"把状态补全。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  const start = html.indexOf('function maybeNotify');
+  assert.ok(start >= 0, '浮窗要有状态边沿检测');
+  // 只取函数体：它内部第一个单独的 "  }" 收尾
+  const close = html.indexOf('\n  }\n', start);
+  const body = html.slice(start, close);
+
+  assert.ok(body.includes("s !== 'done'"), '完成要响');
+  assert.ok(body.includes("s !== 'error'"), '故障要响');
+  assert.ok(body.includes("s !== 'waiting'"), '等你确认要响');
+  // 负面断言：中间状态不许出现在这个判断里
+  for (const quiet of ['washing', 'rinsing', 'spinning', 'starting', 'draining']) {
+    assert.ok(!body.includes("'" + quiet + "'"),
+      quiet + ' 是正常运转的中途状态，必须静音——它响一次用户就会关掉整个开关');
+  }
+});
+
+await test('状态音效：开关、节流、前台静音三件套都得有', () => {
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+
+  assert.ok(mainSrc.includes('function playSound'), '主进程要有播放函数');
+  assert.ok(mainSrc.includes('afplay'), '用系统 afplay，不打包音频文件');
+
+  const start = mainSrc.indexOf('function playSound');
+  const close = mainSrc.indexOf('\n}\n', start);
+  const body = mainSrc.slice(start, close);
+
+  // 开关：默认关，用户开了才响
+  assert.ok(body.includes('soundPref !== true'), '没有开关就会不管用户意愿一直响');
+  // 前台静音：人就在看浮窗，还响一声是打扰
+  assert.ok(body.includes('isFocused'), '窗口在前台时必须静音');
+  // 节流：状态抖动时不能连响
+  assert.ok(body.includes('lastSoundAt'), '必须有节流，否则抖动会连响');
+});
+
+await test('状态音效：三个音必须真的存在，且音色区分得开', () => {
+  /*
+   * 写死 /System/Library/Sounds 里的文件是有代价的：系统升级、精简系统
+   * 都可能删掉某一个。文件不在，afplay 返回非零、用户什么都听不到，
+   * 而且失败是静的（execFile 回调里我们不报错），最难查。
+   *
+   * 所以直接把三个路径拿出来 stat 一遍：本机没有就当场红。
+   */
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+  const files = [...mainSrc.matchAll(/'\/System\/Library\/Sounds\/([A-Za-z]+)\.aiff'/g)].map((m) => m[1]);
+  assert.equal(files.length, 3, 'done / error / waiting 各一个音，实际 ' + files.length);
+  assert.equal(new Set(files).size, 3, '三个音不能重复，否则听不出是哪种状态');
+
+  for (const name of files) {
+    const full = '/System/Library/Sounds/' + name + '.aiff';
+    assert.ok(existsSync(full), '音效文件不存在：' + full + '（afplay 会静默失败）');
+  }
+});
+
+await test('状态音效：设置页开关真的接上了偏好链路', () => {
+  /*
+   * 一个开关要生效，得同时打通五处。漏任何一处，用户翻开关都没反应：
+   *   1. DEFAULT_CONFIG 有默认值
+   *   2. 设置页渲染出开关
+   *   3. OVERLAY_PREF_KEYS 映射到偏好文件字段名
+   *   4. REVERSE 让浮窗那边改了也能回灌到页面
+   *   5. 宿主 index.js 的白名单放行这个字段
+   */
+  const src = readFileSync(join(root, 'client.js'), 'utf8');
+  assert.ok(src.includes('desktopOverlaySound'), 'DEFAULT_CONFIG 里要有默认值');
+  assert.ok(src.includes("desktopOverlaySound: 'sound'"), 'OVERLAY_PREF_KEYS 要映射到 sound');
+  assert.ok(src.includes("sound: 'desktopOverlaySound'"), 'REVERSE 要能回灌');
+  assert.ok(src.includes('set.overlaySound'), '设置页要真的渲染这个开关');
+
+  const hostSrc = readFileSync(join(root, 'index.js'), 'utf8');
+  assert.ok(/patch\.sound === true \|\| patch\.sound === false/.test(hostSrc),
+    '宿主白名单要放行 sound，否则页面写了文件也不会有这个字段');
+
+  const patchYml = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
+  assert.ok(patchYml.includes('desktopOverlaySound'), 'cordis.patch.yml 是默认值的唯一来源，不能漏');
 });
 
 if (finalFailed.length > 0) {
