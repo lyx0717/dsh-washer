@@ -1348,3 +1348,69 @@ test('三个调用点必须同一套等人判断，不能浮窗亮着总览说�
   assert.equal(row.state, 'waiting', '总览也得说在等人，两边不能打架');
   ctx.dispose();
 });
+
+test('迟滞：降级切换要等满 400ms，不能工具一结束就跳', async () => {
+  /*
+   * 网页端 dock 有 shouldSwitch 防抖，悬浮窗早先没有。
+   * 结果 rinsing→washing 这种降级，悬浮窗秒变、dock 慢半拍，
+   * 用户看到两块屏不一致。
+   *
+   * 这里只验「规则确实接上了」：把 rinsing 推出去，紧接着让它变 washing，
+   * 前 400ms 内推出去的必须还是 rinsing。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+
+  const pushed = [];
+  const socket = await openWs(port, (text) => pushed.push(JSON.parse(text)));
+  const onEvent = ctx.handlers.get('session/event');
+
+  // 冲到 rinsing：有工具在跑
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 1, callId: 't1', name: 'bash' }));
+  await new Promise((r) => setTimeout(r, 250));
+  assert.ok(pushed.some((f) => f.state === 'rinsing'), '先把 rinsing 推出去');
+
+  // 工具结束 → 应降级到 washing，但迟滞窗口内不能立刻跳
+  const endedAt = Date.now();
+  onEvent({ id: 's1' }, ev('tool/result', { turn: 1, step: 1, message: { toolCallId: 't1' } }));
+
+  for (let i = 0; i < 8; i += 1) {
+    await new Promise((r) => setTimeout(r, 30));
+    const recent = pushed.filter((f) => Date.now() - endedAt < 400);
+    for (const f of recent) {
+      assert.notEqual(f.state, 'washing', '400ms 迟滞窗口内不许跳到 washing');
+    }
+  }
+
+  // 过了迟滞窗口就该跟上
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(pushed[pushed.length - 1].state, 'washing', '迟滞过了必须切到 washing');
+
+  socket.close();
+  ctx.dispose();
+});
+
+test('迟滞：紧急态立刻切，一秒都不等', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  const port = await waitForPort(api);
+
+  const pushed = [];
+  const socket = await openWs(port, (text) => pushed.push(JSON.parse(text)));
+  const onEvent = ctx.handlers.get('session/event');
+
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 1, callId: 't1', name: 'bash' }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(pushed.some((f) => f.state === 'rinsing'));
+
+  // 提问工具一上来就是等人，属于紧急态，必须立刻推 waiting
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, step: 2, callId: 'q1', name: 'ask_user_question' }));
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(pushed[pushed.length - 1].state, 'waiting', '紧急态必须立刻切，不能被迟滞拖住');
+
+  socket.close();
+  ctx.dispose();
+});

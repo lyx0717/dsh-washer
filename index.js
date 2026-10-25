@@ -35,6 +35,7 @@ import {
   stateWeight,
   typicalTurnMs,
   remainingOf,
+  shouldSwitch,
 } from './src/core.js';
 
 export const name = 'dsh-washer';
@@ -816,6 +817,15 @@ export function apply(ctx, config) {
   let lastPushed = '';
   /** 上一次真正写进推送流的状态名（心跳据此发现「状态自己变了但没人说」） */
   let lastPushedState = null;
+  /*
+   * 迟滞：两边（dock / 悬浮窗）都要用 shouldSwitch，否则工具一结束，
+   * 悬浮窗立刻跳到 washing、dock 还在 rinsing 等它那 400ms 防抖。
+   * 用户看到的就是两块屏幕不一致。
+   *
+   * 这里记两个东西：真正显示出去的那个状态，以及它是什么时候变的。
+   */
+  let shownState = null;
+  let shownStateAt = 0;
   let lastPushAt = 0;
   let pushTimer = null;
   /** 由宿主拉起的 Electron 悬浮窗进程 */
@@ -1076,6 +1086,30 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 把「算出来的」状态按迟滞规则落到「显示出去的」状态。
+   *
+   * 规则本身在 core.js 的 shouldSwitch 里，和网页端 dock 一字不差：
+   * 紧急态立即切，权重升高立即切，只有权重下降才等满 400ms。
+   *
+   * 悬浮窗早先没有这一层，于是 rinsing→washing 这类降级切换它秒变、
+   * dock 要等 400ms，工具一结束两块屏就对不上。
+   */
+  function settleState(candidate, now) {
+    if (shownState === null) {
+      shownState = candidate;
+      shownStateAt = now;
+      return candidate;
+    }
+    if (candidate === shownState) return shownState;
+    if (shouldSwitch(shownState, candidate, now - shownStateAt)) {
+      shownState = candidate;
+      shownStateAt = now;
+      return shownState;
+    }
+    return shownState;
+  }
+
+  /**
    * 快照里 updatedAt 每次都变，拿它做去重等于永不命中——等于没有去重。
    * 只比较真正会变的部分：状态、轮次、时长、工具流水。
    * 但时长每秒都在走，所以纯状态去重会让"秒数"停住。
@@ -1084,6 +1118,12 @@ export function apply(ctx, config) {
    */
   function pushNow() {
     const snap = snapshot();
+    /*
+     * 迟滞在推送出口做，不在 snapshot() 里做——snapshot() 还被
+     * /dsh-washer/state 直接读，那是"宿主当下算出来什么"的诊断口径，
+     * 掺进迟滞就查不出真问题了。
+     */
+    snap.state = settleState(snap.state, Date.now());
     // 面板数据（模型/速度/token）也要进签名，否则它们变了却不推——
     // 洗衣机本体不变不代表详情没变。
     const usage = snap.tokenUsage;
@@ -1215,7 +1255,15 @@ export function apply(ctx, config) {
         sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
         now,
       });
-      if (current === lastPushedState) {
+      /*
+       * 比的是**迟滞后**的状态，不是刚算出来的那个。
+       *
+       * 早先这里直接拿 current 比 lastPushedState，可 lastPushedState 记的
+       * 是渲染端手上那份（已经过迟滞）。迟滞窗口里两者必然不等，心跳就会
+       * 每一拍都认定"状态变了"去补推，把迟滞彻底废掉——等于没加。
+       */
+      const settled = settleState(current, now);
+      if (settled === lastPushedState) {
         // 状态没变。只在「会自己变」的窗口里继续推（秒数在走）
         if (s.running || s.doneUntil > now) schedulePush(true);
         return;
