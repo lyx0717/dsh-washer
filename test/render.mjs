@@ -1717,6 +1717,12 @@ await test('浮窗要真的用宿主算好的 stalledMs，不能只推不用', (
   const iPlain = body.indexOf('durationText');
   assert.ok(iStalled >= 0 && iPlain >= 0, '两个分支都要有');
   assert.ok(iStalled < iPlain, '卡住的判断要在已运行时长之前');
+  /*
+   * 卡住时只出时长，不加「停」字。
+   * 那一格本来就只有 132px 宽的一段字，前缀占地方又没信息量——
+   * 数字在快速变小就说明它在动，快速变大就说明卡住了。
+   */
+  assert.ok(!/'停 ' \+/.test(body), '卡住时长前面不许再拼「停」字');
 });
 
 await test('不再显示预计剩余时间（用户否掉了，不准确）', () => {

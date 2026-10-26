@@ -1043,7 +1043,7 @@
    */
   function durationOf(s, snap) {
     if (typeof snap.stalledMs === 'number' && snap.stalledMs !== null) {
-      return '停 ' + fmtDur(snap.stalledMs);
+      return fmtDur(snap.stalledMs);
     }
     return snap.durationText || '--:--';
   }
