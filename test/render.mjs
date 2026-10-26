@@ -2032,21 +2032,52 @@ await test('状态音效：设置页开关真的接上了偏好链路', () => {
 });
 
 /*
- * 悬浮窗多会话列表（用户报「多任务超过三个显示不全」）。
+ * 悬浮窗多会话溢出（用户报「多任务超过三个显示不全」）。
  *
- * 气泡里 132px 宽，减去内边距、状态文字和计时只剩 39px，最多 4 颗点。
- * 第 5 个会话起靠悬停展开的列表显示——窗口不能变高（透明区照样吃鼠标，
- * 会挡住底下应用的点击，见 main.cjs 的注释）。
- *
- * 这里断言三件容易回退的事：圆点封顶、气泡宽度锁死、列表不限行数。
+ * 气泡 132px 宽，减去内边距、状态文字和计时只剩 41px。
+ * 3 颗点（6px + 3px 间距）加一个「+N」正好填满 —— 再多一颗就没地方
+ * 标明"还剩几个"了。窗口不能变高（透明区照样吃鼠标，会挡住底下应用的
+ * 点击，见 main.cjs 的 SIZES 注释），所以只能折叠，不能靠展开解决。
  */
-await test('悬浮窗：圆点封顶 4 颗，列表不封顶', () => {
+await test('悬浮窗：圆点封顶 3 颗，溢出显示 +N', () => {
   const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
-  assert.ok(/MAX_DOTS\s*=\s*4/.test(html), '圆点上限必须是常量 MAX_DOTS = 4');
+  assert.ok(/MAX_DOTS\s*=\s*3/.test(html), '圆点上限必须是常量 MAX_DOTS = 3');
   assert.ok(/var list = all\.slice\(0, MAX_DOTS\)/.test(html),
-    '圆点要截断到 MAX_DOTS；不截断就会把气泡撑宽、第 5 个点顶出窗口');
-  assert.ok(/buildSessionRows\(all, pinned\)/.test(html),
-    '列表必须拿**全部**会话（all）而不是截断后的 list，否则"看全部状态"做不到');
+    '圆点要截断到 MAX_DOTS；不截断就会把气泡撑宽、多出的点顶出窗口');
+  assert.ok(/var overflow = all\.length - list\.length/.test(html), '要算出溢出数量');
+  /*
+   * 断言「真的把 +N 挂到 DOM 上」，不是光拼字符串。
+   * 只查 textContent 赋值的话，外面套一层 if (false) 也照样通过 ——
+   * 破坏实验验证过：改 if (overflow > 0) 为 if (false)，旧断言不红。
+   */
+  assert.ok(/more\.textContent = '\+' \+ overflow/.test(html), '溢出要渲染成 +N');
+  assert.ok(/if \(overflow > 0\) \{\s*\n\s*var more = document\.createElement/.test(html),
+    '+N 必须在 overflow > 0 时真正创建，不能被条件短路');
+  assert.ok(/box\.appendChild\(more\)/.test(html), '+N 要真的 append 进圆点区');
+  assert.ok(/还有 ' \+ overflow \+ ' 个会话/.test(html), '+N 要给读屏一句完整的话，不能只念"+2"');
+});
+
+await test('悬浮窗：悬停不再展开列表（已撤回）', () => {
+  /*
+   * 曾经做过"悬停气泡向下展开全部会话"，实测不行：
+   * 气泡贴在窗口最下沿，往下没有空间，铺出去直接被窗口边界裁掉；
+   * 改放到气泡上方又变成"多出一个气泡"，还盖住原气泡。
+   * 用户决定改回纯折叠。这条测试防止那段代码被无意恢复。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(!/buildSessionRows/.test(html), '不该再有会话列表渲染函数');
+  assert.ok(!/showSessions|hideSessionsSoon/.test(html), '不该再有悬停展开/收起逻辑');
+  assert.ok(!/class="sessions"/.test(html), '不该再有列表容器');
+});
+
+await test('悬浮窗：钉住的会话即使排在第 4 名开外也要显示', () => {
+  /*
+   * 钉住的意义是"我一直盯这个"。如果它因为排序掉出可见的 3 颗点，
+   * 用户钉了却看不见，那就白钉了。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(/pinnedIdx >= MAX_DOTS/.test(html), '要判断钉住的会话是否被截断');
+  assert.ok(/list\[MAX_DOTS - 1\] = all\[pinnedIdx\]/.test(html), '被截断时要把钉住的顶到最后一格');
 });
 
 await test('悬浮窗：气泡宽度锁死 132px，不随内容变', () => {
@@ -2069,25 +2100,6 @@ await test('悬浮窗：气泡宽度锁死 132px，不随内容变', () => {
     '锁死宽度后要用 space-between 分配，否则圆点全挤在状态文字旁边');
 });
 
-await test('悬浮窗：悬停命中区只纵向扩，不横向扩', () => {
-  /*
-   * 用户明确要求「鼠标悬停区域只有气泡」。
-   * 气泡只有 20px 高，不加命中区鼠标一偏就闪；但横向扩会让
-   * 落在气泡旁边的鼠标也算悬停——那就不是"只有气泡"了。
-   */
-  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
-  const idx = html.indexOf('.bubble::after');
-  assert.ok(idx > 0, '必须有 .bubble::after 扩命中区');
-  const rule = html.slice(idx, idx + 300);
-  const inset = /inset:\s*([^;]+);/.exec(rule);
-  assert.ok(inset !== null, '.bubble::after 要用 inset 定命中区');
-  const parts = inset[1].trim().split(/\s+/);
-  assert.ok(parts.length === 2 || parts.length === 4, 'inset 是 1/2/3/4 值简写');
-  if (parts.length === 2) {
-    assert.ok(/^0(px)?$/.test(parts[1]), '纵向扩展时横向必须是 0，实际是 ' + parts[1]);
-  }
-});
-
 await test('悬浮窗：气泡有描边和投影，白底上分得清边界', () => {
   /*
    * 用户报「气泡在白色背景下不太明显」。
@@ -2101,20 +2113,6 @@ await test('悬浮窗：气泡有描边和投影，白底上分得清边界', ()
   const body = bubbleRule.slice(0, bubbleRule.indexOf('\n  }'));
   assert.ok(/box-shadow:[^;]*0 0 0 1px/.test(body), '气泡要有 1px 描边（box-shadow 的 0 0 0 1px）');
   assert.ok(/box-shadow:[^;]*0 [2-9]px \d+px rgba\(0, 0, 0/.test(body), '气泡要有向下的投影定层级');
-});
-
-await test('悬浮窗：多会话列表有展开/收起逻辑，且收起要延迟', () => {
-  /*
-   * 鼠标从气泡挪到列表途中会短暂离开气泡，立刻收起等于列表根本点不到。
-   * 所以收起必须走 setTimeout 延迟。
-   */
-  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
-  assert.ok(/function showSessions/.test(html), '要有 showSessions');
-  assert.ok(/function hideSessionsSoon/.test(html), '要有 hideSessionsSoon');
-  assert.ok(/sessionsHideTimer\s*=\s*setTimeout/.test(html), '收起必须延迟，不能立刻执行');
-  assert.ok(/addEventListener\('mouseenter', showSessions\)/.test(html), '悬停气泡要展开');
-  assert.ok(/addEventListener\('mouseleave', hideSessionsSoon\)/.test(html), '离开气泡要延迟收起');
-  assert.ok(/addEventListener\('focusin', showSessions\)/.test(html), '键盘焦点也要能展开');
 });
 
 if (finalFailed.length > 0) {

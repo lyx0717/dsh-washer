@@ -11,11 +11,11 @@ const FRAMES = [
 ];
 
 /*
- * 多会话列表那一帧。悬停气泡才展开，所以推完快照要额外派发一次
- * mouseenter —— 截图脚本没有真鼠标，只能自己造。
+ * 多会话溢出那一帧：5 个会话，气泡里只站得下 3 颗点 + 「+2」。
+ * 排序用的是 Host 的规则（紧急的在前），所以等你确认排第一。
  */
-const SESSIONS_FRAME = {
-  name: 'float-sessions',
+const OVERFLOW_FRAME = {
+  name: 'float-overflow',
   snap: {
     state: 'washing', turn: 3, durationText: '01:24', running: true,
     pinnedSessionId: 'b',
@@ -80,29 +80,21 @@ app.whenReady().then(async () => {
     fs.writeFileSync(path.join(ROOT, 'docs', f.name + '.png'), img.toPNG());
     console.log(f.name, '->', count, img.getSize());
   }
-  /*
-   * 多会话列表：推一个带 sessions 的快照，再模拟悬停，让面板展开。
-   * 单独一拍是因为它需要额外的事件，混在 FRAMES 循环里会把那段逻辑搅乱。
-   */
+  /* 多会话溢出：5 个会话，验证只画 3 颗点 + 「+2」 */
   {
     const count = await win.webContents.executeJavaScript(`
       (function(){
         var arr = window.__fakeWS || [];
         var ws = arr[arr.length - 1];
         if (!ws || typeof ws.onmessage !== 'function') return 'no-ws:' + arr.length;
-        ws.onmessage({ data: ${JSON.stringify(JSON.stringify(SESSIONS_FRAME.snap))} });
+        ws.onmessage({ data: ${JSON.stringify(JSON.stringify(OVERFLOW_FRAME.snap))} });
         return 'ok:' + arr.length;
       })()
     `);
-    await new Promise(r => setTimeout(r, 500));
-    await win.webContents.executeJavaScript(`
-      document.getElementById('bubble').dispatchEvent(new MouseEvent('mouseenter'));
-      true;
-    `);
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 700));
     const img = await win.webContents.capturePage();
-    fs.writeFileSync(path.join(ROOT, 'docs', SESSIONS_FRAME.name + '.png'), img.toPNG());
-    console.log(SESSIONS_FRAME.name, '->', count, img.getSize());
+    fs.writeFileSync(path.join(ROOT, 'docs', OVERFLOW_FRAME.name + '.png'), img.toPNG());
+    console.log(OVERFLOW_FRAME.name, '->', count, img.getSize());
   }
   app.quit();
 });
