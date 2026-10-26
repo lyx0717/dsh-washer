@@ -1698,30 +1698,51 @@ await test('浮窗自己也要能提示完成，不完全依赖系统通知', ()
     'maybeNotify 里必须真的调用 showFlash(s, text)，否则横幅永远不出现');
 });
 
-await test('浮窗要真的用宿主算好的 stalledMs / remainingMs，不能只推不用', () => {
+await test('浮窗要真的用宿主算好的 stalledMs，不能只推不用', () => {
   /*
-   * 宿主半 index.js 一直在推三个数：stalledMs（卡了多久）、typicalMs（这个
-   * 会话最近几轮的中位数）、remainingMs（估的剩余），但浮窗页面只读 state /
-   * durationText / errorCode——算完了没人用，等于白算。
+   * 宿主半 index.js 一直在推 stalledMs（连续多久没有可见进展），
+   * 但浮窗页面原来只读 state / durationText / errorCode —— 算完了没人用，等于白算。
    *
-   * 用户盯着浮窗时最想知道的两件事恰恰是这两个：
-   * 它是不是死了（停多久了）、还要等多久（ETA）。
+   * 用户盯着浮窗时最想知道的恰恰是这个：它是不是死了。
    */
   const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
   assert.ok(html.includes('function durationOf'), '需要一个统一的计时格取值函数');
   assert.ok(html.includes('snap.stalledMs'), '计时格必须读 stalledMs');
-  assert.ok(html.includes('snap.remainingMs'), '计时格必须读 remainingMs');
 
-  // 优先级：卡住 > ETA > 已运行时长
+  // 优先级：卡住 > 已运行时长
   const start = html.indexOf('function durationOf');
   const close = html.indexOf('\n  }\n', start);
   const body = html.slice(start, close);
   const iStalled = body.indexOf('stalledMs');
-  const iRemain = body.indexOf('remainingMs');
   const iPlain = body.indexOf('durationText');
-  assert.ok(iStalled >= 0 && iRemain >= 0 && iPlain >= 0, '三个分支都要有');
-  assert.ok(iStalled < iRemain && iRemain < iPlain,
-    '优先级必须是 卡住 > 剩余 > 已运行：卡住了还在报已运行时长等于没回答');
+  assert.ok(iStalled >= 0 && iPlain >= 0, '两个分支都要有');
+  assert.ok(iStalled < iPlain, '卡住的判断要在已运行时长之前');
+});
+
+await test('不再显示预计剩余时间（用户否掉了，不准确）', () => {
+  /*
+   * 用户原话：「还要多久完成这个展示去掉，不准确」。
+   *
+   * 估不准是结构性的：一轮跑多久取决于这轮要调几次工具、每次多慢，
+   * 历史中位数对这件事几乎没预测力。给个错的时间比不给更糟——用户会信它。
+   * 浮窗和主界面两边都得去掉，不能一个说一个不说。
+   *
+   * 注意别把「卡住时长」一起删了：那是实测值，不是估算。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  const client = readFileSync(join(root, 'src', 'client.template.js'), 'utf8');
+  const readme = readFileSync(join(root, 'README.md'), 'utf8');
+
+  assert.ok(!/snap\.remainingMs/.test(html), '浮窗不许再读 remainingMs');
+  assert.ok(!/后好/.test(html), '浮窗不许再有「x:xx 后好」');
+  assert.ok(/snap\.stalledMs/.test(html), '卡住时长要留着——那是实测值');
+
+  assert.ok(!/remainingOf\(typicalTurnMs/.test(client), '主界面不许再算 ETA');
+  assert.ok(!/'sub\.\w+Eta'/.test(client), 'Eta 文案键要删干净');
+  assert.ok(!/还要 \{remaining\}/.test(client), '「还要 xx」的文案要删干净');
+
+  // README 里如果还教用户「能看到还要多久」，就是文档撒谎
+  assert.ok(!/\| 想知道大概还要多久 \|/.test(readme), 'README 的痛点表不许再承诺 ETA');
 });
 
 await test('退出程序不能把「不显示浮窗」写成用户偏好', () => {
@@ -2163,7 +2184,13 @@ await test('悬浮窗：气泡有描边和投影，白底上分得清边界', ()
   const bubbleRule = html.slice(start.index);
   const body = bubbleRule.slice(0, bubbleRule.indexOf('\n  }'));
   assert.ok(/box-shadow:[^;]*0 0 0 1px/.test(body), '气泡要有 1px 描边（box-shadow 的 0 0 0 1px）');
-  assert.ok(/box-shadow:[^;]*0 [2-9]px \d+px rgba\(0, 0, 0/.test(body), '气泡要有向下的投影定层级');
+  /*
+   * 投影要短。曾经是两层（0 2px 6px + 0 8px 20px），远的那层在 132px 宽的
+   * 窗口里铺出十几像素灰雾，用户原话「气泡下边框阴影太长了」——像拖着尾巴，
+   * 还把下边框糊掉。现在只留一层 1~3px 的短投影。
+   */
+  assert.ok(/box-shadow:[^;]*0 1px 3px rgba\(0, 0, 0/.test(body), '气泡要有一层短的向下投影');
+  assert.ok(!/\b(1[0-9]|[2-9][0-9])px rgba\(0, 0, 0/.test(body), '投影模糊半径不许超过一位数，否则糊成灰雾');
 });
 
 if (finalFailed.length > 0) {

@@ -82,13 +82,10 @@ window.__ModuleLoader__.load({
       'sub.idleLast': '上次洗完 {time}',
       'sub.starting': '正在起转 · {elapsed}',
       'sub.washing': '{elapsed} · 第 {n} 件',
-      'sub.washingEta': '{elapsed} · 第 {n} 件 · 还要 {remaining}',
       'sub.stalled': '已经 {stalled} 没动静，卡住了?',
       'sub.rinsing': '{tool} · {elapsed}',
-      'sub.rinsingEta': '{tool} · {elapsed} · 还要 {remaining}',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': '收尾整理 · {elapsed}',
-      'sub.spinningEta': '收尾整理 · {elapsed} · 还要 {remaining}',
       'sub.waiting': '有个地方要你拍板',
       'sub.draining': '上下文压缩中 · 第 {n} 件',
       'sub.done': '用时 {dur} · 共 {n} 件',
@@ -135,13 +132,10 @@ window.__ModuleLoader__.load({
       'sub.idleLast': 'Last run {time}',
       'sub.starting': 'Spinning up · {elapsed}',
       'sub.washing': '{elapsed} · {n} pcs',
-      'sub.washingEta': '{elapsed} · {n} pcs · ~{remaining} left',
       'sub.stalled': 'nothing for {stalled} — stuck?',
       'sub.rinsing': '{tool} · {elapsed}',
-      'sub.rinsingEta': '{tool} · {elapsed} · ~{remaining} left',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': 'Wrapping up · {elapsed}',
-      'sub.spinningEta': 'Wrapping up · {elapsed} · ~{remaining} left',
       'sub.waiting': 'Something needs your call',
       'sub.draining': 'Compacting context · {n} pcs',
       'sub.done': 'Took {dur} · {n} pcs',
@@ -657,20 +651,13 @@ window.__ModuleLoader__.load({
       const toolName = active === undefined ? '' : active.name;
 
       /*
-       * 预计还要多久。用这个会话自己最近几轮的中位数，不跨会话借数据——
-       * 别的会话跑得快不代表这一轮也快。少于 2 轮样本宁可不显示。
-       *
-       * 只在真正在跑的四个状态里给：starting 刚起轮还没产出，估了也是瞎猜；
-       * done/idle 说"还剩几分钟"是胡话。
+       * 这里曾经有一档「还要 1:20」的 ETA，按本会话最近 8 轮中位数估。
+       * 用户否掉了：「还要多久完成这个展示去掉，不准确」。
+       * 估不准是结构性的——一轮跑多久取决于这轮要调几次工具、每次多慢，
+       * 历史中位数对这个几乎没预测力。给个错的时间比不给更糟，用户会信它。
        */
-      const RUNNING_STATES = { washing: 1, rinsing: 1, spinning: 1, draining: 1 };
-      const remainingMs = RUNNING_STATES[state] === 1
-        ? remainingOf(typicalTurnMs(turnTimings), elapsed)
-        : null;
-
       const parts = {
         elapsed: dur, dur, n: String(toolCount), code, tool: toolName,
-        remaining: remainingMs === null ? '' : formatDuration(remainingMs),
       };
       let sub = tr('sub.' + state);
       if (state === 'idle') {
@@ -678,11 +665,7 @@ window.__ModuleLoader__.load({
       } else if (state === 'rinsing' && toolName === '') {
         sub = fill(tr('sub.rinsingBare'), parts);
       } else if (state !== 'off' && state !== 'waiting') {
-        // 有估算才换成带 ETA 的文案，估不出来就用原来的样子——
-        // 宁可少说一句，也不显示"还要 undefined"
-        const etaKey = 'sub.' + state + 'Eta';
-        const key = remainingMs !== null && tr(etaKey) !== etaKey ? etaKey : 'sub.' + state;
-        sub = fill(tr(key), parts);
+        sub = fill(tr('sub.' + state), parts);
       }
 
       /*
