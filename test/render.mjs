@@ -2080,6 +2080,57 @@ await test('悬浮窗：钉住的会话即使排在第 4 名开外也要显示',
   assert.ok(/list\[MAX_DOTS - 1\] = all\[pinnedIdx\]/.test(html), '被截断时要把钉住的顶到最后一格');
 });
 
+await test('悬浮窗：气泡不贴窗口底边（否则下边框和投影被裁）', () => {
+  /*
+   * 贴死时圆角、下描边、投影全被窗口边界切掉，用户看到的是一条被裁掉
+   * 一半的横条。用户原话：「看不到下边框和阴影」。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  const wrap = /^  \.wrap \{$/m.exec(html);
+  assert.ok(wrap !== null, '找不到 .wrap 规则');
+  const body = html.slice(wrap.index, html.indexOf('\n  }', wrap.index));
+  assert.ok(/padding-bottom:\s*8px/.test(body), '.wrap 底部要留 8px 给投影');
+});
+
+await test('悬浮窗：气泡是液态玻璃（模糊 + 提饱和 + 镜面 + 咬边）', () => {
+  /*
+   * iOS 液态玻璃不是"半透明"四个字能糊过去的，缺一层就退化成塑料色块：
+   *   backdrop-filter  blur 把背后的东西糊开，saturate 让它透亮而不是发灰
+   *   ::before 镜面高光 上半道白光，这是"玻璃"的识别特征
+   *   inset 阴影        顶亮底暗，玻璃才有厚度
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  const bubble = /^  \.bubble \{$/m.exec(html);
+  assert.ok(bubble !== null, '找不到 .bubble 规则');
+  const body = html.slice(bubble.index, html.indexOf('\n  }', bubble.index));
+  assert.ok(/backdrop-filter:\s*blur\(\d+px\)\s*saturate\(\d+%\)/.test(body),
+    '要 backdrop-filter: blur() saturate()，只有 blur 会发灰');
+  assert.ok(/-webkit-backdrop-filter/.test(body), 'Safari/WebKit 需要 -webkit- 前缀');
+  assert.ok(/inset 0 1px 0 rgba\(255, 255, 255/.test(body), '顶部要有一条亮的内描边（光打在玻璃上沿）');
+  /*
+   * 底部暗边断言「真的有暗度」，不能只查 rgba(0, 0, 0 —— 破坏实验验证过：
+   * 改成 rgba(0,0,0,0)（完全透明）旧断言照样通过。要求 alpha 非零。
+   */
+  const darkEdge = /inset 0 -1px 0 rgba\(0, 0, 0, \.\d+\)/.exec(body);
+  assert.ok(darkEdge !== null && !/0, 0, 0, 0\.?0*\)/.test(darkEdge[0]),
+    '底部要有一条暗的内描边（背面反射），且透明度非零，否则没有厚度');
+  assert.ok(/isolation:\s*isolate/.test(body), '要 isolation 建层叠上下文，::before 才能只退到背景之上');
+  assert.ok(/\.bubble::before \{/.test(html), '要有 ::before 镜面高光层');
+});
+
+await test('悬浮窗：玻璃上的文字自带垫底色', () => {
+  /*
+   * 玻璃是透的，背后是什么颜色不受控。实测气泡压在液晶屏（深色）上时，
+   * 深色的计时文字几乎消失。文字要自带一层同色垫底。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(/--glass-ink-halo/.test(html), '要有 --glass-ink-halo 变量');
+  assert.ok(/\.bubble \.st, \.bubble \.tm, \.bubble \.dots \.more \{\s*\n\s*text-shadow/.test(html),
+    '状态、计时、+N 三个文字节点都要垫底');
+  assert.ok(/--glass-ink-halo:\s*rgba\(16, 18, 22/.test(html), '深玻璃要用深色垫（把浅色字托出来）');
+  assert.ok(/--glass-ink-halo:\s*rgba\(255, 255, 255/.test(html), '白玻璃要用白色垫');
+});
+
 await test('悬浮窗：气泡宽度锁死 132px，不随内容变', () => {
   /*
    * 主界面停靠条踩过同一个坑：宽度靠内容撑，切状态时整条左右抖。
