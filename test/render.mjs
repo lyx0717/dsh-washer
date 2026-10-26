@@ -2031,6 +2031,92 @@ await test('状态音效：设置页开关真的接上了偏好链路', () => {
   assert.ok(patchYml.includes('desktopOverlaySound'), 'cordis.patch.yml 是默认值的唯一来源，不能漏');
 });
 
+/*
+ * 悬浮窗多会话列表（用户报「多任务超过三个显示不全」）。
+ *
+ * 气泡里 132px 宽，减去内边距、状态文字和计时只剩 39px，最多 4 颗点。
+ * 第 5 个会话起靠悬停展开的列表显示——窗口不能变高（透明区照样吃鼠标，
+ * 会挡住底下应用的点击，见 main.cjs 的注释）。
+ *
+ * 这里断言三件容易回退的事：圆点封顶、气泡宽度锁死、列表不限行数。
+ */
+await test('悬浮窗：圆点封顶 4 颗，列表不封顶', () => {
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(/MAX_DOTS\s*=\s*4/.test(html), '圆点上限必须是常量 MAX_DOTS = 4');
+  assert.ok(/var list = all\.slice\(0, MAX_DOTS\)/.test(html),
+    '圆点要截断到 MAX_DOTS；不截断就会把气泡撑宽、第 5 个点顶出窗口');
+  assert.ok(/buildSessionRows\(all, pinned\)/.test(html),
+    '列表必须拿**全部**会话（all）而不是截断后的 list，否则"看全部状态"做不到');
+});
+
+await test('悬浮窗：气泡宽度锁死 132px，不随内容变', () => {
+  /*
+   * 主界面停靠条踩过同一个坑：宽度靠内容撑，切状态时整条左右抖。
+   * 浮窗更严重——窗口 132px 是硬边界，撑出去的部分直接看不见。
+   *
+   * 实测过 4 颗圆点时内容算出 137px，比窗口宽 5px。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  // 必须锚定行首：第 45 行还有一条 `.machine, .bubble { -webkit-user-select... }`，
+  // 直接 indexOf('.bubble {') 会命中它，断言就查了个空壳
+  const start = /^  \.bubble \{$/m.exec(html);
+  assert.ok(start !== null, '找不到 .bubble 规则（必须在行首、两空格缩进）');
+  const bubbleRule = html.slice(start.index);
+  const body = bubbleRule.slice(0, bubbleRule.indexOf('\n  }'));
+  assert.ok(/width:\s*132px/.test(body), '.bubble 必须写死 width: 132px');
+  assert.ok(/box-sizing:\s*border-box/.test(body), '写死宽度必须配 border-box，否则 padding 会额外撑宽');
+  assert.ok(/justify-content:\s*space-between/.test(body),
+    '锁死宽度后要用 space-between 分配，否则圆点全挤在状态文字旁边');
+});
+
+await test('悬浮窗：悬停命中区只纵向扩，不横向扩', () => {
+  /*
+   * 用户明确要求「鼠标悬停区域只有气泡」。
+   * 气泡只有 20px 高，不加命中区鼠标一偏就闪；但横向扩会让
+   * 落在气泡旁边的鼠标也算悬停——那就不是"只有气泡"了。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  const idx = html.indexOf('.bubble::after');
+  assert.ok(idx > 0, '必须有 .bubble::after 扩命中区');
+  const rule = html.slice(idx, idx + 300);
+  const inset = /inset:\s*([^;]+);/.exec(rule);
+  assert.ok(inset !== null, '.bubble::after 要用 inset 定命中区');
+  const parts = inset[1].trim().split(/\s+/);
+  assert.ok(parts.length === 2 || parts.length === 4, 'inset 是 1/2/3/4 值简写');
+  if (parts.length === 2) {
+    assert.ok(/^0(px)?$/.test(parts[1]), '纵向扩展时横向必须是 0，实际是 ' + parts[1]);
+  }
+});
+
+await test('悬浮窗：气泡有描边和投影，白底上分得清边界', () => {
+  /*
+   * 用户报「气泡在白色背景下不太明显」。
+   * 气泡本身是半透明深色，压在白色外壳/白色浏览器窗口上时边界糊掉。
+   * 一行描边定边界、一层投影定层级——比调背景色管用。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  const start = /^  \.bubble \{$/m.exec(html);
+  assert.ok(start !== null, '找不到 .bubble 规则');
+  const bubbleRule = html.slice(start.index);
+  const body = bubbleRule.slice(0, bubbleRule.indexOf('\n  }'));
+  assert.ok(/box-shadow:[^;]*0 0 0 1px/.test(body), '气泡要有 1px 描边（box-shadow 的 0 0 0 1px）');
+  assert.ok(/box-shadow:[^;]*0 [2-9]px \d+px rgba\(0, 0, 0/.test(body), '气泡要有向下的投影定层级');
+});
+
+await test('悬浮窗：多会话列表有展开/收起逻辑，且收起要延迟', () => {
+  /*
+   * 鼠标从气泡挪到列表途中会短暂离开气泡，立刻收起等于列表根本点不到。
+   * 所以收起必须走 setTimeout 延迟。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(/function showSessions/.test(html), '要有 showSessions');
+  assert.ok(/function hideSessionsSoon/.test(html), '要有 hideSessionsSoon');
+  assert.ok(/sessionsHideTimer\s*=\s*setTimeout/.test(html), '收起必须延迟，不能立刻执行');
+  assert.ok(/addEventListener\('mouseenter', showSessions\)/.test(html), '悬停气泡要展开');
+  assert.ok(/addEventListener\('mouseleave', hideSessionsSoon\)/.test(html), '离开气泡要延迟收起');
+  assert.ok(/addEventListener\('focusin', showSessions\)/.test(html), '键盘焦点也要能展开');
+});
+
 if (finalFailed.length > 0) {
   for (const f of finalFailed) console.error('  ✗ ' + f.name + '\n      ' + f.error);
 }

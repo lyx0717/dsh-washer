@@ -211,22 +211,60 @@
 
   /* ---- 气泡：状态 + 计时 ---- */
   .bubble {
+    position: relative;
     display: flex;
     align-items: baseline;
     gap: 6px;
     padding: 3px 9px;
     border-radius: 999px;
     background: var(--bubble);
+    /*
+     * 描边 + 投影，让气泡在浅色背景上"浮起来"。
+     *
+     * 原来只有半透明深底，压在 precision 造型的白色外壳、或白色的浏览器窗口上时，
+     * 边界和背景糊在一起——用户看不出这块是可交互的。
+     * 一行描边定边界，一层投影定层级，比调背景色更管用：
+     * 深色背景上描边几乎不可见，正好不抢戏。
+     */
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .16), 0 2px 8px rgba(0, 0, 0, .28);
     color: var(--text);
     font-size: 11px;
     line-height: 1.3;
     white-space: nowrap;
+    cursor: default;
+    /*
+     * 宽度锁死 132px —— 和窗口同宽，气泡就是窗口的满宽。
+     *
+     * 原来靠内容撑：状态文字 + 计时 + 圆点，4 颗点时实测算出来 137px，
+     * 比窗口还宽 5px，右边直接切在窗外。而且不同状态文字长度不一样，
+     * 撑出来的宽度也在变（和主界面停靠条踩过同一个坑）。
+     *
+     * 锁死后用 space-between 分配：状态在左、圆点在右，中间的空档自然吃掉。
+     */
+    width: 132px;
+    box-sizing: border-box;
+    justify-content: space-between;
     /* 气泡进出场：极简态要塌缩，所以 max-height/padding 一起过渡 */
     transition: opacity var(--size-dur, 220ms) ease,
                 max-height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
                 padding var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
                 margin var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1));
     max-height: 30px;
+  }
+  /*
+   * 悬停命中区扩大到紧贴气泡边缘，但不改布局。
+   *
+   * 气泡实际只有 ~24px 高（padding 3px 上下 + 11px 字号），鼠标稍微偏一点就
+   * 离开，展开的列表会一路闪。不能靠加 padding 撑大——那会直接撑宽气泡，
+   * 把圆点的空间吃掉。
+   *
+   * 只在**纵向**扩 10px、横向不扩：横向放宽会让本来落在气泡旁边的鼠标也算悬停，
+   * 那就不是"悬停区域只有气泡"了。
+   */
+  .bubble::after {
+    content: '';
+    position: absolute;
+    inset: -10px 0;
   }
   .bubble .st { font-weight: 600; }
   .bubble .st[data-s="idle"], .bubble .st[data-s="off"] { color: var(--dim); }
@@ -238,6 +276,117 @@
   .bubble .st[data-s="error"] { color: var(--bad); }
   .bubble .tm { color: var(--dim); font-variant-numeric: tabular-nums; }
 
+  /* ---- 会话列表（悬停气泡展开） ----
+   *
+   * 气泡那一行只塞得下 4 个圆点（39px 预算 / 每颗占 10px），第 5 个就溢出。
+   * 但 132px 宽的窗口放不下更多点，也放不下文字——4px 的彩点在 Retina 上
+   * 已经分不清颜色了。
+   *
+   * 所以换个思路：**平时还是那几个点，想看全部就展开**。
+   * 列表向下平铺、盖在机器上半部——那里是滚筒的反光区，本来就没什么信息，
+   * 压在上面不挡水位和面板。
+   *
+   * 不能往外长窗口：透明窗口里超出内容的部分是"透明但吃鼠标"的，
+   * 会挡住底下应用的点击（见 main.cjs 里 SIZES 上面的注释）。
+   */
+  .sessions {
+    position: absolute;
+    left: 2px; right: 2px;
+    bottom: calc(100% - 4px);
+    /* 宽度由左右锚定，不靠内容撑：会话名长短不同，撑出来的面板宽度会抖 */
+    z-index: 18;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 3px;
+    border-radius: 9px;
+    /*
+     * 比气泡本身透一点（.90 → .94 的和不算，这里取 .88）。
+     * 列表必然要盖住一部分机器 —— 窗口只有 132×200，没有别的地方可放。
+     * 略透能让底下的机身透出来，用户一眼知道"这是浮在机器上的列表"，
+     * 而不是机器变成了一个列表界面。
+     */
+    background: rgba(20, 22, 28, .93);
+    backdrop-filter: blur(3px);
+    /*
+     * 一行 15px，留 118px 就是 7 行封顶（含内边距）。
+     *
+     * 不占满整个机器高度：完全盖住就只剩一块面板，用户看不出底下还有个机器。
+     * 留出上面一截机身，既知道自己在看洗衣机，也不至于被列表吞掉。
+     * 再多就滚——窗口不能再长高（透明区照样吃鼠标）。
+     */
+    max-height: 118px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .16), 0 6px 16px rgba(0, 0, 0, .34);
+    /* 逐行淡入，别整块弹出来 */
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition: opacity 120ms ease, transform 120ms ease;
+  }
+  .sessions[data-on="1"] {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .sessions .row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 4px;
+    border-radius: 5px;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.25;
+    flex: none;
+    color: var(--text);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .sessions .row:hover { background: rgba(255, 255, 255, .10); }
+  .sessions .row[data-pinned="1"] { background: rgba(255, 255, 255, .14); }
+  /* 每行前面那颗点复用 .dots 的颜色映射，尺寸小一号 */
+  .sessions .row i {
+    flex: none;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--dim);
+  }
+  .sessions .row[data-s="starting"] i, .sessions .row[data-s="washing"] i,
+  .sessions .row[data-s="rinsing"] i, .sessions .row[data-s="spinning"] i,
+  .sessions .row[data-s="draining"] i { background: var(--run); }
+  .sessions .row[data-s="waiting"] i { background: var(--warn); }
+  .sessions .row[data-s="done"] i { background: var(--ok); }
+  .sessions .row[data-s="error"] i { background: var(--bad); }
+  /* 状态文字占满中间，时长贴右——两栏对齐，扫起来不用一行一行找 */
+  .sessions .row .s {
+    flex: 1 1 auto;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sessions .row[data-s="waiting"] .s { color: var(--warn); font-weight: 600; }
+  .sessions .row[data-s="error"] .s { color: var(--bad); font-weight: 600; }
+  .sessions .row[data-s="done"] .s { color: var(--ok); }
+  .sessions .row .d {
+    flex: none;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+  /* 钉住的那行左侧留一道竖条，比光晕在 10px 字号下好认 */
+  .sessions .row[data-pinned="1"]::before {
+    content: '';
+    flex: none;
+    width: 2px;
+    height: 9px;
+    border-radius: 1px;
+    background: #fff;
+    margin-right: -2px;
+  }
+  body[data-size="tiny"] .sessions { display: none; }
+
   /* ---- 多会话指示灯 ----
    * 用户经常同时跑两三个 agent，只显示一个等于看不见其他的。
    * 一颗点 = 一个还活着的会话，颜色就是它的状态色。
@@ -248,7 +397,21 @@
     align-items: center;
     gap: 4px;
     padding: 0 0 0 2px;
-    margin-left: 2px;
+    /*
+     * 右边收在气泡边框内侧 2px，和左边距对称。
+     * 气泡 132px 宽、左右内边距各 9px，状态文字和计时吃掉 75px，
+     * 留给圆点只剩 39px —— 4 颗点（6+4 一组）正好填满。
+     * 第 5 个会话起靠悬停列表显示，不再往外顶。
+     */
+    margin: 0 2px 0 2px;
+    /*
+     * 宽度锁死：4 颗点 = 6*4 + 4*3 = 36px，加左侧 2px 内边距和 1px 分隔线共 39px。
+     * flex:none 挡住收缩，overflow:hidden 兜底 —— 渲染端已经只画 4 颗，
+     * 这里再挡一层是因为气泡一旦被撑宽，窗口外的东西就看不见了（132px 硬边界）。
+     */
+    flex: none;
+    width: 39px;
+    overflow: hidden;
     border-left: 1px solid rgba(255, 255, 255, .12);
     -webkit-app-region: no-drag;
   }
@@ -607,6 +770,8 @@
     <span class="st" id="st" data-s="off">未连接</span>
     <span class="tm" id="tm">--:--</span>
     <span class="dots" id="dots" role="group" aria-label="会话"></span>
+    <!-- 悬停气泡后向下平铺的全部会话。挂在 .bubble 里是为了跟着气泡定位 -->
+    <div class="sessions" id="sessions" role="group" aria-label="全部会话" data-on="0"></div>
   </div>
   <!--
     本地完成横幅。
@@ -698,20 +863,33 @@
    * 不加文字说明：窗口只有 132px 宽，一行说明会把机器挤没。
    */
   var lastDotsSig = '';
+  var lastRowSeq = [];
+  /*
+   * 气泡里最多画 4 颗指示灯 —— 132px 宽减去内边距、状态文字和计时，
+   * 只剩 39px，4 颗点正好填满。第 5 个会话起只出现在悬停列表里。
+   *
+   * 列表反而不限，全部会话都列出来：那才是"看全部状态"的地方。
+   */
+  var MAX_DOTS = 4;
   function renderDots(snap) {
     var box = el('dots');
     if (box === null) return;
-    var list = Array.isArray(snap.sessions) ? snap.sessions : [];
-    if (list.length < 2) {
+    var all = Array.isArray(snap.sessions) ? snap.sessions : [];
+    var list = all.slice(0, MAX_DOTS);
+    if (all.length < 2) {
       if (lastDotsSig !== '') { box.textContent = ''; lastDotsSig = ''; }
       return;
     }
     var pinned = snap.pinnedSessionId || null;
-    var sig = list.map(function (r) {
+    var sig = all.map(function (r) {
       return r.sessionId + ':' + r.state + ':' + (r.sessionId === pinned ? 'p' : '');
     }).join('|');
     if (sig === lastDotsSig) return;
     lastDotsSig = sig;
+    // 行顺序也给列表用：签名里没进 elapsedMs（每秒都在变），
+    // 只记身份和状态的顺序，列表重建不会因此每帧重画
+    lastRowSeq = all.map(function (r) { return r.sessionId + ':' + r.state; });
+    buildSessionRows(all, pinned);
     box.textContent = '';
     list.forEach(function (row) {
       var dot = document.createElement('i');
@@ -732,6 +910,90 @@
   }
 
   /* 钉住 / 放开。端口和 token 每次现取——宿主重启后它们都会变。 */
+  /*
+   * 全部会话列表（悬停气泡才出现）。
+   *
+   * 为什么要有：气泡里的指示灯一行最多放 4 颗（132px 宽，状态文字和计时
+   * 就吃掉 75px），第 5 个会话根本没地方站。窗口又不能为了列表变大——
+   * 透明窗口里看不见的地方照样吃鼠标，会挡住底下应用的点击（见 main.cjs）。
+   * 所以列表向下平铺，盖在机器身上，窗口尺寸一点不动。
+   *
+   * 每行带状态文字和时长：光一颗点说不出"这个会话在等什么"，
+   * 而列表的宽度够写。
+   */
+  function fmtDur(ms) {
+    var total = Math.max(0, Math.floor(ms / 1000));
+    var m = Math.floor(total / 60);
+    var sec = total % 60;
+    return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+  }
+
+  function buildSessionRows(list, pinned) {
+    var box = el('sessions');
+    if (box === null) return;
+    box.textContent = '';
+    list.forEach(function (row) {
+      var item = document.createElement('div');
+      item.className = 'row';
+      item.dataset.s = row.state || 'off';
+      if (row.sessionId === pinned) item.dataset.pinned = '1';
+      item.setAttribute('role', 'button');
+      item.tabIndex = 0;
+      item.setAttribute('aria-label', (LABEL[row.state] || row.state) + ' · '
+        + fmtDur(row.elapsedMs || 0) + (row.sessionId === pinned ? ' · 已钉住' : ''));
+      var dot = document.createElement('i');
+      var name = document.createElement('span');
+      name.className = 's';
+      name.textContent = LABEL[row.state] || row.state;
+      var dur = document.createElement('span');
+      dur.className = 'd';
+      dur.textContent = fmtDur(row.elapsedMs || 0);
+      item.appendChild(dot);
+      item.appendChild(name);
+      item.appendChild(dur);
+      var toggle = function () { pinSession(row.sessionId === pinned ? null : row.sessionId); };
+      item.addEventListener('click', toggle);
+      item.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); }
+      });
+      box.appendChild(item);
+    });
+  }
+
+  /*
+   * 悬停展开/收起。
+   *
+   * 收起要延迟：鼠标从气泡挪到列表的途中会短暂离开气泡，
+   * 立刻收起就等于列表根本点不到。
+   *
+   * 监听挂在 .bubble 上，而 .bubble 的命中区由 ::after 向外扩了 10px
+   * （见 CSS）——扩的是伪元素，不影响布局，气泡视觉尺寸和圆点空间不变。
+   */
+  var sessionsHideTimer = 0;
+  function showSessions() {
+    var box = el('sessions');
+    if (box === null || lastRowSeq.length < 2) return;
+    if (sessionsHideTimer !== 0) { clearTimeout(sessionsHideTimer); sessionsHideTimer = 0; }
+    box.dataset.on = '1';
+  }
+  function hideSessionsSoon() {
+    if (sessionsHideTimer !== 0) clearTimeout(sessionsHideTimer);
+    sessionsHideTimer = setTimeout(function () {
+      sessionsHideTimer = 0;
+      var box = el('sessions');
+      if (box !== null) box.dataset.on = '0';
+    }, 180);
+  }
+  (function bindSessionsHover() {
+    var bubble = el('bubble');
+    if (bubble === null) return;
+    bubble.addEventListener('mouseenter', showSessions);
+    bubble.addEventListener('mouseleave', hideSessionsSoon);
+    // 键盘用户：焦点落在气泡里的圆点时也展开
+    bubble.addEventListener('focusin', showSessions);
+    bubble.addEventListener('focusout', hideSessionsSoon);
+  })();
+
   function pinSession(sessionId) {
     if (!host) return;
     host.state().then(function (st) {
