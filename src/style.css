@@ -359,6 +359,37 @@
   max-width: 100%;
   padding-right: 10px;
 }
+
+/* ------------------------------------------------------------------ *
+ * dock 座位：宽度固定，不随文字长短伸缩
+ *
+ * 宿主 composer.dock 的父容器是 fit-content —— 宽度由内容决定。
+ * .dw-strip 基础规则写的是 width:100%，在那个父级下百分比没有可参照的
+ * 确定宽度，浏览器退化成按内容算，于是「洗涤中」99px、「等你确认」111px、
+ * 「洗完了 · 用时 03:12」155px，切换状态时整条 dock 左右抖动。
+ *
+ * 这里给 dock 座位一个具体宽度（不是百分比），宽度只由这条规则决定，
+ * 文字再长也在里面 ellipsis 截断。三个档位各自定值，跟随 .dw-strip
+ * 上面的三档 @media 一起变。
+ * ------------------------------------------------------------------ */
+.dsh-washer[data-variant='dock'] .dw-strip {
+  width: 168px;
+  max-width: 168px;
+}
+@media (max-width: 719px) {
+  /* 迷你档：两行文字压成一行，同样的信息用更少横向空间，略收窄 */
+  .dsh-washer[data-variant='dock'] .dw-strip {
+    width: 152px;
+    max-width: 152px;
+  }
+}
+@media (max-width: 519px) {
+  /* 极简档：只剩机器，宽度跟 .dw-strip 基础规则里的 52px 一致 */
+  .dsh-washer[data-variant='dock'] .dw-strip {
+    width: 52px;
+    max-width: 52px;
+  }
+}
 .dsh-washer[data-variant='header'] .dw-text {
   min-width: 0;
 }

@@ -358,3 +358,23 @@ ELECTRON_PATH=/path/to/Electron ./electron/start.sh   # 指定 Electron 运行�
 ## 许可
 
 MIT。图标与像素 sprite 均为原创（脚本生成，见 `src/machine.svg`、`src/sprite.svg`）。
+
+## 本地开发的坑：改了代码页面没反应
+
+profile 里如果用版本号装（`"@lyx0717/dsh-washer": "0.5.0"`），宿主加载的是
+`~/.dsh/profiles/desktop/node_modules/@lyx0717/` 下的一份**拷贝**，不是你手里这份源码。
+改完 `npm run build`，页面一点变化没有——因为那份拷贝没动。
+
+两种办法，选一个：
+
+```bash
+# 1. 软链（推荐，开发期最省事）：改完重启插件即生效
+dsh plugin --profile desktop add link:/Users/liyongxuan/Downloads/AI/washer/dsh-washer
+
+# 2. 手动同步 + 重启插件
+npm run build && rsync -a --exclude=.git --exclude=node_modules --exclude=test \
+  ./ ~/.dsh/profiles/desktop/node_modules/@lyx0717/dsh-washer/
+```
+
+之后还要**重启插件**（改了 `index.js`/`client.js` 必须重启进程才生效），
+浏览器端再 `Cmd+Shift+R` 强刷一次——client.js 也会被 HTTP 缓存住。
