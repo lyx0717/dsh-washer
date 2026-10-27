@@ -93,6 +93,8 @@ const SSE_HEARTBEAT_MS = 25000;
  * 没有定时器、没有轮询，所以不存在性能问题。
  */
 const WEB_PENDING_PATH = '/dsh-washer/pending';
+/** 平台能力探测：客户端拿不到 process.platform，只能问宿主 */
+const WEB_CAPABILITIES_PATH = '/dsh-washer/capabilities';
 /** 上报体上限。就两个字段，1KB 已经非常宽松。 */
 const PENDING_BODY_LIMIT = 1024;
 
@@ -615,10 +617,48 @@ function persistEndpoint(port, token) {
  *      权限没了），自动重试治不了根。用户可以从设置里关掉再打开重试。
  *   3. 宿主退出时 kill 掉整个进程组，否则 Electron 会变成孤儿还在跑。
  */
-function electronBinary() {
+function electronBinaryCandidates() {
   const fromEnv = process.env.DSH_WASHER_ELECTRON;
-  if (typeof fromEnv === 'string' && fromEnv !== '') return fromEnv;
-  return join(homedir(), '.dsh', 'electron', 'Electron.app', 'Contents', 'MacOS', 'Electron');
+  if (typeof fromEnv === 'string' && fromEnv !== '') return [fromEnv];
+
+  const root = join(homedir(), '.dsh', 'electron');
+  if (process.platform === 'win32') {
+    /*
+     * Windows 上 DSH 的运行时是解压后的 electron.exe，没有 .app 包结构。
+     *
+     * 这里按目录形态逐个试，不假定某一种：
+     *   ~/.dsh/electron/electron.exe          ← 直接解压
+     *   ~/.dsh/electron/Electron/electron.exe ← zip 里带一层目录名
+     *
+     * 两种布局我都无法在本机验证（macOS 上没有 electron.exe），所以宁可多列几个
+     * 候选让 existsSync 去筛，也不写死一个路径——写死就是 0.5.3 之前那个 bug：
+     * 路径对不上就静默返回 null，用户看到的是「装了插件但什么都不发生」。
+     */
+    return [
+      join(root, 'electron.exe'),
+      join(root, 'Electron', 'electron.exe'),
+      join(root, 'electron', 'electron.exe'),
+    ];
+  }
+
+  // macOS：Electron.app bundle 里的主可执行文件
+  const mac = join(root, 'Electron.app', 'Contents', 'MacOS', 'Electron');
+  // Linux：解压后的 electron 可执行文件
+  const linux = [join(root, 'electron'), join(root, 'Electron', 'electron')];
+  return process.platform === 'linux' ? linux : [mac];
+}
+
+/**
+ * 找出能用的 Electron 可执行文件。找不到返回 null。
+ *
+ * 返回 null 的原因要能说清楚——早先 spawnOverlay 拿到 null 就静默 return，
+ * 用户分不清是「没装」还是「装了但路径不对」。调用方据此提示用户。
+ */
+function electronBinary() {
+  for (const candidate of electronBinaryCandidates()) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -849,6 +889,13 @@ export function apply(ctx, config) {
   let pushTimer = null;
   /** 由宿主拉起的 Electron 悬浮窗进程 */
   let overlayChild = null;
+  /**
+   * 上次拉悬浮窗失败的原因（null 表示没失败过）。
+   *
+   * 要送到客户端才能让设置页把「打开了却什么都没发生」说清楚。
+   * 早先只有一行 logger.warn，落在宿主日志里，用户根本看不到。
+   */
+  let overlayLaunchError = null;
   /** 订阅了偏好推送（SSE）的网页客户端。设置页开一个、关一个。 */
   const prefClients = new Set();
 
@@ -889,11 +936,23 @@ export function apply(ctx, config) {
         : 'precision',
     });
     if (overlayChild === null) {
-      ctx.logger?.warn?.('[dsh-washer] 悬浮窗没起来：找不到 Electron 或 electron/main.cjs');
+      /*
+       * 说清楚是哪个原因。早先只有一句「找不到 Electron 或 electron/main.cjs」，
+       * 用户分不清是没装运行时还是路径不对——Windows 用户就是这样装了插件
+       * 之后什么都不发生，日志里也看不出所以然。
+       */
+      const candidates = electronBinaryCandidates().join(' / ');
+      const why = electronBinary() === null
+        ? `找不到 Electron 运行时，试过：${candidates}`
+        : '找不到 electron/main.cjs';
+      ctx.logger?.warn?.(`[dsh-washer] 悬浮窗没起来：${why}`);
+      overlayLaunchError = why;
       return false;
     }
+    overlayLaunchError = null;
     // 进程自己退了就把引用清掉，否则下次拨开关会以为它还活着，永远不再拉起
     overlayChild.on('exit', () => { overlayChild = null; });
+    overlayLaunchError = null;
     return true;
   }
 
@@ -1744,6 +1803,33 @@ export function apply(ctx, config) {
         });
       },
     }), 'dsh-washer: client pending route');
+
+    /*
+     * 告诉客户端「这台机器能做什么」。
+     *
+     * 用户的诉求是「Windows 上音效暂不支持，设置页隐藏」——但客户端跑在浏览器里，
+     * 拿不到 process.platform。所以由宿主把平台事实报上去，页面只负责按它显示。
+     *
+     * 同一份数据也带上悬浮窗的启动失败原因：Windows 用户装上插件后
+     * 面板打开了开关却什么都没发生，早先只在宿主日志里留一行警告，
+     * 用户看不到。现在设置页能直接说清楚。
+     */
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: WEB_CAPABILITIES_PATH,
+      handler: async (req, res) => {
+        const payload = {
+          platform: process.platform,
+          // 音效走 macOS 自带的 afplay + /System/Library/Sounds，其他平台没有
+          sound: process.platform === 'darwin',
+          // 悬浮窗能不能起来，取决于找不找得到 Electron 运行时
+          overlay: electronBinary() !== null,
+          overlayError: overlayLaunchError,
+        };
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(payload));
+      },
+    }), 'dsh-washer: capabilities route');
 
   }
 

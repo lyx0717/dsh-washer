@@ -66,6 +66,45 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* ------------------------------------------------------------------ *
+     * 问宿主「这台机器能做什么」
+     *
+     * 客户端跑在浏览器里，拿不到 process.platform。音效走的是 macOS 自带的
+     * afplay + /System/Library/Sounds，Windows 上没有——所以要由宿主报上来，
+     * 页面只负责按它显示（用户的诉求：Windows 上音效开关直接隐藏）。
+     *
+     * 结果缓存在模块作用域：能力在一个进程生命周期里不会变（换平台得重装），
+     * 没必要每个组件都问一次。请求本身只发一次，失败就当作「什么都不知道」，
+     * 一切按最保守处理——宁可少显示一个开关，也不要给用户一个拨了没反应的开关。
+     * ------------------------------------------------------------------ */
+    const CAPABILITIES_PATH = '/dsh-washer/capabilities';
+    let capabilities = null;
+    let capabilitiesPending = null;
+    function getCapabilities() {
+      if (capabilities !== null) return Promise.resolve(capabilities);
+      if (capabilitiesPending !== null) return capabilitiesPending;
+      try {
+        capabilitiesPending = fetch(CAPABILITIES_PATH, { headers: { accept: 'application/json' } })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            capabilities = (data !== null && typeof data === 'object') ? data : { };
+            capabilitiesPending = null;
+            return capabilities;
+          })
+          .catch(() => {
+            // 拿不到就当不知道：sound/overlay 都是 undefined，按不支持显示
+            capabilities = { };
+            capabilitiesPending = null;
+            return capabilities;
+          });
+      } catch {
+        capabilities = { };
+        capabilitiesPending = null;
+        return Promise.resolve(capabilities);
+      }
+      return capabilitiesPending;
+    }
+
     const ZH = {
       'state.off': '未连接',
       'state.idle': '待机',
@@ -103,6 +142,7 @@ window.__ModuleLoader__.load({
       'set.overlay': '桌面悬浮窗',
       'set.overlayOn': '显示悬浮窗',
       'set.skinHint': '主界面和桌面悬浮窗共用这一套皮肤，改这里两边一起变。',
+      'set.overlayMissing': '找不到 Electron 运行时，悬浮窗起不来。用 DSH_WASHER_ELECTRON 环境变量指定它的路径。',
       'set.overlayHint': '开启后随客户端启动，在桌面角落显示一台洗衣机；关掉会立刻收起。',
       'set.overlaySize': '悬浮窗大小',
       'ov.normal': '正常',
@@ -153,6 +193,7 @@ window.__ModuleLoader__.load({
       'set.overlay': 'Desktop overlay',
       'set.overlayOn': 'Show overlay',
       'set.skinHint': 'One skin shared by the dock bar and the desktop overlay — change it once, both update.',
+      'set.overlayMissing': 'Electron runtime not found, the floating window cannot start. Set DSH_WASHER_ELECTRON to its path.',
       'set.overlayHint': 'Starts with the app and shows a washer in the corner of your desktop. Turning it off removes it immediately.',
       'set.overlaySize': 'Overlay size',
       'ov.normal': 'Normal',
@@ -461,6 +502,24 @@ window.__ModuleLoader__.load({
       return rev;
     }
 
+    /**
+     * 订阅一次平台能力，返回当前值（首个 render 拿到 null）。
+     *
+     * 抽成 hook 而不是在组件里直接 await：设置页是同步渲染的，
+     * 能力还没到时按"最保守"渲染（音效不显示），拿到了再补上。
+     * 这样 Windows 用户不会先看到开关闪一下再消失。
+     */
+    function useCapabilities() {
+      const [caps, setCaps] = React.useState(capabilities);
+      React.useEffect(() => {
+        if (capabilities !== null) { setCaps(capabilities); return undefined; }
+        let alive = true;
+        getCapabilities().then((value) => { if (alive) setCaps(value); });
+        return () => { alive = false; };
+      }, []);
+      return caps;
+    }
+
     function WasherDock(props) {
       const { sessionId, useSession, useSessionStatus, useChat, useProjection } = props;
       // 'dock' = 常规座位（输入框下方）；'header' = 审批接管输入框时的替补座位。
@@ -739,6 +798,7 @@ window.__ModuleLoader__.load({
       const tr = (key) => t(key);
       const cfg = (typeof props.washerGetConfig === 'function' ? props.washerGetConfig() : props.washerConfig) || DEFAULT_CONFIG;
       usePrefRevision(props);
+      const caps = useCapabilities();
       const setPref = (key, value) => {
         if (typeof props.washerSetPref === 'function') props.washerSetPref(key, value);
       };
@@ -857,6 +917,14 @@ window.__ModuleLoader__.load({
         h('h4', { className: 'dw-set-sub' }, tr('set.overlay')),
         h('p', { className: 'dw-set-hint' }, tr('set.overlayHint')),
         row('set.overlayOn', sw('desktopOverlay', cfg.desktopOverlay === true, tr('set.overlayOn'))),
+        /*
+         * 找不到 Electron 运行时的时候要说出来。
+         * Windows 用户装上插件、面板里把开关拨到开、然后什么都不发生——
+         * 早先这个原因只落在宿主日志里，用户根本看不到。
+         */
+        caps !== null && caps.overlay === false
+          ? h('p', { key: 'overlay-missing', className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissing'))
+          : null,
         row('set.overlaySize', seg(tr('set.overlaySize'), [
           ['normal', tr('ov.normal')],
           ['tiny', tr('ov.tiny')],
@@ -869,9 +937,16 @@ window.__ModuleLoader__.load({
         row('set.overlayNotify',
           sw('desktopOverlayNotify', cfg.desktopOverlayNotify === true, tr('set.overlayNotify'))),
         h('p', { className: 'dw-set-hint' }, tr('set.overlayNotifyHint')),
-        row('set.overlaySound',
-          sw('desktopOverlaySound', cfg.desktopOverlaySound === true, tr('set.overlaySound'))),
-        h('p', { className: 'dw-set-hint' }, tr('set.overlaySoundHint')),
+        /*
+         * 音效只有 macOS 有：走的是系统自带的 afplay + /System/Library/Sounds。
+         * 别的平台干脆不显示这一行——拨了没反应的开关比没有开关更糟。
+         * caps 还没到（null）时也按隐藏处理，避免先闪一下再消失。
+         */
+        caps !== null && caps.sound === true
+          ? [row('set.overlaySound',
+            sw('desktopOverlaySound', cfg.desktopOverlaySound === true, tr('set.overlaySound'))),
+          h('p', { key: 'sound-hint', className: 'dw-set-hint' }, tr('set.overlaySoundHint'))]
+          : null,
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));
     }
 

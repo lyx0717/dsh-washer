@@ -1038,14 +1038,47 @@ await test('设置页：皮肤只有一组，同时控制主界面和悬浮窗�
   assert.deepEqual(writes, [['skin', 'pixel']], '写的必须是 skin，不是 desktopOverlaySkin');
 });
 
+await test('Windows 上音效开关必须隐藏，找不到 Electron 时要说明原因', () => {
+  /*
+   * 用户原话：「音效暂不支持 Windows，Windows 设置页面隐藏」。
+   *
+   * 音效走的是 macOS 自带的 afplay + /System/Library/Sounds，Windows 上
+   * 既没有命令也没有文件。拨了没反应的开关比没有开关更糟，所以整行不渲染。
+   *
+   * 客户端跑在浏览器里拿不到 process.platform，只能问宿主的
+   * /dsh-washer/capabilities。这里查的是**判据接对了没有**：
+   * 音效那一行必须挂在 caps.sound 这个条件上，不能无条件渲染。
+   */
+  const client = readFileSync(join(root, 'src', 'client.template.js'), 'utf8');
+  const host = readFileSync(join(root, 'index.js'), 'utf8');
+
+  // 宿主：能力端点存在，且 sound 按平台算
+  assert.ok(host.includes("'/dsh-washer/capabilities'"), '宿主要有能力探测端点');
+  assert.ok(/sound:\s*process\.platform === 'darwin'/.test(host), '宿主要按平台算 sound 能力');
+
+  // 客户端：音效行挂在 caps.sound 上
+  const soundRowIdx = client.indexOf("row('set.overlaySound'");
+  assert.ok(soundRowIdx > 0, '音效那一行还在（只是在非 macOS 上不渲染）');
+  const before = client.slice(Math.max(0, soundRowIdx - 600), soundRowIdx);
+  assert.ok(/caps\.sound === true/.test(before), '音效行必须挂在 caps.sound === true 这个条件上');
+
+  // 悬浮窗起不来时要给用户看得见的提示，不能只写日志
+  assert.ok(client.includes("tr('set.overlayMissing')"), '找不到 Electron 时设置页要直说');
+  assert.ok(/caps\.overlay === false/.test(client), '提示要挂在 overlay 能力为 false 上');
+});
+
 await test('设置页的开关是 role=switch 且带内联样式（不靠 class 命中）', () => {
   const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
   const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
   const html = render(Settings(propsFrom(world)));
 
   const switches = html.match(/role="switch"/g) || [];
-  // 四个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知（表情和显示成本已按用户要求删除）
-  assert.equal(switches.length, 5, '五个布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知/状态音效），实际 ' + switches.length);
+  /*
+   * 四个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知。
+   * 状态音效是第五个，但它只在 macOS 上渲染（走系统自带 afplay），
+   * 这是测试环境（拿不到 /dsh-washer/capabilities）所以按不支持处理，不出现。
+   */
+  assert.equal(switches.length, 4, '四个无条件渲染的布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知），实际 ' + switches.length);
   assert.ok(/aria-checked="true"/.test(html), '开着的开关 aria-checked=true');
   assert.ok(/aria-checked="false"/.test(html), '关着的开关 aria-checked=false');
 
@@ -1182,7 +1215,7 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
 
   // 空配置下，每个开关都得渲染成明确的关/开（不能因为值是 undefined 就没有 aria-checked）
   const switches = [...html.matchAll(/<button[^>]*role="switch"[^>]*aria-checked="(true|false)"[^>]*>/g)];
-  assert.equal(switches.length, 5, '五个布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 状态音效）各一个开关');
+  assert.equal(switches.length, 4, '四个无条件渲染的布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知）各一个开关');
   for (const m of switches) {
     if (/悬浮窗/.test(m[0])) assert.equal(m[1], 'false', '空配置下悬浮窗开关必须是关');
   }

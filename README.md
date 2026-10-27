@@ -158,9 +158,15 @@
 只留**用户需要行动**的三个时刻，其余交给画面本身（转速、水位、泡沫都在动，
 本来就不需要声音告诉你它还活着）。
 
-实现上用 macOS 自带的 `afplay` 播 `/System/Library/Sounds/*.aiff`：不打包音频、
+### 只有 macOS 有
+
+用 macOS 自带的 `afplay` 播 `/System/Library/Sounds/*.aiff`：不打包音频、
 不做解码、不引入许可问题，而且**跟着你系统自己的音量和静音键走**——
 自己塞个 mp3 进来反而会出现「系统静音了它还在响」。
+
+Windows 和 Linux 上都没有这套东西，所以**非 macOS 的设置页直接不显示这个开关**。
+宿主通过 `/dsh-washer/capabilities` 把平台事实告诉客户端，客户端据此渲染——
+拨了没反应的开关比没有开关更糟。
 
 开关、节流、前台静音和通知共用一套判断：窗口在前台时静音（人就在看），
 2 秒内不重复响（状态抖动时不连响）。
@@ -343,6 +349,22 @@ Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌�
 - **双击**切换鼠标穿透（穿透时半透明，点击落到下面应用）
 - **右键**菜单：穿透开关 / 重连刷新 / 打开调试端 / 退出
 - 穿透状态下窗口收不到任何鼠标事件，用 **⌥⌘W** 恢复（不要用 ⌘⇧W，那是系统关窗口的键）
+
+**支持 Windows 和 Linux。** 宿主按平台去 `~/.dsh/electron/` 下找可执行文件：
+
+| 平台 | 候选路径 |
+|---|---|
+| macOS | `Electron.app/Contents/MacOS/Electron` |
+| Windows | `electron.exe` / `Electron/electron.exe` / `electron/electron.exe` |
+| Linux | `electron` / `Electron/electron` |
+
+都对不上就用环境变量指定：
+
+```bash
+export DSH_WASHER_ELECTRON=/path/to/electron    # 任何平台都能覆盖
+```
+
+设置页在找不到运行时时会直接说明，不会让你对着一个拨了没反应的开关猜。
 
 ```bash
 ./electron/start.sh          # 手动起（调试用）

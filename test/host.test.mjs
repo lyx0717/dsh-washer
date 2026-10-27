@@ -1497,6 +1497,27 @@ test('客户端可以告诉宿主「现在真在等人」：优先于本地推�
   ctx.dispose();
 });
 
+test('能力探测端点报出平台事实（音效只有 macOS 有）', async () => {
+  /*
+   * 客户端跑在浏览器里，拿不到 process.platform。音效走的是 macOS 自带的
+   * afplay + /System/Library/Sounds，所以「这台机器能不能响」只能由宿主回答。
+   * 用户的诉求是「Windows 上音效开关直接隐藏」——判据就在这里。
+   */
+  const ctx = makeCtx();
+  // 能力路由挂在 webServer 上，和 HTTP 服务无关 —— desktopOverlay:false 也要能应答
+  const api = apply(ctx, { desktopOverlay: false, desktopOverlayPort: 0 });
+
+  const res = await callRoute(ctx, '/dsh-washer/capabilities', 'GET');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.platform, process.platform, '要如实报平台');
+  assert.equal(res.body.sound, process.platform === 'darwin',
+    '音效能力必须按平台算：只有 macOS 有 afplay');
+  assert.equal(typeof res.body.overlay, 'boolean', '要报悬浮窗能不能起');
+  // 这个端点不该依赖 HTTP 服务起来，关掉悬浮窗也要能答
+  assert.equal(api.port(), 0, '能力探测不该逼宿主启服务');
+  ctx.dispose();
+});
+
 test('客户端报的 waiting 和本地推断能叠加，谁高算谁', async () => {
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
