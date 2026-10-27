@@ -366,6 +366,25 @@ export DSH_WASHER_ELECTRON=/path/to/electron    # 任何平台都能覆盖
 
 设置页在找不到运行时时会直接说明，不会让你对着一个拨了没反应的开关猜。
 
+#### Windows 上没有 Electron 的话，先装一个
+
+DSH 在 macOS 上自带 Electron（`~/.dsh/electron/`），Windows 上不一定是这样——
+那个目录可能是空的。手动装一次，放成对的路径就行（版本建议和 DSH 宿主一致，
+`~/.dsh/electron/version` 里写着）：
+
+```powershell
+# 从 https://github.com/electron/electron/releases 下载并核对 SHASUMS256.txt
+# 解压到 %USERPROFILE%\.dsh\electron\ ，确认 electron.exe 就在这一层
+```
+
+插件下拉悬浮窗时有两条容易踩的坑，都已经在代码里挡掉了：
+
+- **`ELECTRON_RUN_AS_NODE` 必须是「不存在」，不是空字符串。** Electron 只看这个变量
+  有没有被定义，设成 `''` 照样让它退化成纯 Node，`require('electron')` 直接失败、
+  进程 100ms 退出。宿主自己就是 Electron，一定带着它，所以子进程必须真的 `delete`。
+- **stderr 不能丢。** 早先 spawn 时 `stdio: 'ignore'`，子进程怎么死的宿主一个字都不知道，
+  用户看到的就是「开关拨了，什么都没发生」。现在会留最后几行错误，拼进设置页的提示。
+
 ```bash
 ./electron/start.sh          # 手动起（调试用）
 ELECTRON_PATH=/path/to/Electron ./electron/start.sh   # 指定 Electron 运行时

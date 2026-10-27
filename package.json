@@ -1,6 +1,6 @@
 {
   "name": "@lyx0717/dsh-washer",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "滚筒洗衣机 · 用一台洗衣机的运转状态显示 Agent 的工作状态",
   "type": "module",
   "icon": "./icon.svg",

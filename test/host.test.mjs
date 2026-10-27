@@ -1497,6 +1497,32 @@ test('客户端可以告诉宿主「现在真在等人」：优先于本地推�
   ctx.dispose();
 });
 
+test('拉悬浮窗时必须真的删掉 ELECTRON_RUN_AS_NODE，不能只设成空串', () => {
+  /*
+   * 这是 Windows 上「Electron 装好了、路径也对，窗口还是起不来」的真因。
+   *
+   * Electron 判断 ELECTRON_RUN_AS_NODE 只看它**存不存在**，不看值：
+   * 设成 '' 照样退化成纯 Node，require('electron') 直接 MODULE_NOT_FOUND，
+   * 进程 100ms 就退出。宿主自己就是 Electron，一定带着这个变量，
+   * 子进程百分百继承。
+   *
+   * 早先写的是
+   *   env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '' })
+   * 看着像清掉了，实际等于没清。必须 delete。
+   */
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+
+  assert.ok(/delete childEnv\.ELECTRON_RUN_AS_NODE/.test(host),
+    '必须 delete 掉，设空串没用');
+  assert.ok(!/ELECTRON_RUN_AS_NODE:\s*''/.test(host),
+    '不能再出现「设成空串就算清掉」的写法');
+
+  // stderr 不能被 ignore：起不来时要能拿到原因
+  assert.ok(!/stdio:\s*'ignore'/.test(host), "stderr 不能 'ignore'，否则报错全丢");
+  assert.ok(/stdio:\s*\[\s*'ignore'\s*,\s*'ignore'\s*,\s*'pipe'\s*\]/.test(host),
+    'stderr 要接到管道上，用来记失败原因');
+});
+
 test('能力探测端点报出平台事实（音效只有 macOS 有）', async () => {
   /*
    * 客户端跑在浏览器里，拿不到 process.platform。音效走的是 macOS 自带的

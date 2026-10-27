@@ -617,6 +617,14 @@ function persistEndpoint(port, token) {
  *      权限没了），自动重试治不了根。用户可以从设置里关掉再打开重试。
  *   3. 宿主退出时 kill 掉整个进程组，否则 Electron 会变成孤儿还在跑。
  */
+/**
+ * 子进程（悬浮窗）异常退出前的最后几行 stderr。
+ *
+ * 宿主里没法把子进程的输出转给用户看，但「起不来」必须有个原因。
+ * 失败时把它拼进 overlayLaunchError，设置页才说得清是哪里不对。
+ */
+let lastChildStderr = '';
+
 function electronBinaryCandidates() {
   const fromEnv = process.env.DSH_WASHER_ELECTRON;
   if (typeof fromEnv === 'string' && fromEnv !== '') return [fromEnv];
@@ -799,16 +807,57 @@ function spawnOverlay(ctx, opts) {
   if (opts.skin) args.push('--skin', opts.skin);
   let child = null;
   try {
+    /*
+     * 这两个变量必须是**真的不存在**，不能设成空字符串。
+     *
+     * Electron 判断 ELECTRON_RUN_AS_NODE 只看它有没有被定义，不看值——
+     * 设成 '' 照样让它退化成纯 Node，require('electron') 直接
+     * MODULE_NOT_FOUND，进程 100ms 就退出。
+     *
+     * 宿主自己就是 Electron，一定带着这个变量，所以子进程百分百继承它。
+     * 早先的写法是把这个键设成空字符串（见 0.6.x 之前的历史），
+     * 看着像"清掉了"，实际只是改了个值，等于没清——Windows 上就是被这一行
+     * 卡住的：Electron 装好了、路径也对，窗口依然起不来。
+     *
+     * ELECTRON_NO_ATTACH_CONSOLE 同理，留着会让 Windows 上不分配控制台。
+     */
+    const childEnv = Object.assign({}, process.env);
+    delete childEnv.ELECTRON_RUN_AS_NODE;
+    delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
     child = spawn(binary, args, {
       detached: false,
-      stdio: 'ignore',
-      // ELECTRON_RUN_AS_NODE 必须清掉：宿主自己就是 Electron，
-      // 子进程会继承这个变量，一带进去 Electron 就退化成纯 Node，
-      // require('electron') 直接 MODULE_NOT_FOUND。
-      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '' }),
+      /*
+       * stderr 不能丢。
+       *
+       * 早先是 'ignore'：子进程怎么死的、报什么错，宿主一个字都拿不到，
+       * 用户看到的就是「开关拨了，什么都没发生」。留最后几行错误到
+       * overlayLaunchError 里，设置页才有话可说。
+       */
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: childEnv,
     });
   } catch {
     return null;
+  }
+
+  /*
+   * 收着 stderr 的最后一行，等它异常退出时用作诊断。
+   *
+   * 只留一个尾巴：Electron 自己会往 stderr 刷大量与失败无关的噪音
+   * （GPU 进程告警、Mach 端口之类），攒全量没意义还漏内存。
+   */
+  if (child !== null && child.stderr !== null && child.stderr !== undefined) {
+    let tail = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => {
+      tail = (tail + chunk).slice(-4000);
+    });
+    child.stderr.on('error', () => { /* 管道断了就算了，不影响主流程 */ });
+    child.on('exit', (code) => {
+      if (code !== 0 && tail !== '') {
+        lastChildStderr = tail.trim().split('\n').slice(-3).join(' | ');
+      }
+    });
   }
   // 子进程退出后不留句柄，否则宿主退出会被它拖住
   child.on('error', () => { child = null; });
@@ -950,8 +999,23 @@ export function apply(ctx, config) {
       return false;
     }
     overlayLaunchError = null;
-    // 进程自己退了就把引用清掉，否则下次拨开关会以为它还活着，永远不再拉起
-    overlayChild.on('exit', () => { overlayChild = null; });
+    /*
+     * 进程自己退了就把引用清掉，否则下次拨开关会以为它还活着，永远不再拉起。
+     *
+     * 顺便把非正常退出的原因留下来。Electron 起不来时最常见的形态就是
+     * 「spawn 成功、进程存在、100ms 后就没了」——spawn 本身不报错，
+     * 只能从这里知道它为什么死。
+     */
+    overlayChild.on('exit', (code) => {
+      overlayChild = null;
+      if (code !== 0 && code !== null) {
+        overlayLaunchError = lastChildStderr === ''
+          ? `悬浮窗进程退出了（code ${code}）`
+          : `悬浮窗进程退出了（code ${code}）：${lastChildStderr}`;
+        ctx.logger?.warn?.(`[dsh-washer] ${overlayLaunchError}`);
+      }
+      lastChildStderr = '';
+    });
     overlayLaunchError = null;
     return true;
   }
