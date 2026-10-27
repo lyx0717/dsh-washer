@@ -164,8 +164,8 @@
 不做解码、不引入许可问题，而且**跟着你系统自己的音量和静音键走**——
 自己塞个 mp3 进来反而会出现「系统静音了它还在响」。
 
-Windows 和 Linux 上都没有这套东西，所以**非 macOS 的设置页直接不显示这个开关**。
-宿主通过 `/dsh-washer/capabilities` 把平台事实告诉客户端，客户端据此渲染——
+音效和悬浮窗是同一个平台边界：**都只有 macOS 有**。宿主通过
+`/dsh-washer/capabilities` 把平台事实告诉客户端，客户端据此渲染——
 拨了没反应的开关比没有开关更糟。
 
 开关、节流、前台静音和通知共用一套判断：窗口在前台时静音（人就在看），
@@ -350,40 +350,27 @@ Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌�
 - **右键**菜单：穿透开关 / 重连刷新 / 打开调试端 / 退出
 - 穿透状态下窗口收不到任何鼠标事件，用 **⌥⌘W** 恢复（不要用 ⌘⇧W，那是系统关窗口的键）
 
-**支持 Windows 和 Linux。** 宿主按平台去 `~/.dsh/electron/` 下找可执行文件：
+**悬浮窗只支持 macOS。** dock 是全平台的（它跑在宿主渲染进程里），但悬浮窗是
+一个独立的 Electron 进程，要透明置顶、跨 Space、点击穿透、右键菜单——每一项
+在 Windows 上都有自己的差异。所以这里不承诺跨平台，非 macOS 上设置页**整节
+不出现**，而不是留一个拨了没反应的开关。
 
-| 平台 | 候选路径 |
-|---|---|
-| macOS | `Electron.app/Contents/MacOS/Electron` |
-| Windows | `electron.exe` / `Electron/electron.exe` / `electron/electron.exe` |
-| Linux | `electron` / `Electron/electron` |
-
-都对不上就用环境变量指定：
+macOS 上宿主去 `~/.dsh/electron/` 找运行时；放在别处就用环境变量指定：
 
 ```bash
-export DSH_WASHER_ELECTRON=/path/to/electron    # 任何平台都能覆盖
+export DSH_WASHER_ELECTRON=/path/to/Electron.app/Contents/MacOS/Electron
 ```
 
-设置页在找不到运行时时会直接说明，不会让你对着一个拨了没反应的开关猜。
+**两种"起不来"要分清**，设置页据此给不同处理：
 
-#### Windows 上没有 Electron 的话，先装一个
+| `overlayReason` | 含义 | 设置页 |
+|---|---|---|
+| `platform` | 这个平台不支持（非 macOS） | 整节隐藏，装 Electron 也没用 |
+| `missing` | 平台支持，但这台机器没装运行时 | 开关照常显示 + 提示缺运行时 |
+| `null` | 正常可用 | 正常显示 |
 
-DSH 在 macOS 上自带 Electron（`~/.dsh/electron/`），Windows 上不一定是这样——
-那个目录可能是空的。手动装一次，放成对的路径就行（版本建议和 DSH 宿主一致，
-`~/.dsh/electron/version` 里写着）：
-
-```powershell
-# 从 https://github.com/electron/electron/releases 下载并核对 SHASUMS256.txt
-# 解压到 %USERPROFILE%\.dsh\electron\ ，确认 electron.exe 就在这一层
-```
-
-插件下拉悬浮窗时有两条容易踩的坑，都已经在代码里挡掉了：
-
-- **`ELECTRON_RUN_AS_NODE` 必须是「不存在」，不是空字符串。** Electron 只看这个变量
-  有没有被定义，设成 `''` 照样让它退化成纯 Node，`require('electron')` 直接失败、
-  进程 100ms 退出。宿主自己就是 Electron，一定带着它，所以子进程必须真的 `delete`。
-- **stderr 不能丢。** 早先 spawn 时 `stdio: 'ignore'`，子进程怎么死的宿主一个字都不知道，
-  用户看到的就是「开关拨了，什么都没发生」。现在会留最后几行错误，拼进设置页的提示。
+> 早先 0.6.0 尝试支持过 Windows，0.6.2 撤回：右键菜单等交互在 Windows 上
+> 没有可靠验证手段，与其半可用不如说清楚不支持。
 
 ```bash
 ./electron/start.sh          # 手动起（调试用）

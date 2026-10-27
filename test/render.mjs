@@ -235,9 +235,21 @@ globalThis.__storageDump = (k) => (STORE.has(k) ? STORE.get(k) : null);
 const FETCH_CALLS = [];
 /** 下一次 GET /dsh-washer/prefs 要回什么。没设就回 {} */
 let nextPrefsPayload = {};
+/**
+ * GET /dsh-washer/capabilities 回什么。
+ *
+ * 默认是「macOS + 有 Electron」——最完整的那一档，设置页所有分区都该出现。
+ * 要测别的平台就在具体用例里换掉它，用例结束再还原。
+ */
+let capabilitiesPayload = { platform: 'darwin', dock: true, sound: true, overlay: true, overlayReason: null, overlayError: null };
+globalThis.__setCapabilities = (payload) => { capabilitiesPayload = payload; };
+globalThis.__caps = () => capabilitiesPayload;
 globalThis.fetch = (url, init) => {
   const method = (init && init.method) || 'GET';
   FETCH_CALLS.push({ url, method, body: init && init.body ? init.body : null });
+  if (method === 'GET' && String(url).includes('/dsh-washer/capabilities')) {
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(capabilitiesPayload) });
+  }
   const payload = method === 'GET' ? nextPrefsPayload : { ok: true };
   return Promise.resolve({
     ok: true,
@@ -269,6 +281,29 @@ globalThis.EventSource = FakeEventSource;
 globalThis.__sse = () => SSE_INSTANCES.filter((e) => !e.closed);
 globalThis.__fetchCalls = () => FETCH_CALLS;
 globalThis.__setPrefsPayload = (p) => { nextPrefsPayload = p; };
+
+/**
+ * 重新执行一遍 client.js。
+ *
+ * 用处：模块级缓存（最典型的是 getCapabilities 的 `capabilities`）在整份
+ * 测试里只算一次。要测"换个平台会怎么渲染"，就得把模块作用域整个重来，
+ * 否则第二次拿到的一直是第一份结果，看起来像"平台判断没生效"。
+ *
+ * 重跑只影响 client.js 内部的模块级变量；React 桩、fetch、document 这些
+ * 全局桩复用同一份，所以插件的注册逻辑不受影响。
+ */
+function reloadClient() {
+  /*
+   * 只重跑脚本不够：脚本只是把插件对象交给 __ModuleLoader__，
+   * 真正往 registrations 里登记组件的是 apply()。少了这一步，
+   * registrations 里还是上一份（缓存在旧模块作用域里的）组件，
+   * 重载等于没做。
+   */
+  const before = registrations.length;
+  new Function(readFileSync(join(root, 'client.js'), 'utf8'))();
+  plugin.apply(ctx, {});
+  return registrations.length - before;
+}
 
 new Function(readFileSync(join(root, 'client.js'), 'utf8'))();
 
@@ -509,6 +544,104 @@ function mount(world, variant, configOver) {
  * 行为测试
  * ================================================================== */
 const results = [];
+/**
+ * 等客户端把 /dsh-washer/capabilities 拿回来。
+ *
+ * 设置页是异步取能力的（平台事实得问宿主），取到之前按"不知道"渲染——
+ * 悬浮窗那一节整个不出现。所以凡是要断言悬浮窗设置的用例，
+ * 都必须先等这一步，否则测的是空壳。
+ *
+ * capabilities 在模块作用域里缓存，只请求一次；这个 helper 靠
+ * 轮询 __capabilitiesSettled() 判断，不依赖时间长短。
+ */
+/**
+ * 把当前排队的 effect 跑掉，并让出微任务等异步结果落地。
+ *
+ * render() 只负责把树算出来、把 effect 排进 pendingEffects，**不会执行**——
+ * 真正执行只在 mount() 的 pass() 里。设置页那些测试是直接
+ * `render(Settings(props))` 的，所以 effect 从来没跑过，
+ * 「设置页会去问 /dsh-washer/capabilities」这件事在测试里根本不发生。
+ *
+ * 这里补一个模块级 flush，让直接 render 的场景也能推进副作用。
+ */
+function flushPendingEffects() {
+  const batch = pendingEffects;
+  pendingEffects = [];
+  for (const { index, fn } of batch) {
+    const slot = slots[index];
+    if (!slot) continue;
+    if (typeof slot.cleanup === 'function') slot.cleanup();
+    const cleanup = fn();
+    slot.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
+  }
+  return batch.length;
+}
+
+/**
+ * 让 capabilities 落定，返回渲染设置页的函数。
+ *
+ * 判据是**请求真的发出去了**（这一次渲染之后 FETCH_CALLS 变长），
+ * 而不是"缓存里有没有值"——缓存藏在 client.js 的模块作用域里，
+ * 测试看不见；能看见的只有"它去问了没有"。
+ *
+ * 注意两点：
+ *   1. 必须取**最后一次**登记的 settings.section。reloadClient() 会再
+ *      apply 一次，registrations 里会出现第二份、第三份；第一份属于
+ *      旧模块作用域，闭包里的缓存跟新的不是同一份。
+ *   2. 请求计数要用调用前的长度做 mark，不能看"数组里有没有"——
+ *      前面用例早就问过了，那样会立刻返回、拿到"还不知道"的那一帧。
+ */
+/**
+ * 让 capabilities 落定，返回可用的 Settings 组件。
+ *
+ * 两种落定方式，都必须认：
+ *   1. **这一次渲染之后发出了请求** —— 模块缓存还是空的（第一次，
+ *      或 reloadClient() 之后）。
+ *   2. **模块缓存已经是满的** —— 前面的用例已经问过了，这次不会再发。
+ *      只认第一种会让后续用例一直等到超时。
+ *
+ * 判 2 的办法是看渲染结果：设置页拿到 caps 之后，要么出现悬浮窗分区
+ * （支持的平台），要么确定没有（不支持的平台）。两种都是有结果的形态，
+ * 拿不到 caps 的那一帧则一定有"还不知道"的特征——所以比较两次渲染：
+ * 请求前后 DOM 变了，说明结果已经应用上去了。
+ */
+async function settleCapabilities() {
+  const entries = registrations.filter((r) => r.entry.name === 'settings.section');
+  if (entries.length === 0) throw new Error('设置页还没注册');
+  const Settings = entries[entries.length - 1].Component;
+
+  const props = propsFrom(makeWorld({ sessionId: 's1' }));
+  const mark = FETCH_CALLS.length;
+
+  for (let i = 0; i < 300; i += 1) {
+    const first = render(Settings(props));
+    flushPendingEffects();
+
+    const askedThisTime = FETCH_CALLS.slice(mark).some((c) => String(c.url).includes('/dsh-washer/capabilities'));
+    if (askedThisTime) {
+      // 请求已发出，让 then 链把结果写回模块缓存，再渲染一次确认应用上了
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      return Settings;
+    }
+
+    /*
+     * 没发请求：要么缓存已经有了（比较这一帧和再渲染一帧），
+     * 要么还没渲染到设置页（下一轮再试）。
+     *
+     * 判据是"这一帧已经带着 capssettle 的结果"：caps 到位时，
+     * macOS 上会出现悬浮窗分区（dw-set-sub），不支持的平台则该节消失。
+     * 两者都以"这一帧和上一帧不同"体现——第一帧一定是"还不知道"的状态，
+     * 所以只要这一帧已经有结果就说明缓存已经落地。
+     */
+    const hasOverlaySection = first.includes('dw-set-sub');
+    if (hasOverlaySection) return Settings;
+
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  throw new Error('capabilities 一直没落定');
+}
+
 async function test(name, fn) {
   slots = []; cursor = 0; dirty = false; pendingEffects = [];
   try {
@@ -1052,33 +1185,115 @@ await test('Windows 上音效开关必须隐藏，找不到 Electron 时要说�
   const client = readFileSync(join(root, 'src', 'client.template.js'), 'utf8');
   const host = readFileSync(join(root, 'index.js'), 'utf8');
 
-  // 宿主：能力端点存在，且 sound 按平台算
+  // 宿主：能力端点存在，且 sound / overlay 都按平台算
   assert.ok(host.includes("'/dsh-washer/capabilities'"), '宿主要有能力探测端点');
-  assert.ok(/sound:\s*process\.platform === 'darwin'/.test(host), '宿主要按平台算 sound 能力');
+  assert.ok(/const isMac = process\.platform === 'darwin';/.test(host), '宿主要按平台算 isMac');
+  assert.ok(/sound: isMac,/.test(host), 'sound 能力挂在 isMac 上');
+  /*
+   * 悬浮窗**只支持 macOS**（用户决定：浮窗不兼容 Windows，dock 兼容）。
+   * 所以 overlay 不能只看"找不找得到 Electron"——非 macOS 上就算用户
+   * 自己装了 Electron 也必须判 false，否则设置页会把整节显示出来让他去拨。
+   */
+  assert.ok(/function overlayPlatformSupported\(\) \{\s*return process\.platform === 'darwin';/.test(host),
+    '悬浮窗必须有独立的平台判据，不能只靠碰运气找不到 Electron');
+  assert.ok(/overlay: overlaySupported && overlayBinary !== null/.test(host),
+    'overlay 能力要把"平台支持"和"有二进制"两个条件一起算');
 
-  // 客户端：音效行挂在 caps.sound 上
-  const soundRowIdx = client.indexOf("row('set.overlaySound'");
-  assert.ok(soundRowIdx > 0, '音效那一行还在（只是在非 macOS 上不渲染）');
-  const before = client.slice(Math.max(0, soundRowIdx - 600), soundRowIdx);
-  assert.ok(/caps\.sound === true/.test(before), '音效行必须挂在 caps.sound === true 这个条件上');
+  /*
+   * 客户端：整个悬浮窗分区（标题 + 开关 + 大小 + 穿透 + 通知 + 音效）
+   * 必须在 caps.overlayReason !== 'platform' 这一个条件里面，不能只藏标题——
+   * 只藏标题、下面开关还在，用户照样能拨，只是不知道自己在拨什么。
+   *
+   * 用 overlayReason 而不是 overlay：后者把"平台不支持"和"没装运行时"
+   * 混成一个布尔，前者才分得开。缺运行时必须照常显示开关（装上就能用）。
+   */
+  const subIdx = client.indexOf("tr('set.overlay')");
+  assert.ok(subIdx > 0, '悬浮窗分区标题还在（只是在非 macOS 上不渲染）');
+  const beforeSub = client.slice(Math.max(0, subIdx - 600), subIdx);
+  assert.ok(/caps\.overlayReason !== 'platform'/.test(beforeSub),
+    '悬浮窗整节必须由 caps.overlayReason !== \'platform\' 判定是否出现（不能拿 overlay 混判）');
+  assert.ok(/caps !== null/.test(beforeSub), '能力还没拿到时不渲染该节（避免先显示再消失）');
 
-  // 悬浮窗起不来时要给用户看得见的提示，不能只写日志
-  assert.ok(client.includes("tr('set.overlayMissing')"), '找不到 Electron 时设置页要直说');
-  assert.ok(/caps\.overlay === false/.test(client), '提示要挂在 overlay 能力为 false 上');
+  const soundIdx = client.indexOf("row('set.overlaySound'");
+  assert.ok(soundIdx > subIdx, '音效在悬浮窗分区内部');
+  const beforeSound = client.slice(Math.max(0, soundIdx - 400), soundIdx);
+  assert.ok(/caps\.sound === true/.test(beforeSound), '音效行必须挂在 caps.sound === true 这个条件上');
 });
 
-await test('设置页的开关是 role=switch 且带内联样式（不靠 class 命中）', () => {
+await test('设置页：悬浮窗整节只在平台支持时渲染（非 macOS 全隐藏）', async () => {
+  /*
+   * 边界（用户定的）：dock 全平台可用，悬浮窗和音效只支持 macOS。
+   *
+   * 所以非 macOS 上不该出现任何一个"拨了没反应"的开关：
+   *   - 没有"显示悬浮窗"
+   *   - 没有"悬浮窗大小"
+   *   - 没有"鼠标穿透"
+   *   - 没有"洗完通知"
+   *   - 没有"状态音效"
+   * 只剩 dock 自己的"空闲时隐藏"和外观那几项。
+   *
+   * 这条同时守住"不支持平台"和"缺运行时"两种原因不能混——
+   * 前者整节消失，后者才出提示文案。
+   */
   const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
-  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const savedCaps = globalThis.__caps();
+  globalThis.__setCapabilities({ platform: 'win32', dock: true, sound: false, overlay: false, overlayReason: 'platform', overlayError: null });
+  try {
+    /*
+     * 必须先 reload 再取组件：getCapabilities 把结果缓存在模块级变量里，
+     * 整份测试只算一次。不重跑 client.js，这里拿到的永远是上一份
+     * "macOS + 有 Electron"的结果，测出来什么都不隐藏——假绿。
+     */
+    reloadClient();
+    await settleCapabilities();
+    const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+    const html = render(Settings(propsFrom(world)));
+    for (const label of ['显示悬浮窗', '悬浮窗大小', '鼠标穿透', '洗完通知', '状态音效']) {
+      assert.ok(!html.includes(label), 'Windows 上不该出现「' + label + '」');
+    }
+    // 但 dock 的开关必须还在——dock 是全平台功能
+    assert.ok(html.includes('空闲时隐藏'), 'dock 的空闲隐藏开关在 Windows 上必须保留');
+    assert.ok(html.includes('外观'), '外观（皮肤）与平台无关，必须保留');
+    // 平台不支持时不该说"缺 Electron"——那是另一回事
+    assert.ok(!html.includes('找不到 Electron'), '平台不支持时不能说缺运行时，两件事');
+  } finally {
+    globalThis.__setCapabilities(savedCaps);
+    reloadClient();
+  }
+});
+
+await test('设置页：macOS 上缺 Electron 才提示缺运行时（与平台不支持分开）', async () => {
+  const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
+  const savedCaps = globalThis.__caps();
+  globalThis.__setCapabilities({ platform: 'darwin', dock: true, sound: true, overlay: false, overlayReason: 'missing', overlayError: null });
+  try {
+    reloadClient();
+    const Settings = await settleCapabilities();
+    const html = render(Settings(propsFrom(world)));
+    assert.ok(html.includes('显示悬浮窗'), 'macOS 上缺运行时时开关仍然要显示（用户可以装上运行时）');
+    assert.ok(html.includes('找不到 Electron'), '缺运行时要说出来，不能让用户对着开关猜');
+  } finally {
+    globalThis.__setCapabilities(savedCaps);
+    reloadClient();
+  }
+});
+
+await test('设置页的开关是 role=switch 且带内联样式（不靠 class 命中）', async () => {
+  /*
+   * 悬浮窗整节只有在平台支持时才渲染，所以要先把 capabilities 等到位。
+   * 不等就会拿到"还不知道"的那一帧——那帧按不支持处理，整节空白，
+   * 看起来像"设置项丢了"，其实是没渲染。
+   */
+  const Settings = await settleCapabilities();
+  const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
   const html = render(Settings(propsFrom(world)));
 
   const switches = html.match(/role="switch"/g) || [];
   /*
-   * 四个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知。
-   * 状态音效是第五个，但它只在 macOS 上渲染（走系统自带 afplay），
-   * 这是测试环境（拿不到 /dsh-washer/capabilities）所以按不支持处理，不出现。
+   * macOS 上五个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知 / 状态音效。
+   * 前四个是 dock 与浮窗共用的，音效只在 macOS 上出现（走系统自带 afplay）。
    */
-  assert.equal(switches.length, 4, '四个无条件渲染的布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知），实际 ' + switches.length);
+  assert.equal(switches.length, 5, 'macOS 上五个布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知/音效），实际 ' + switches.length);
   assert.ok(/aria-checked="true"/.test(html), '开着的开关 aria-checked=true');
   assert.ok(/aria-checked="false"/.test(html), '关着的开关 aria-checked=false');
 
@@ -1094,14 +1309,19 @@ await test('设置页的开关是 role=switch 且带内联样式（不靠 class 
   assert.ok(/box-shadow/.test(html), '滑块要有阴影才看得出是个圆点');
 });
 
-await test('设置页：每个设置项都能双向同步（初始值读对 + 点完写对）', () => {
+await test('设置页：每个设置项都能双向同步（初始值读对 + 点完写对）', async () => {
   /*
    * 这条测的是「设置项 ↔ 页面状态」的接线，最容易出的错是**写和读的字段对不上**：
    * 点开关写的是 A，渲染读的是 B，看着有点击反馈其实没生效。
    * 所以每个控件都走两遍：先断言初始态，再点一下断言写出的 key/value。
    */
-  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const Settings = await settleCapabilities();
   const base = baseConfig();
+  /*
+   * 悬浮窗那几项现在只在该平台支持时渲染（浮窗只支持 macOS）。
+   * 设置页会异步去问 /dsh-washer/capabilities，所以先等它落定再渲染，
+   * 否则拿到的是"还不知道"的那一帧，整节都是空的。
+   */
   const matrix = [
     // 表情 / 显示成本两项已按用户要求删除，不在矩阵里
     { name: '空闲隐藏', on: { hideWhenIdle: true }, off: { hideWhenIdle: false }, key: 'hideWhenIdle', value: true, label: '空闲时隐藏' },
@@ -1180,7 +1400,7 @@ await test('设置页：每个设置项都能双向同步（初始值读对 + �
   }
 });
 
-await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合并时会留空洞', () => {
+await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合并时会留空洞', async () => {
   /*
    * mergeConfig 有两份实现，容易只看一份：
    *
@@ -1194,7 +1414,7 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
    *
    * 反向验证过：删掉 desktopOverlay: false 的默认值，这条会红。
    */
-  const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
+  const Settings = await settleCapabilities();
   const world = makeWorld({ sessionId: 's1' });
   // 用空配置渲染：完全依赖默认值，等价于用户从没改过任何设置
   world.config = {};
@@ -1215,7 +1435,12 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
 
   // 空配置下，每个开关都得渲染成明确的关/开（不能因为值是 undefined 就没有 aria-checked）
   const switches = [...html.matchAll(/<button[^>]*role="switch"[^>]*aria-checked="(true|false)"[^>]*>/g)];
-  assert.equal(switches.length, 4, '四个无条件渲染的布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知）各一个开关');
+  /*
+   * macOS 上五个：空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 音效。
+   * 这条用例的前提是"最完整的平台"，非 macOS 的裁剪由上面
+   * 「Windows 上音效开关必须隐藏」那条用例单独守，不在这里混着测。
+   */
+  assert.equal(switches.length, 5, 'macOS 上五个布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 音效）各一个开关，实际 ' + switches.length);
   for (const m of switches) {
     if (/悬浮窗/.test(m[0])) assert.equal(m[1], 'false', '空配置下悬浮窗开关必须是关');
   }

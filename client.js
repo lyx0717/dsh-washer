@@ -1370,39 +1370,67 @@ function shouldSwitch(from, to, heldMs) {
         ], cfg.skin, (value) => setPref('skin', value))),
         h('p', { className: 'dw-set-hint' }, tr('set.skinHint')),
 
-        h('h4', { className: 'dw-set-sub' }, tr('set.overlay')),
-        h('p', { className: 'dw-set-hint' }, tr('set.overlayHint')),
-        row('set.overlayOn', sw('desktopOverlay', cfg.desktopOverlay === true, tr('set.overlayOn'))),
         /*
-         * 找不到 Electron 运行时的时候要说出来。
-         * Windows 用户装上插件、面板里把开关拨到开、然后什么都不发生——
-         * 早先这个原因只落在宿主日志里，用户根本看不到。
+         * 悬浮窗整节只在支持的平台上出现。
+         *
+         * **dock 不限平台**（它跑在宿主渲染进程里），但悬浮窗是个独立的
+         * Electron 进程，要透明置顶、跨 Space、点击穿透、右键菜单，
+         * 只有 macOS 做了实测。非 macOS 上把整节藏起来，比留一个
+         * "拨了没反应"的开关诚实。
+         *
+         * caps 还没到时（null）按"不知道"处理：先不渲染，等拿到再补。
+         * 代价是设置页会有一帧没有这一节，但这比先显示后消失好。
          */
-        caps !== null && caps.overlay === false
-          ? h('p', { key: 'overlay-missing', className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissing'))
-          : null,
-        row('set.overlaySize', seg(tr('set.overlaySize'), [
-          ['normal', tr('ov.normal')],
-          ['tiny', tr('ov.tiny')],
-        ], cfg.desktopOverlaySize === undefined ? 'normal' : cfg.desktopOverlaySize,
-        (value) => setPref('desktopOverlaySize', value))),
-        h('p', { className: 'dw-set-hint' }, tr('set.overlaySizeHint')),
-        row('set.overlayThrough',
-          sw('desktopOverlayClickThrough', cfg.desktopOverlayClickThrough === true, tr('set.overlayThrough'))),
-        h('p', { className: 'dw-set-hint' }, tr('set.overlayThroughHint')),
-        row('set.overlayNotify',
-          sw('desktopOverlayNotify', cfg.desktopOverlayNotify === true, tr('set.overlayNotify'))),
-        h('p', { className: 'dw-set-hint' }, tr('set.overlayNotifyHint')),
         /*
-         * 音效只有 macOS 有：走的是系统自带的 afplay + /System/Library/Sounds。
-         * 别的平台干脆不显示这一行——拨了没反应的开关比没有开关更糟。
-         * caps 还没到（null）时也按隐藏处理，避免先闪一下再消失。
+         * 悬浮窗整节只在**平台支持**时出现。
+         *
+         * 判据是 overlayReason，不是 overlay —— 后者把两件不同的事
+         * 混成了一个布尔：
+         *   overlayReason === 'platform'  平台不支持（非 macOS）
+         *   overlayReason === 'missing'   平台支持，但这台机器没装运行时
+         * 前者整节该消失（装了 Electron 也没用），后者必须照常显示
+         * 开关并给出提示（用户装上运行时就能用）。
+         *
+         * **dock 不限平台**：它跑在宿主渲染进程里，Windows / Linux 一样能用。
+         *
+         * caps 还没到（null）时也隐藏：设置页会有一帧没有这一节，
+         * 但那比"先显示再消失"好。
          */
-        caps !== null && caps.sound === true
-          ? [row('set.overlaySound',
-            sw('desktopOverlaySound', cfg.desktopOverlaySound === true, tr('set.overlaySound'))),
-          h('p', { key: 'sound-hint', className: 'dw-set-hint' }, tr('set.overlaySoundHint'))]
-          : null,
+        caps !== null && caps.overlayReason !== 'platform' ? [
+          h('h4', { key: 'ov-sub', className: 'dw-set-sub' }, tr('set.overlay')),
+          h('p', { key: 'ov-hint', className: 'dw-set-hint' }, tr('set.overlayHint')),
+          row('set.overlayOn', sw('desktopOverlay', cfg.desktopOverlay === true, tr('set.overlayOn'))),
+          row('set.overlaySize', seg(tr('set.overlaySize'), [
+            ['normal', tr('ov.normal')],
+            ['tiny', tr('ov.tiny')],
+          ], cfg.desktopOverlaySize === undefined ? 'normal' : cfg.desktopOverlaySize,
+          (value) => setPref('desktopOverlaySize', value))),
+          h('p', { key: 'ov-size-hint', className: 'dw-set-hint' }, tr('set.overlaySizeHint')),
+          row('set.overlayThrough',
+            sw('desktopOverlayClickThrough', cfg.desktopOverlayClickThrough === true, tr('set.overlayThrough'))),
+          h('p', { key: 'ov-through-hint', className: 'dw-set-hint' }, tr('set.overlayThroughHint')),
+          row('set.overlayNotify',
+            sw('desktopOverlayNotify', cfg.desktopOverlayNotify === true, tr('set.overlayNotify'))),
+          h('p', { key: 'ov-notify-hint', className: 'dw-set-hint' }, tr('set.overlayNotifyHint')),
+          /*
+           * 音效也是 macOS 专有（afplay + /System/Library/Sounds）。
+           * 它挂在悬浮窗这一节里，平台判断是同一件事的两面，
+           * 但用 caps.sound 单独判一次——将来若给别的平台配了音源，
+           * 改这里一处就能放开。
+           */
+          caps.sound === true
+            ? [row('set.overlaySound',
+              sw('desktopOverlaySound', cfg.desktopOverlaySound === true, tr('set.overlaySound'))),
+            h('p', { key: 'sound-hint', className: 'dw-set-hint' }, tr('set.overlaySoundHint'))]
+            : null,
+          /*
+           * 平台支持、但找不到 Electron：这时候才说"缺运行时"。
+           * 与上面"不支持这个平台"是两种不同的原因，不能混成一句话。
+           */
+          caps.overlay === false
+            ? h('p', { key: 'ov-missing', className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissing'))
+            : null,
+        ] : null,
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));
     }
 

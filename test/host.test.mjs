@@ -1539,9 +1539,84 @@ test('能力探测端点报出平台事实（音效只有 macOS 有）', async (
   assert.equal(res.body.sound, process.platform === 'darwin',
     '音效能力必须按平台算：只有 macOS 有 afplay');
   assert.equal(typeof res.body.overlay, 'boolean', '要报悬浮窗能不能起');
+  /*
+   * 边界（用户定的）：**悬浮窗和音效只支持 macOS，dock 全平台**。
+   *
+   * overlayReason 必须把两种"起不来"分开：
+   *   'platform' —— 这个平台就不支持（非 macOS），装什么运行时都没用
+   *   'missing'  —— 平台支持，但这台机器没装 Electron 运行时
+   * 混成一个布尔，设置页就只能二选一：要么在不支持的平台上也劝用户
+   * 去装 Electron（白折腾），要么在缺运行时时啥也不显示（对着开关猜）。
+   *
+   * 反例：把 overlayPlatformSupported() 写成恒 true，这条会红。
+   */
+  if (process.platform === 'darwin') {
+    assert.equal(res.body.overlayReason === 'platform', false,
+      'macOS 是支持平台，原因不可能是 platform');
+  } else {
+    assert.equal(res.body.overlay, false, '非 macOS 上悬浮窗必须报不可用');
+    assert.equal(res.body.overlayReason, 'platform',
+      '非 macOS 上原因必须是 platform（不是 missing——装 Electron 也没用）');
+  }
+  // dock 不受平台限制：它是宿主渲染进程里的 React，任何能开 Web UI 的平台都能用
+  assert.equal(res.body.dock, true, 'dock 必须全平台可用');
   // 这个端点不该依赖 HTTP 服务起来，关掉悬浮窗也要能答
   assert.equal(api.port(), 0, '能力探测不该逼宿主启服务');
   ctx.dispose();
+});
+
+test('平台支持但没装运行时时，overlayReason 必须是 missing', async () => {
+  /*
+   * macOS 上"支持悬浮窗"和"这台机器能不能起来"是两件事：
+   *   overlay        = false  —— 现在确实起不来
+   *   overlayReason  = 'missing' —— 因为找不到 Electron 运行时
+   * 设置页照这个在开关下面给出"缺运行时"的提示，让用户装上就能用。
+   *
+   * 造场景的办法：把 DSH_WASHER_ELECTRON 指到一个一定不存在的路径。
+   * 那是最高优先级的候选，命不中就不会再往下找。
+   * 反例：把 overlayReason 写死成 null，这条会红。
+   */
+  const prev = process.env.DSH_WASHER_ELECTRON;
+  process.env.DSH_WASHER_ELECTRON = '/nonexistent/dsh-washer-test/electron';
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false, desktopOverlayPort: 0 });
+  try {
+    const res = await callRoute(ctx, '/dsh-washer/capabilities', 'GET');
+    assert.equal(res.status, 200);
+    if (process.platform === 'darwin') {
+      assert.equal(res.body.overlay, false, '指向不存在的运行时，必须报不可用');
+      assert.equal(res.body.overlayReason, 'missing',
+        '平台支持但缺运行时，原因必须是 missing（不是 platform）');
+    } else {
+      assert.equal(res.body.overlayReason, 'platform', '非 macOS 仍然是平台不支持');
+    }
+  } finally {
+    if (prev === undefined) delete process.env.DSH_WASHER_ELECTRON;
+    else process.env.DSH_WASHER_ELECTRON = prev;
+    ctx.dispose();
+  }
+});
+
+test('非 macOS 上不找 Electron 运行时（判平台，不判文件在不在）', () => {
+  /*
+   * overlayPlatformSupported() 必须真的按平台判。
+   *
+   * 这条读源码而不是跑行为：本机是 macOS，跑不出 Windows 的结果。
+   * 查的是那两条硬事实：
+   *   1. 函数体里是 process.platform === 'darwin'
+   *   2. electronBinary() 一开头就因为平台不符返回 null，
+   *      不会走到"遍历候选路径"那一步
+   * 反例：把 return 改成 true，这条会红。
+   */
+  const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const fn = /function overlayPlatformSupported\(\) \{([\s\S]{0,200}?)\}/.exec(src);
+  assert.ok(fn !== null, '要有 overlayPlatformSupported()');
+  assert.ok(/process\.platform === 'darwin'/.test(fn[1]),
+    '悬浮窗支持与否必须按 process.platform === \'darwin\' 判');
+  const bin = /function electronBinary\(\) \{([\s\S]{0,300}?)\}/.exec(src);
+  assert.ok(bin !== null, '要有 electronBinary()');
+  assert.ok(/if \(!overlayPlatformSupported\(\)\) return null;/.test(bin[1]),
+    'electronBinary 必须先判平台再找文件——不支持的平台连找都不找');
 });
 
 test('客户端报的 waiting 和本地推断能叠加，谁高算谁', async () => {

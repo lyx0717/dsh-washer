@@ -625,35 +625,37 @@ function persistEndpoint(port, token) {
  */
 let lastChildStderr = '';
 
+/**
+ * 悬浮窗依赖的平台是不是 macOS。
+ *
+ * **悬浮窗只支持 macOS，dock 不限平台。**
+ *
+ * dock 走的是宿主渲染进程里的 React + CSS，任何能开 Web UI 的平台都能用；
+ * 悬浮窗是一个独立的 Electron 进程，要透明置顶、跨 Space、点击穿透、
+ * 双击切态、右键菜单——每一项在 Windows 上都有各自的差异，逐个实测的
+ * 成本远超收益。所以这里划一条明确的线：非 macOS 直接判定"不支持"，
+ * 而不是"碰巧找不到 Electron 所以起不来"。
+ *
+ * 这个区别对用户是实打实的：前者设置页根本不该出现悬浮窗选项，
+ * 后者会让用户以为装上 Electron 就能用，然后一直试。
+ */
+function overlayPlatformSupported() {
+  return process.platform === 'darwin';
+}
+
+/**
+ * 候选的 Electron 可执行文件路径。
+ *
+ * 只有 macOS 会走到这里——非 macOS 在 overlayPlatformSupported() 就返回了。
+ * 仍然保留 DSH_WASHER_ELECTRON 覆盖：用户可能把运行时放在别处
+ * （多版本共存、自己编译的、brew 装的）。
+ */
 function electronBinaryCandidates() {
   const fromEnv = process.env.DSH_WASHER_ELECTRON;
   if (typeof fromEnv === 'string' && fromEnv !== '') return [fromEnv];
 
-  const root = join(homedir(), '.dsh', 'electron');
-  if (process.platform === 'win32') {
-    /*
-     * Windows 上 DSH 的运行时是解压后的 electron.exe，没有 .app 包结构。
-     *
-     * 这里按目录形态逐个试，不假定某一种：
-     *   ~/.dsh/electron/electron.exe          ← 直接解压
-     *   ~/.dsh/electron/Electron/electron.exe ← zip 里带一层目录名
-     *
-     * 两种布局我都无法在本机验证（macOS 上没有 electron.exe），所以宁可多列几个
-     * 候选让 existsSync 去筛，也不写死一个路径——写死就是 0.5.3 之前那个 bug：
-     * 路径对不上就静默返回 null，用户看到的是「装了插件但什么都不发生」。
-     */
-    return [
-      join(root, 'electron.exe'),
-      join(root, 'Electron', 'electron.exe'),
-      join(root, 'electron', 'electron.exe'),
-    ];
-  }
-
   // macOS：Electron.app bundle 里的主可执行文件
-  const mac = join(root, 'Electron.app', 'Contents', 'MacOS', 'Electron');
-  // Linux：解压后的 electron 可执行文件
-  const linux = [join(root, 'electron'), join(root, 'Electron', 'electron')];
-  return process.platform === 'linux' ? linux : [mac];
+  return [join(homedir(), '.dsh', 'electron', 'Electron.app', 'Contents', 'MacOS', 'Electron')];
 }
 
 /**
@@ -663,6 +665,8 @@ function electronBinaryCandidates() {
  * 用户分不清是「没装」还是「装了但路径不对」。调用方据此提示用户。
  */
 function electronBinary() {
+  // 非 macOS 不找——不是"没找到"，是这个平台就没有
+  if (!overlayPlatformSupported()) return null;
   for (const candidate of electronBinaryCandidates()) {
     if (existsSync(candidate)) return candidate;
   }
@@ -1882,12 +1886,25 @@ export function apply(ctx, config) {
       kind: 'exact',
       path: WEB_CAPABILITIES_PATH,
       handler: async (req, res) => {
+        /*
+         * 三个字段各答各的问题，别混：
+         *   dock      —— 永远可用。它是宿主渲染进程里的 React，不看平台。
+         *   sound     —— 只有 macOS 有（afplay + /System/Library/Sounds）。
+         *   overlay   —— 只有 macOS 支持，**且**要找到 Electron 运行时。
+         *                前者是平台事实，后者是环境事实，两件事。
+         *   overlayReason —— 不可用时说清是哪一种，设置页照它出文案。
+         */
+        const isMac = process.platform === 'darwin';
+        const overlaySupported = overlayPlatformSupported();
+        const overlayBinary = overlaySupported ? electronBinary() : null;
         const payload = {
           platform: process.platform,
-          // 音效走 macOS 自带的 afplay + /System/Library/Sounds，其他平台没有
-          sound: process.platform === 'darwin',
-          // 悬浮窗能不能起来，取决于找不找得到 Electron 运行时
-          overlay: electronBinary() !== null,
+          dock: true,
+          sound: isMac,
+          overlay: overlaySupported && overlayBinary !== null,
+          overlayReason: !overlaySupported
+            ? 'platform'
+            : (overlayBinary === null ? 'missing' : null),
           overlayError: overlayLaunchError,
         };
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
