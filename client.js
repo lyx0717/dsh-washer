@@ -161,6 +161,71 @@ function activeTool(runningCalls) {
   };
 }
 
+/*
+ * 工具名 → 动作类别。
+ *
+ * 宿主传给我们的 `call.name` 是工具的技术名（bash / read_file /
+ * apply_patch…）。直接摆在状态条上，对不熟英文的人等于没信息——
+ * 用户原话：「运行中显示的"bash"等信息是什么？英文不好的人看不懂」。
+ *
+ * 翻译成「在干什么」而不是「调用了哪个工具」：用户关心的是动作，
+ * 不是 API 名。认不出来返回空串，由调用方退回原名——猜一个错的
+ * 说明比不翻更糟，因为那会让用户以为它在做别的事。
+ *
+ * 这里只给**类别**，不给最终文案：同一个动作在中文界面是「跑命令」，
+ * 在英文界面是「Running a command」。文案属于各端的词典
+ * （client.template.js 的 tool.* 键、debug/detail.html 的 TOOL_TEXT），
+ * 放这里会把中文写死进宿主，英文用户就看到中文了。
+ *
+ * 键名与 DSH 内置工具一致；对不上的（MCP 工具、自定义工具）返回空串。
+ */
+const TOOL_ACTIONS = {
+  bash: 'command',
+  shell: 'command',
+  exec: 'command',
+  terminal: 'command',
+  read_file: 'read',
+  read: 'read',
+  write_file: 'write',
+  write: 'write',
+  edit: 'edit',
+  edit_file: 'edit',
+  multi_edit: 'edit',
+  apply_patch: 'edit',
+  patch: 'edit',
+  list_dir: 'list',
+  ls: 'list',
+  glob: 'find',
+  grep: 'search',
+  search: 'search',
+  ripgrep: 'search',
+  web_search: 'websearch',
+  web_fetch: 'webfetch',
+  fetch: 'webfetch',
+  browser: 'browser',
+  task: 'subagent',
+  subagent: 'subagent',
+  todo_write: 'plan',
+  todowrite: 'plan',
+  update_plan: 'plan',
+};
+
+/**
+ * 把工具技术名换成一个动作类别（command / edit / search…都是小写标识符）。
+ * 认不出来返回空串，调用方据此退回原名。
+ * @param {string} name 宿主给的工具名
+ * @returns {string}
+ */
+function toolActionOf(name) {
+  if (typeof name !== 'string' || name === '') return '';
+  const key = name.toLowerCase();
+  if (TOOL_ACTIONS[key] !== undefined) return TOOL_ACTIONS[key];
+  // 带命名空间的 MCP 工具（mcp__server__tool）取最后一段再试一次
+  const tail = key.includes('__') ? key.slice(key.lastIndexOf('__') + 2) : '';
+  if (tail !== '' && TOOL_ACTIONS[tail] !== undefined) return TOOL_ACTIONS[tail];
+  return '';
+}
+
 /**
  * 最近完成的工具调用（旧→新，可直接渲染）。
  * @param {unknown} nodes chat legacy nodes
@@ -578,7 +643,7 @@ function shouldSwitch(from, to, heldMs) {
       'sub.starting': '正在起转 · {elapsed}',
       'sub.washing': '{elapsed} · 第 {n} 件',
       'sub.stalled': '已经 {stalled} 没动静，卡住了?',
-      'sub.rinsing': '{tool} · {elapsed}',
+      'sub.rinsing': '正在{tool} · {elapsed}',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': '收尾整理 · {elapsed}',
       'sub.waiting': '有个地方要你拍板',
@@ -610,6 +675,18 @@ function shouldSwitch(from, to, heldMs) {
       'set.overlaySoundHint': '洗完了、出故障、等你确认各响一声，中间运转不吵。窗口在前台时静音。',
       'set.overlayThrough': '鼠标穿透',
       'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
+      'tool.command': '跑命令',
+      'tool.read': '读文件',
+      'tool.write': '写文件',
+      'tool.edit': '改文件',
+      'tool.list': '列目录',
+      'tool.find': '找文件',
+      'tool.search': '搜代码',
+      'tool.websearch': '搜网页',
+      'tool.webfetch': '抓网页',
+      'tool.browser': '开浏览器',
+      'tool.subagent': '派子任务',
+      'tool.plan': '列计划',
     };
 
     const EN = {
@@ -657,6 +734,18 @@ function shouldSwitch(from, to, heldMs) {
       'set.overlaySizeHint': '"Minimal" keeps only the indicator light with no status text - the smallest footprint.',
       'set.overlayThrough': 'Click-through',
       'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press Opt+Cmd+W to turn it off.',
+      'tool.command': 'Running a command',
+      'tool.read': 'Reading a file',
+      'tool.write': 'Writing a file',
+      'tool.edit': 'Editing a file',
+      'tool.list': 'Listing files',
+      'tool.find': 'Finding files',
+      'tool.search': 'Searching code',
+      'tool.websearch': 'Searching the web',
+      'tool.webfetch': 'Fetching a page',
+      'tool.browser': 'Using a browser',
+      'tool.subagent': 'Running a subtask',
+      'tool.plan': 'Planning',
       'set.overlayNotify': 'Notify when done',
       'set.overlayNotifyHint': 'Only “done” and “error”. Silent while the window is focused.',
       'set.overlaySound': 'Sound cues',
@@ -1163,7 +1252,17 @@ function shouldSwitch(from, to, heldMs) {
       const dur = formatDuration(elapsed);
 
       const title = tr('state.' + state);
-      const toolName = active === undefined ? '' : active.name;
+      /*
+       * 显示中文动作（"跑命令"）而不是技术名（"bash"）。
+       *
+       * 技术名是给日志看的：用户原话「运行中显示的"bash"等信息是什么？
+       * 英文不好的人看不懂」。toolActionOf 只给类别（command/edit…），
+       * 文案走当前语言的 tool.* 词条，这样英文界面不会冒出中文。
+       * 认不出类别就退回原名，MCP 工具和自定义工具仍然显示自己的名字。
+       */
+      const toolCategory = active === undefined ? '' : toolActionOf(active.name);
+      const toolName = active === undefined ? ''
+        : (toolCategory === '' ? active.name : tr('tool.' + toolCategory));
 
       /*
        * 这里曾经有一档「还要 1:20」的 ETA，按本会话最近 8 轮中位数估。

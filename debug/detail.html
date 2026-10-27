@@ -35,11 +35,48 @@
     -webkit-app-region: drag;
   }
   .bar .title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-  .bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-  .bar .dot[data-s="running"] { background: var(--run); }
+  /*
+   * 状态灯。
+   *
+   * 早先只写了 running/done/error/waiting 四个值，而宿主报下来的是
+   * 状态机的十态（off/waiting/error/rinsing/washing/starting/spinning/
+   * draining/done/idle）——只有 waiting/error/done 三个能对上，
+   * 剩下七个（占全部运行时间）全都落到默认灰。用户看到的
+   * "左上角灰色点"就是这个：不是没上色，是选择器根本没覆盖到。
+   *
+   * 运行中的五个（rinsing/washing/starting/spinning/draining）共用
+   * 同一个 --run 蓝：它们在语义上是同一类「正在干活」，颜色分得再细
+   * 也没人分得清，状态文字已经写在旁边了。
+   */
+  .bar .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--faint);
+    transition: background-color 180ms ease, box-shadow 180ms ease;
+  }
+  .bar .dot[data-s="off"],
+  .bar .dot[data-s="idle"] { background: var(--faint); }
+  .bar .dot[data-s="starting"],
+  .bar .dot[data-s="washing"],
+  .bar .dot[data-s="rinsing"],
+  .bar .dot[data-s="spinning"],
+  .bar .dot[data-s="draining"] { background: var(--run); }
   .bar .dot[data-s="done"] { background: var(--ok); }
   .bar .dot[data-s="error"] { background: var(--bad); }
   .bar .dot[data-s="waiting"] { background: var(--warn); }
+  /*
+   * 运行中带一圈呼吸光晕，静态截图也能看出"它在动"。
+   * 用 box-shadow 而不是改尺寸：尺寸变化会推动标题栏布局。
+   */
+  .bar .dot[data-s="starting"],
+  .bar .dot[data-s="washing"],
+  .bar .dot[data-s="rinsing"],
+  .bar .dot[data-s="spinning"],
+  .bar .dot[data-s="draining"] { box-shadow: 0 0 0 3px rgba(58, 160, 255, .22); }
+  .bar .dot[data-s="waiting"] { box-shadow: 0 0 0 3px rgba(245, 185, 58, .22); }
+  .bar .dot[data-s="error"] { box-shadow: 0 0 0 3px rgba(229, 72, 77, .22); }
+  @media (prefers-reduced-motion: reduce) {
+    .bar .dot { transition: none; }
+  }
   .bar .turn { color: var(--faint); font-size: 11px; }
   .bar .x {
     -webkit-app-region: no-drag;
@@ -136,6 +173,17 @@
     draining: '排水换水', done: '洗完了', error: '故障',
   };
   var el = function (id) { return document.getElementById(id); };
+  /*
+   * 动作类别 → 中文。类别由宿主的 toolActionOf() 给出（command/edit…），
+   * 文案留在这里，和 client.template.js 的 tool.* 词条是同一套意思。
+   * 这个面板是独立 HTML，拿不到主词典，只能自带一份。
+   */
+  var TOOL_TEXT = {
+    command: '跑命令', read: '读文件', write: '写文件', edit: '改文件',
+    list: '列目录', find: '找文件', search: '搜代码',
+    websearch: '搜网页', webfetch: '抓网页', browser: '开浏览器',
+    subagent: '派子任务', plan: '列计划',
+  };
   var host = window.washerHost || null;
 
   function fmtNum(n) {
@@ -187,9 +235,20 @@
       var t = rank[j];
       var pct = Math.max(2, Math.round((t.ms / max) * 100));
       var err = t.isError ? '1' : '0';
+      /*
+       * 名字用中文动作，技术名放 title 里。
+       * 面板是"哪个工具在拖后腿"，但用户不认识 bash/apply_patch 这些技术名，
+       * 所以主文案给动作，悬停才看技术名（对日志时用得上）。
+       *
+       * 宿主给的是动作类别（t.action = command/edit…），文案在这张 TOOL_TEXT 表里。
+       * 认不出的类别退回 t.name：MCP 工具和自定义工具显示自己的名字。
+       */
+      var label = (typeof t.action === 'string' && TOOL_TEXT[t.action] !== undefined)
+        ? TOOL_TEXT[t.action]
+        : t.name;
       html += '<div class="tool">'
         + '<div class="top">'
-        + '<span class="name" title="' + esc(t.name) + '">' + esc(t.name)
+        + '<span class="name" title="' + esc(t.name) + '">' + esc(label)
         + (t.calls > 1 ? ' <span style="color:var(--faint)">×' + t.calls + '</span>' : '')
         + '</span>'
         + '<span class="ms" data-err="' + err + '">' + fmtMs(t.ms) + '</span>'

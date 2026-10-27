@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   deriveState, latestTurnOf, turnProduced, findTurnError, findToolFailure, activeTool, recentTools,
-  toolCountOf, errorCodeOf, elapsedOf, formatDuration, formatToolMs, formatTokens,
+  toolCountOf, errorCodeOf, elapsedOf, formatDuration, formatToolMs, formatTokens, toolActionOf,
   shouldSwitch, VISUAL, compactionRunning, stalledForOf, typicalTurnMs, remainingOf,
 } from '../src/core.js';
 
@@ -346,4 +346,45 @@ test('remainingOf：超时返回 0，不返回负数', () => {
   assert.equal(remainingOf(10000, 25000), 0, '已经超时只能是 0');
   assert.equal(remainingOf(null, 1000), null);
   assert.equal(remainingOf(0, 1000), null);
+});
+
+/* ---- 工具名翻译 ----
+ * 状态条上原来直接显示宿主给的技术名（bash / apply_patch），
+ * 用户原话：「运行中显示的"bash"等信息是什么？英文不好的人看不懂」。
+ * 翻译成动作说明，认不出来就原样返回——猜一个错的说明比不翻更糟。
+ */
+test('toolActionOf 把常见工具技术名归到动作类别', () => {
+  // 只给类别，不给文案：文案由各端词典翻译，否则英文界面会冒出中文
+  assert.equal(toolActionOf('bash'), 'command');
+  assert.equal(toolActionOf('read_file'), 'read');
+  assert.equal(toolActionOf('apply_patch'), 'edit');
+  assert.equal(toolActionOf('grep'), 'search');
+  assert.equal(toolActionOf('web_search'), 'websearch');
+});
+
+test('toolActionOf 大小写不敏感', () => {
+  assert.equal(toolActionOf('BASH'), 'command');
+  assert.equal(toolActionOf('Read_File'), 'read');
+});
+
+test('toolActionOf 认不出就返回空串，由调用方退回原名', () => {
+  // 自定义工具 / 没收录的新工具：显示原名，总好过显示一个错的动作
+  assert.equal(toolActionOf('someCustomTool'), '');
+  assert.equal(toolActionOf(''), '');
+  assert.equal(toolActionOf(undefined), '');
+  assert.equal(toolActionOf(null), '');
+});
+
+test('toolActionOf 返回的类别必须是纯标识符', () => {
+  // 类别会拼成 'tool.' + category 去查词典，带空格或中文就查不到
+  for (const name of ['bash', 'read_file', 'apply_patch', 'grep', 'web_fetch', 'todo_write']) {
+    assert.match(toolActionOf(name), /^[a-z]+$/);
+  }
+});
+
+test('toolActionOf 能穿透 MCP 工具的命名空间', () => {
+  // mcp__serverName__toolName —— 取最后一段再查一次
+  assert.equal(toolActionOf('mcp__filesystem__grep'), 'search');
+  // 末段也认不出就返回空串，不能只剩半截
+  assert.equal(toolActionOf('mcp__server__weird'), '');
 });

@@ -37,6 +37,7 @@ import {
   remainingOf,
   shouldSwitch,
   SWITCH_HOLD_MS,
+  toolActionOf,
 } from './src/core.js';
 
 export const name = 'dsh-washer';
@@ -1218,15 +1219,27 @@ export function apply(ctx, config) {
       // 预计剩余。基于这个会话自己最近几轮的中位数，不跨会话借数据。
       typicalMs,
       remainingMs,
+      /*
+       * action 是中文动作说明（toolActionOf），name 保留技术名。
+       * 两个都给：状态条和浮窗显示 action（用户看得懂"跑命令"，
+       * 看不懂"bash"），详情面板这类诊断场景要 name（对得上日志）。
+       */
       tools: recentTools(s.nodes, 6).map((t) => ({
         name: t.name,
+        action: toolActionOf(t.name),
         ms: t.ms === undefined ? null : t.ms,
         isError: t.isError === true,
       })),
       // 详情面板要的是"谁最慢"，按耗时倒序；上面的 tools 是时间序给流水用的。
       // 同一工具多次调用在这里合并成一个，取最大耗时——面板里关心的是
       // "哪个工具在拖后腿"，不是每一次调用。
-      toolRank: rankTools(s.nodes, turn),
+      toolRank: rankTools(s.nodes, turn).map((t) => ({
+        name: t.name,
+        action: toolActionOf(t.name),
+        ms: t.ms,
+        calls: t.calls,
+        isError: t.isError,
+      })),
       toolCount: toolCountOf(s.nodes, turn),
       // 详情面板用：模型、速度、token 用量。tokenUsage 早先是恒 null，
       // 现在 assistant/message 的 usage 能填上了。

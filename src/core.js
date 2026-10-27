@@ -144,6 +144,71 @@ export function activeTool(runningCalls) {
   };
 }
 
+/*
+ * 工具名 → 动作类别。
+ *
+ * 宿主传给我们的 `call.name` 是工具的技术名（bash / read_file /
+ * apply_patch…）。直接摆在状态条上，对不熟英文的人等于没信息——
+ * 用户原话：「运行中显示的"bash"等信息是什么？英文不好的人看不懂」。
+ *
+ * 翻译成「在干什么」而不是「调用了哪个工具」：用户关心的是动作，
+ * 不是 API 名。认不出来返回空串，由调用方退回原名——猜一个错的
+ * 说明比不翻更糟，因为那会让用户以为它在做别的事。
+ *
+ * 这里只给**类别**，不给最终文案：同一个动作在中文界面是「跑命令」，
+ * 在英文界面是「Running a command」。文案属于各端的词典
+ * （client.template.js 的 tool.* 键、debug/detail.html 的 TOOL_TEXT），
+ * 放这里会把中文写死进宿主，英文用户就看到中文了。
+ *
+ * 键名与 DSH 内置工具一致；对不上的（MCP 工具、自定义工具）返回空串。
+ */
+export const TOOL_ACTIONS = {
+  bash: 'command',
+  shell: 'command',
+  exec: 'command',
+  terminal: 'command',
+  read_file: 'read',
+  read: 'read',
+  write_file: 'write',
+  write: 'write',
+  edit: 'edit',
+  edit_file: 'edit',
+  multi_edit: 'edit',
+  apply_patch: 'edit',
+  patch: 'edit',
+  list_dir: 'list',
+  ls: 'list',
+  glob: 'find',
+  grep: 'search',
+  search: 'search',
+  ripgrep: 'search',
+  web_search: 'websearch',
+  web_fetch: 'webfetch',
+  fetch: 'webfetch',
+  browser: 'browser',
+  task: 'subagent',
+  subagent: 'subagent',
+  todo_write: 'plan',
+  todowrite: 'plan',
+  update_plan: 'plan',
+};
+
+/**
+ * 把工具技术名换成一个动作类别（command / edit / search…都是小写标识符）。
+ * 认不出来返回空串，调用方据此退回原名。
+ * @param {string} name 宿主给的工具名
+ * @returns {string}
+ */
+export function toolActionOf(name) {
+  if (typeof name !== 'string' || name === '') return '';
+  const key = name.toLowerCase();
+  if (TOOL_ACTIONS[key] !== undefined) return TOOL_ACTIONS[key];
+  // 带命名空间的 MCP 工具（mcp__server__tool）取最后一段再试一次
+  const tail = key.includes('__') ? key.slice(key.lastIndexOf('__') + 2) : '';
+  if (tail !== '' && TOOL_ACTIONS[tail] !== undefined) return TOOL_ACTIONS[tail];
+  return '';
+}
+
 /**
  * 最近完成的工具调用（旧→新，可直接渲染）。
  * @param {unknown} nodes chat legacy nodes

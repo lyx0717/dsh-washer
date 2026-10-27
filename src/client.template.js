@@ -122,7 +122,7 @@ window.__ModuleLoader__.load({
       'sub.starting': '正在起转 · {elapsed}',
       'sub.washing': '{elapsed} · 第 {n} 件',
       'sub.stalled': '已经 {stalled} 没动静，卡住了?',
-      'sub.rinsing': '{tool} · {elapsed}',
+      'sub.rinsing': '正在{tool} · {elapsed}',
       'sub.rinsingBare': '{elapsed}',
       'sub.spinning': '收尾整理 · {elapsed}',
       'sub.waiting': '有个地方要你拍板',
@@ -154,6 +154,18 @@ window.__ModuleLoader__.load({
       'set.overlaySoundHint': '洗完了、出故障、等你确认各响一声，中间运转不吵。窗口在前台时静音。',
       'set.overlayThrough': '鼠标穿透',
       'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
+      'tool.command': '跑命令',
+      'tool.read': '读文件',
+      'tool.write': '写文件',
+      'tool.edit': '改文件',
+      'tool.list': '列目录',
+      'tool.find': '找文件',
+      'tool.search': '搜代码',
+      'tool.websearch': '搜网页',
+      'tool.webfetch': '抓网页',
+      'tool.browser': '开浏览器',
+      'tool.subagent': '派子任务',
+      'tool.plan': '列计划',
     };
 
     const EN = {
@@ -201,6 +213,18 @@ window.__ModuleLoader__.load({
       'set.overlaySizeHint': '"Minimal" keeps only the indicator light with no status text - the smallest footprint.',
       'set.overlayThrough': 'Click-through',
       'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press Opt+Cmd+W to turn it off.',
+      'tool.command': 'Running a command',
+      'tool.read': 'Reading a file',
+      'tool.write': 'Writing a file',
+      'tool.edit': 'Editing a file',
+      'tool.list': 'Listing files',
+      'tool.find': 'Finding files',
+      'tool.search': 'Searching code',
+      'tool.websearch': 'Searching the web',
+      'tool.webfetch': 'Fetching a page',
+      'tool.browser': 'Using a browser',
+      'tool.subagent': 'Running a subtask',
+      'tool.plan': 'Planning',
       'set.overlayNotify': 'Notify when done',
       'set.overlayNotifyHint': 'Only “done” and “error”. Silent while the window is focused.',
       'set.overlaySound': 'Sound cues',
@@ -707,7 +731,17 @@ window.__ModuleLoader__.load({
       const dur = formatDuration(elapsed);
 
       const title = tr('state.' + state);
-      const toolName = active === undefined ? '' : active.name;
+      /*
+       * 显示中文动作（"跑命令"）而不是技术名（"bash"）。
+       *
+       * 技术名是给日志看的：用户原话「运行中显示的"bash"等信息是什么？
+       * 英文不好的人看不懂」。toolActionOf 只给类别（command/edit…），
+       * 文案走当前语言的 tool.* 词条，这样英文界面不会冒出中文。
+       * 认不出类别就退回原名，MCP 工具和自定义工具仍然显示自己的名字。
+       */
+      const toolCategory = active === undefined ? '' : toolActionOf(active.name);
+      const toolName = active === undefined ? ''
+        : (toolCategory === '' ? active.name : tr('tool.' + toolCategory));
 
       /*
        * 这里曾经有一档「还要 1:20」的 ETA，按本会话最近 8 轮中位数估。

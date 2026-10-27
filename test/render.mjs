@@ -695,7 +695,13 @@ await test('工具调用期间 → rinsing，副行显示工具名，结束后�
   m.set({ runningCalls: [{ phase: 'start', callId: 'c1', name: 'apply_patch', turn: 1, step: 3 }], partial: null });
   await m.settle(20);
   assert.equal(m.state, 'rinsing');
-  assert.ok(m.html.includes('apply_patch'), '副行要能看见工具名');
+  /*
+   * 副行显示的是**中文动作**，不是技术名。
+   * 用户原话：「运行中显示的"bash"等信息是什么？英文不好的人看不懂」。
+   * apply_patch → 改文件，技术名只在详情面板的 title 里留着对日志用。
+   */
+  assert.ok(m.html.includes('正在改文件'), '副行要能看见中文动作说明，实际：' + m.html.slice(0, 400));
+  assert.ok(!m.html.includes('apply_patch'), '技术名不该直接摆在状态条上');
   m.set({ runningCalls: [], nodes: tools(3) });
   await m.settle(450);
   assert.equal(m.state, 'washing', '工具结束后回 washing');
@@ -1218,6 +1224,38 @@ await test('Windows 上音效开关必须隐藏，找不到 Electron 时要说�
   assert.ok(soundIdx > subIdx, '音效在悬浮窗分区内部');
   const beforeSound = client.slice(Math.max(0, soundIdx - 400), soundIdx);
   assert.ok(/caps\.sound === true/.test(beforeSound), '音效行必须挂在 caps.sound === true 这个条件上');
+});
+
+await test('详情面板：状态灯必须覆盖状态机全部十态（不能只有四个上色）', () => {
+  /*
+   * 用户报告：「悬浮窗查看详情左上角灰色点是什么，应该颜色增加实时运行状态」。
+   *
+   * 根因：宿主报的是状态机十态（off/waiting/error/rinsing/washing/
+   * starting/spinning/draining/done/idle），而 CSS 只写了
+   * running/done/error/waiting 四个选择器。running 根本不是状态名，
+   * 于是 rinsing/washing/starting/spinning/draining 五个**运行中**的状态
+   * 全部落到默认灰——占据整个任务绝大部分时间的恰恰是这些状态。
+   *
+   * 这条用例穷举十态，要求每个都在 CSS 里有明确颜色。
+   * 反例：把 running 那行留下、删掉 rinsing 等五个，此条会红。
+   */
+  const detail = readFileSync(join(root, 'debug', 'detail.html'), 'utf8');
+  /*
+   * off/idle 本来就该是灰的（没在跑），所以只要求"有明确规则"；
+   * 其余八个必须有非灰的颜色——那才是"实时运行状态"该有的样子。
+   */
+  const ALL_STATES = ['off', 'idle', 'starting', 'washing', 'rinsing', 'spinning', 'draining', 'done', 'error', 'waiting'];
+  const GRAY_OK = new Set(['off', 'idle']);
+  for (const state of ALL_STATES) {
+    const rule = new RegExp('\\.dot\\[data-s="' + state + '"\\]');
+    assert.ok(rule.test(detail), '状态灯必须为 "' + state + '" 写一条规则，否则会落到默认样式');
+    if (GRAY_OK.has(state)) continue;
+    const colored = new RegExp('\\.dot\\[data-s="' + state + '"\\][^}]*background:\\s*var\\(--(run|ok|warn|bad)\\)');
+    assert.ok(colored.test(detail), '状态灯必须给 "' + state + '" 一个非灰的颜色（run/ok/warn/bad）');
+  }
+  // running 不是状态机的状态名，留着它等于留一条永远不会命中的死规则
+  assert.ok(!/\.dot\[data-s="running"\]/.test(detail),
+    '"running" 不是状态名，这条选择器永远不会命中，属于误导');
 });
 
 await test('设置页：悬浮窗整节只在平台支持时渲染（非 macOS 全隐藏）', async () => {
