@@ -13,6 +13,19 @@ export const URGENT_STATES = { off: 1, waiting: 1, error: 1, idle: 1, done: 1 };
 /** 不参与「当前步骤位置」判断的节点类型（宿主注入，非 Agent 产出）。 */
 export const IGNORED_NODE_KINDS = new Set(['context']);
 
+/**
+ * 统一的「节点是否属于某一轮」判定。三处扫描器（findTurnError / lastNodeOf /
+ * toolCountOf）此前各写一套 turn 过滤，口径不一：有的把缺失 turn 当不匹配、
+ * 有的当匹配、有的用 turn===0 当"全部"。这里统一定义：
+ *   - turn 为 undefined（调用方没指定轮次）→ 一律匹配，不过滤；
+ *   - 否则节点必须带数字 turn 且等于目标轮次；缺失或不等 → 不匹配。
+ * 调用方若还需"turn===0 表示全部"的语义，自行在调用前把 0 折成 undefined。
+ */
+export function turnMatches(node, turn) {
+  if (turn === undefined) return true;
+  return typeof node.turn === 'number' && node.turn === turn;
+}
+
 /** 代表「Agent 已经产出东西」的节点类型（dsh-client-ui-chat legacy nodes）。 */
 export const OUTPUT_NODE_KINDS = new Set([
   'assistant', 'tool-call', 'tool-result', 'reasoning', 'text', 'image',
@@ -60,7 +73,7 @@ export function findTurnError(nodes, turn) {
   for (let i = nodes.length - 1; i >= 0; i -= 1) {
     const node = nodes[i];
     if (!node || node.kind !== 'turn-error') continue;
-    if (turn !== undefined && node.turn !== turn) continue;
+    if (!turnMatches(node, turn)) continue;
     return node;
   }
   return undefined;
@@ -80,7 +93,7 @@ export function lastNodeOf(nodes, turn) {
     // context 是宿主注入的上下文节点（system-reminder / runtime snapshot），
     // 不代表 Agent 产出了任何东西，不能拿来判断「这一步走到哪」。
     if (IGNORED_NODE_KINDS.has(node.kind)) continue;
-    if (turn !== undefined && typeof node.turn === 'number' && node.turn !== turn) continue;
+    if (!turnMatches(node, turn)) continue;
     return node;
   }
   return undefined;
@@ -237,15 +250,18 @@ export function recentTools(nodes, limit = 5) {
 /**
  * 当前轮的工具调用总数（含子调用）。
  * @param {unknown} nodes
- * @param {number} turn
+ * @param {number} turn 目标轮次；传 0 表示"全部轮次，不过滤"。
  * @returns {number}
  */
 export function toolCountOf(nodes, turn) {
   if (!Array.isArray(nodes)) return 0;
+  // turn===0 是历史遗留的"全部"哨兵（真实轮次从 1 起），先折成 undefined
+  // 交给统一的 turnMatches 处理，避免再维护第三套匹配口径。
+  const target = turn === 0 ? undefined : turn;
   let count = 0;
   for (const node of nodes) {
     if (!node || node.kind !== 'tool-result') continue;
-    if (turn !== 0 && typeof node.turn === 'number' && node.turn !== turn) continue;
+    if (!turnMatches(node, target)) continue;
     count += 1;
   }
   return count;
@@ -338,7 +354,9 @@ export function deriveState(input) {
 
   if (findTurnError(nodes, turn) !== undefined) return 'error';
   if (findToolFailure(nodes, turn) !== undefined) return 'error';
-  if (sticky && sticky.kind === 'done' && now < sticky.until) return 'done';
+  // done 粘滞要绑定到它所属的轮。旧轮的 doneUntil 若比新一轮的 turn 还活着，
+  // 不加 turn 校验就会把"上一轮洗完了"粘到刚起步的新一轮上，闪一下假 done。
+  if (sticky && sticky.kind === 'done' && now < sticky.until && sticky.turn === turn) return 'done';
   return 'idle';
 }
 
@@ -380,7 +398,8 @@ const STALL_AFTER_MS = 45000;
  *      starting 是新轮刚起，draining 是压缩（本来就不出字），都不算。
  *   2. 先要求"曾经有过产出"（samples 里至少两个点）。第一轮还没吐第一个字
  *      的长思考不该被叫卡住。
- *   3. 距最后一次**有增长**的采样超过 STALL_AFTER_MS 才算。
+ *   3. 距最后一次采样（samples 按时间正序追加，末点即最新）已过超过
+ *      STALL_AFTER_MS 才算。至少两点保证"曾经有过产出"，见第 2 条。
  *
  * @returns {number | null} 卡了多久（毫秒）；没卡返回 null。
  */
@@ -388,7 +407,11 @@ export function stalledForOf(samples, state, now, thresholdMs = STALL_AFTER_MS) 
   if (state !== 'washing' && state !== 'rinsing' && state !== 'spinning') return null;
   if (!Array.isArray(samples) || samples.length < 2) return null;
   const last = samples[samples.length - 1];
-  const idleMs = now - last.at;
+  // last.at 必须是有限数：采样点可能来自序列化/异常路径，若 at 缺失或是字符串，
+  // now - undefined 会得 NaN，而 NaN <= threshold 恒为 false → 被误判"卡住"
+  // 并把 NaN 一路漏到 UI 显示"NaNms"。这里显式判非法即当作"无法判断"。
+  const idleMs = now - (last && last.at);
+  if (!Number.isFinite(idleMs)) return null;
   if (idleMs <= thresholdMs) return null;
   return idleMs;
 }

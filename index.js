@@ -101,6 +101,53 @@ const WEB_STOP_PATH = '/dsh-washer/stop';
 /** 上报体上限。就两个字段，1KB 已经非常宽松。 */
 const PENDING_BODY_LIMIT = 1024;
 
+/**
+ * 统一的请求体读取：收 body → 超限回 413 → JSON 解析（可选）。
+ *
+ * 此前每个 POST 路由各自手搓 `req.on('data'/'end')`，阈值三套（4096/10240/1024），
+ * `/pin` 超限只 `req.destroy()` 不返响应，客户端拿到的是断连而非明确错误。
+ * 收口到一处：所有路由用同一个上限语义（超限 413、坏 JSON 400）。
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} limit 字节上限
+ * @param {{ json?: boolean }} [opts] json=true 时把 body 解析成对象
+ * @returns {Promise<{ok: true, value: any} | {ok: false}>}
+ *   ok:false 表示已经由本函数写过响应（413/400），调用方直接 return 即可。
+ */
+function readBody(req, res, limit, opts = {}) {
+  const wantJson = opts.json !== false;
+  return new Promise((resolve) => {
+    let body = '';
+    let tooBig = false;
+    req.on('data', (chunk) => {
+      if (tooBig) return;
+      body += chunk;
+      if (body.length > limit) {
+        tooBig = true;
+        res.writeHead(413, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'payload too large' }));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (tooBig) return resolve({ ok: false });
+      if (!wantJson) return resolve({ ok: true, value: body });
+      let value;
+      try {
+        value = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad json' }));
+        return resolve({ ok: false });
+      }
+      resolve({ ok: true, value });
+    });
+    // 连接中途断了：别再 resolve 挂起，直接放弃（res 多半也已断）
+    req.on('error', () => { if (!tooBig) resolve({ ok: false }); });
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * 事件 → deriveState 输入
  *
@@ -1071,7 +1118,6 @@ export function apply(ctx, config) {
       }
       lastChildStderr = '';
     });
-    overlayLaunchError = null;
     return true;
   }
 
@@ -1141,6 +1187,33 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 把一份会话状态摊成 deriveState 的入参。
+   *
+   * 这个入参对象此前在 sessionSummaries / snapshot / ensureTick 三处各抄一遍，
+   * 九字段完全一样，只有 outline 一度被写成 [{ turn }] 而不是真实 outline——
+   * 于是三端给 latestTurnOf 的输入悄悄分叉，正是历史上「两端状态不一致」的根因。
+   * 集中到一处产出，改字段只改这里。
+   */
+  function deriveInputOf(sessionId, s, now) {
+    return {
+      sessionId,
+      running: s.running,
+      // 有审批挂在等人类回答就是 waiting。没订阅时这里恒 undefined，
+      // 浮窗永远不会亮"等你确认"——最该提醒的时刻不提醒。
+      pending: pendingFor(sessionId, s),
+      runningCalls: s.runningCalls,
+      partial: s.partial,
+      nodes: s.nodes,
+      outline: s.turn > 0 ? [{ turn: s.turn }] : [],
+      trajectory: undefined,
+      // 主界面用 React state 记这件事，桌面端没有 React，只能从会话状态里取。
+      // 到期不用清：deriveState 自己比 now < until，过期自然失效。
+      sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
+      now,
+    };
+  }
+
+  /**
    * 钉住的会话。null = 跟着最近活动走。
    *
    * 为什么要这个：Host 侧不知道哪个会话在前台。客户端靠
@@ -1172,18 +1245,7 @@ export function apply(ctx, config) {
     const rows = [];
     for (const [id, s] of sessions) {
       const outline = s.turn > 0 ? [{ turn: s.turn }] : [];
-      const state = deriveState({
-        sessionId: id,
-        running: s.running,
-        pending: pendingFor(id, s),
-        runningCalls: s.runningCalls,
-        partial: s.partial,
-        nodes: s.nodes,
-        outline,
-        trajectory: undefined,
-        sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
-        now,
-      });
+      const state = deriveState(deriveInputOf(id, s, now));
       const turn = latestTurnOf(outline);
       rows.push({
         sessionId: id,
@@ -1229,22 +1291,7 @@ export function apply(ctx, config) {
     }
     const s = stateFor(sessionId);
     const outline = s.turn > 0 ? [{ turn: s.turn }] : [];
-    const derived = deriveState({
-      sessionId,
-      running: s.running,
-      // 有审批挂在等人类回答就是 waiting。没订阅时这里恒 undefined，
-      // 浮窗永远不会亮"等你确认"——最该提醒的时刻不提醒。
-      pending: pendingFor(sessionId, s),
-      runningCalls: s.runningCalls,
-      partial: s.partial,
-      nodes: s.nodes,
-      outline,
-      trajectory: undefined,
-      // 主界面用 React state 记这件事，桌面端没有 React，只能从会话状态里取。
-      // 到期不用清：deriveState 自己比 now < until，过期自然失效。
-      sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
-      now,
-    });
+    const derived = deriveState(deriveInputOf(sessionId, s, now));
 
     const turn = latestTurnOf(outline);
     const elapsedMs = elapsedOf(s.turnTimings, turn, now) || 0;
@@ -1486,18 +1533,7 @@ export function apply(ctx, config) {
        * 而是**当前算出来的状态和上次真正推出去的不一样就补推**。
        * 这个判据不依赖任何时序巧合。
        */
-      const current = deriveState({
-        sessionId,
-        running: s.running,
-        pending: pendingFor(sessionId, s),
-        runningCalls: s.runningCalls,
-        partial: s.partial,
-        nodes: s.nodes,
-        outline: s.turn > 0 ? [{ turn: s.turn }] : [],
-        trajectory: undefined,
-        sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
-        now,
-      });
+      const current = deriveState(deriveInputOf(sessionId, s, now));
       /*
        * 比的是**迟滞后**的状态，不是刚算出来的那个。
        *
@@ -1595,117 +1631,120 @@ export function apply(ctx, config) {
     });
   }
 
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-    if (!authorized(req, url)) {
-      res.writeHead(401, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unauthorized' }));
-      return;
-    }
-    if (url.pathname === '/dsh-washer/state') {
-      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify(snapshot()));
-      return;
-    }
-    /*
-     * 钉住/放开某个会话。
-     *
-     * GET 一个会改状态的接口会被浏览器预取误触发，所以只收 POST。
-     * body 是 {sessionId: string | null}：null 表示回到「跟随最近活动」。
-     * 不校验 sessionId 是否已存在——会话可能是刚创建、Host 还没来得及处理的，
-     * 钉一个还不存在的 id 不会出事（viewSessionId 会自己回退）。
-     */
-    if (url.pathname === '/dsh-washer/pin') {
-      if (req.method !== 'POST') {
-        res.writeHead(405, { 'content-type': 'application/json', allow: 'POST' });
-        res.end(JSON.stringify({ error: 'method not allowed' }));
-        return;
-      }
-      let body = '';
-      req.on('data', (chunk) => {
-        body += chunk;
-        if (body.length > 4096) req.destroy();
-      });
-      req.on('end', () => {
-        let patch;
-        try {
-          patch = JSON.parse(body);
-        } catch {
-          res.writeHead(400, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: 'bad json' }));
-          return;
-        }
-        const want = patch && patch.sessionId;
-        if (want === null || want === undefined) {
-          pinnedSessionId = null;
-        } else if (typeof want === 'string' && want.length > 0 && want.length <= 200) {
-          pinnedSessionId = want;
-        } else {
-          res.writeHead(400, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: 'sessionId must be a short string or null' }));
-          return;
-        }
-        schedulePush();
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ pinnedSessionId }));
-      });
-      return;
-    }
-    if (url.pathname === '/dsh-washer/health') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-      return;
-    }
-    /*
-     * 设置页改悬浮窗大小/皮肤/开关时 POST 到这里。
-     * 宿主自己管不了 Electron 窗口，只负责把值落到偏好文件，
-     * 主进程 watch 那个文件后自己改窗口——这样不必为改个皮肤重启宿主。
-     *
-     * 只收 POST：GET 一个改状态的接口会被浏览器预取和链接预览误触发。
-     */
-    if (url.pathname === '/dsh-washer/prefs') {
+  /*
+   * 带 token 的 127.0.0.1 服务路由表。
+   *
+   * 此前是一个 handler 里 4 条 `if (url.pathname === ...) { ... return; }` 瀑布，
+   * 加端点要在中间插、还得记得每条自己写 405/404。改成 pathname → 方法 → 处理器
+   * 的表：新增端点只加一项，鉴权/404/405 由下面的派发器统一兜。
+   *
+   * 每个处理器签名 (req, res, url)。方法不匹配时回 405 并带 allow 头。
+   */
+  function createOverlayServer() {
+    const STATE_PATH = '/dsh-washer/state';
+    const PIN_PATH = '/dsh-washer/pin';
+    const HEALTH_PATH = '/dsh-washer/health';
+    const PREFS_PATH = '/dsh-washer/prefs';
+
+    const routes = {
+      [STATE_PATH]: {
+        GET: (req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify(snapshot()));
+        },
+      },
       /*
-       * GET 给设置页：它进页面时要知道当前值（偏好文件才是真相源，
-       * localStorage 只是缓存——用户在浮窗右键菜单里改过的东西，
-       * localStorage 根本不知道）。
+       * 钉住/放开某个会话。
+       *
+       * GET 一个会改状态的接口会被浏览器预取误触发，所以只收 POST。
+       * body 是 {sessionId: string | null}：null 表示回到「跟随最近活动」。
+       * 不校验 sessionId 是否已存在——会话可能是刚创建、Host 还没来得及处理的，
+       * 钉一个还不存在的 id 不会出事（viewSessionId 会自己回退）。
        */
-      if (req.method === 'GET') {
-        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify(readOverlayPrefs()));
+      [PIN_PATH]: {
+        POST: async (req, res) => {
+          const read = await readBody(req, res, PREF_BODY_LIMIT);
+          if (!read.ok) return;
+          const patch = read.value;
+          const want = patch && patch.sessionId;
+          if (want === null || want === undefined) {
+            pinnedSessionId = null;
+          } else if (typeof want === 'string' && want.length > 0 && want.length <= 200) {
+            pinnedSessionId = want;
+          } else {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'sessionId must be a short string or null' }));
+            return;
+          }
+          schedulePush();
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ pinnedSessionId }));
+        },
+      },
+      [HEALTH_PATH]: {
+        GET: (req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        },
+      },
+      /*
+       * 设置页改悬浮窗大小/皮肤/开关时 POST 到这里。
+       * 宿主自己管不了 Electron 窗口，只负责把值落到偏好文件，
+       * 主进程 watch 那个文件后自己改窗口——这样不必为改个皮肤重启宿主。
+       *
+       * 只收 POST 改状态；GET 给设置页读当前值（偏好文件才是真相源，
+       * localStorage 只是缓存——用户在浮窗右键菜单里改过的东西，localStorage 不知道）。
+       * GET 一个会改状态的接口会被浏览器预取和链接预览误触发。
+       */
+      [PREFS_PATH]: {
+        GET: (req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify(readOverlayPrefs()));
+        },
+        POST: async (req, res) => {
+          const read = await readBody(req, res, PREF_BODY_LIMIT, { json: false });
+          if (!read.ok) return;
+          let patch = null;
+          try { patch = JSON.parse(read.value); } catch { patch = null; }
+          // 走 syncOverlayPrefs 而不是直接写文件：拨开关时要拉起/杀掉进程
+          const saved = syncOverlayPrefs(patch);
+          if (saved === null) {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'bad request' }));
+            return;
+          }
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify(saved));
+        },
+      },
+    };
+
+    const server = createServer(async (req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (!authorized(req, url)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
         return;
       }
-      if (req.method !== 'POST') {
-        res.writeHead(405, { 'content-type': 'application/json', allow: 'GET, POST' });
+      const route = routes[url.pathname];
+      if (route === undefined) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+        return;
+      }
+      const handler = route[req.method ?? ''];
+      if (handler === undefined) {
+        const allow = Object.keys(route).join(', ');
+        res.writeHead(405, { 'content-type': 'application/json', allow });
         res.end(JSON.stringify({ error: 'method not allowed' }));
         return;
       }
-      let body = '';
-      let tooBig = false;
-      req.on('data', (chunk) => {
-        body += chunk;
-        // 这个接口只收三个小字段，10KB 已经荒谬了，防的是内存被灌
-        if (body.length > 10240) { tooBig = true; req.destroy(); }
-      });
-      req.on('end', () => {
-        if (tooBig) return;
-        let patch = null;
-        try { patch = JSON.parse(body); } catch { patch = null; }
-        // 走 syncOverlayPrefs 而不是直接写文件：拨开关时要拉起/杀掉进程
-        const saved = syncOverlayPrefs(patch);
-        if (saved === null) {
-          res.writeHead(400, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: 'bad request' }));
-          return;
-        }
-        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify(saved));
-      });
-      return;
-    }
-    res.writeHead(404, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not found' }));
-  });
-  server.on('upgrade', onUpgrade);
+      await handler(req, res, url);
+    });
+    server.on('upgrade', onUpgrade);
+    return server;
+  }
+  const server = createOverlayServer();
 
   /**
    * 起 HTTP+WS 服务。抽成函数是因为它现在有两条触发路径：
@@ -1842,33 +1881,20 @@ export function apply(ctx, config) {
           res.end(JSON.stringify({ error: 'method not allowed' }));
           return;
         }
-        let body = '';
-        let tooBig = false;
-        req.on('data', (chunk) => {
-          if (tooBig) return;
-          body += chunk;
-          if (body.length > PREF_BODY_LIMIT) {
-            tooBig = true;
-            res.writeHead(413, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: 'payload too large' }));
-            req.destroy();
-          }
-        });
-        req.on('end', () => {
-          if (tooBig) return;
-          let patch = null;
-          try { patch = JSON.parse(body); } catch { patch = null; }
-          // 走 syncOverlayPrefs：拨「显示悬浮窗」时要拉起/杀掉进程，
-          // 光写文件那段代码走不到，用户看到的就是"开关没反应"
-          const saved = syncOverlayPrefs(patch);
-          if (saved === null) {
-            res.writeHead(400, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: 'bad request' }));
-            return;
-          }
-          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-          res.end(JSON.stringify(saved));
-        });
+        const read = await readBody(req, res, PREF_BODY_LIMIT, { json: false });
+        if (!read.ok) return;
+        let patch = null;
+        try { patch = JSON.parse(read.value); } catch { patch = null; }
+        // 走 syncOverlayPrefs：拨「显示悬浮窗」时要拉起/杀掉进程，
+        // 光写文件那段代码走不到，用户看到的就是"开关没反应"
+        const saved = syncOverlayPrefs(patch);
+        if (saved === null) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad request' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(saved));
       },
     }), 'dsh-washer: web overlay-prefs route');
 
@@ -1888,55 +1914,41 @@ export function apply(ctx, config) {
           res.end(JSON.stringify({ error: 'method not allowed' }));
           return;
         }
-        let body = '';
-        let tooBig = false;
-        req.on('data', (chunk) => {
-          if (tooBig) return;
-          body += chunk;
-          if (body.length > PENDING_BODY_LIMIT) {
-            tooBig = true;
-            res.writeHead(413, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: 'payload too large' }));
-            req.destroy();
-          }
-        });
-        req.on('end', () => {
-          if (tooBig) return;
-          let payload = null;
-          try { payload = JSON.parse(body); } catch { payload = null; }
-          if (payload === null || typeof payload !== 'object') {
-            res.writeHead(400, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: 'bad request' }));
-            return;
-          }
-          const rawId = payload.sessionId;
-          if (typeof rawId !== 'string' || rawId === '') {
-            res.writeHead(400, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: 'sessionId required' }));
-            return;
-          }
-          // kind 只认两种；null/undefined 表示"不等了"
-          const rawKind = payload.kind;
-          if (rawKind !== null && rawKind !== undefined && rawKind !== 'approval' && rawKind !== 'question') {
-            res.writeHead(400, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: 'bad kind' }));
-            return;
-          }
-          const next = rawKind === null || rawKind === undefined ? null : { kind: rawKind };
-          const prev = clientPending.get(rawId);
-          const changed = next === null
-            ? prev !== undefined
-            : (prev === undefined || prev.kind !== next.kind);
-          /*
-           * 值没变就不写、不推。客户端已经保证了只在变化时发，
-           * 这里再挡一道：重复投递不该让浮窗白闪一下。
-           */
-          if (next === null) clientPending.delete(rawId);
-          else clientPending.set(rawId, next);
-          if (changed) schedulePush(true);
-          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-          res.end(JSON.stringify({ ok: true, changed }));
-        });
+        const read = await readBody(req, res, PENDING_BODY_LIMIT);
+        if (!read.ok) return;
+        const payload = read.value;
+        if (payload === null || typeof payload !== 'object') {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad request' }));
+          return;
+        }
+        const rawId = payload.sessionId;
+        if (typeof rawId !== 'string' || rawId === '') {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'sessionId required' }));
+          return;
+        }
+        // kind 只认两种；null/undefined 表示"不等了"
+        const rawKind = payload.kind;
+        if (rawKind !== null && rawKind !== undefined && rawKind !== 'approval' && rawKind !== 'question') {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad kind' }));
+          return;
+        }
+        const next = rawKind === null || rawKind === undefined ? null : { kind: rawKind };
+        const prev = clientPending.get(rawId);
+        const changed = next === null
+          ? prev !== undefined
+          : (prev === undefined || prev.kind !== next.kind);
+        /*
+         * 值没变就不写、不推。客户端已经保证了只在变化时发，
+         * 这里再挡一道：重复投递不该让浮窗白闪一下。
+         */
+        if (next === null) clientPending.delete(rawId);
+        else clientPending.set(rawId, next);
+        if (changed) schedulePush(true);
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, changed }));
       },
     }), 'dsh-washer: client pending route');
 
@@ -2119,7 +2131,6 @@ export function apply(ctx, config) {
 
 
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态
-  const instanceToken = token;
   ctx.effect(() => () => {
     if (pushTimer !== null) clearTimeout(pushTimer);
     if (tickTimer !== null) clearInterval(tickTimer);
@@ -2133,12 +2144,15 @@ export function apply(ctx, config) {
      * 所以卸载时不主动删，留给下次启动覆盖写。文件内容是 0600 的本地端点信息，
      * 残留一份不影响安全，但丢了就没法开悬浮窗。
      */
-    void instanceToken;
     for (const socket of clients) {
       try { socket.destroy(); } catch { /* noop */ }
     }
     clients.clear();
     lastSeen.clear();
+    // SSE 客户端集合也要断干净：每个 client 背后是一条 keep-alive 连接，
+    // clear 掉 Set 只是丢了引用，连接本身得靠 server.close 收；这里顺带清空，
+    // 避免卸载后残留的引用让 pushPrefs 还往已关的端口写。
+    prefClients.clear();
     if (server.listening) server.close();
     /*
      * 宿主走了悬浮窗也该走，否则它连着一个已经关闭的端口，

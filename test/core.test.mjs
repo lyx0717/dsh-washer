@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   deriveState, latestTurnOf, turnProduced, findTurnError, findToolFailure, activeTool, recentTools,
   toolCountOf, errorCodeOf, elapsedOf, formatDuration, formatToolMs, formatTokens, toolActionOf,
-  shouldSwitch, VISUAL, compactionRunning, stalledForOf, typicalTurnMs, remainingOf,
+  shouldSwitch, VISUAL, compactionRunning, stalledForOf, typicalTurnMs, remainingOf, turnMatches,
 } from '../src/core.js';
 
 const NOW = 1_700_000_000_000;
@@ -387,4 +387,39 @@ test('toolActionOf 能穿透 MCP 工具的命名空间', () => {
   assert.equal(toolActionOf('mcp__filesystem__grep'), 'search');
   // 末段也认不出就返回空串，不能只剩半截
   assert.equal(toolActionOf('mcp__server__weird'), '');
+});
+
+// —— 回归：P0 修复（stalled 防 NaN / sticky 绑轮 / 统一 turnMatches） ——
+
+test('stalledForOf：坏采样（at 缺失/非数）不判卡住、不外泄 NaN', () => {
+  // 末点 at 缺失 → now-undefined=NaN，修复前会被误判"卡住"并返回 NaN
+  assert.equal(stalledForOf([{ at: NOW - 90000, output: 1 }, { at: undefined, output: 9 }], 'washing', NOW), null);
+  // 末点 at 是字符串
+  assert.equal(stalledForOf([{ at: NOW - 90000, output: 1 }, { at: 'oops', output: 9 }], 'washing', NOW), null);
+  // now 非法 → 也得不出有限值
+  assert.equal(stalledForOf([{ at: NOW - 90000, output: 1 }, { at: NOW - 80000, output: 9 }], 'washing', NaN), null);
+});
+
+test('sticky done 只粘它所属的轮：旧轮的 doneUntil 不粘到新轮', () => {
+  // 当前轮是 5，sticky 记的是第 4 轮的 done —— 不能报 done
+  const outline = [{ turn: 5, prompt: 'x', response: '' }];
+  assert.equal(
+    deriveState({ ...base, running: false, outline, sticky: { kind: 'done', turn: 4, until: NOW + 1000 } }),
+    'idle',
+  );
+  // 同一轮（5）的 done 仍正常生效
+  assert.equal(
+    deriveState({ ...base, running: false, outline, sticky: { kind: 'done', turn: 5, until: NOW + 1000 } }),
+    'done',
+  );
+});
+
+test('turnMatches：未指定轮次不过滤；指定则须数字且相等', () => {
+  assert.equal(turnMatches({ turn: 3 }, undefined), true);
+  assert.equal(turnMatches({ turn: 3 }, 3), true);
+  assert.equal(turnMatches({ turn: 3 }, 4), false);
+  // 缺 turn 字段：指定轮次时算不匹配（不再"缺失即放行"）
+  assert.equal(turnMatches({}, 3), false);
+  // turn 是字符串也不算匹配（严格数字语义）
+  assert.equal(turnMatches({ turn: '3' }, 3), false);
 });

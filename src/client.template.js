@@ -378,6 +378,83 @@ window.__ModuleLoader__.load({
       return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     }
 
+    /*
+     * 三个组件（Dock / Settings / Overlay）共用同一套 props 读取样板，
+     * 集中到这里，避免三份逐字重复。任何一处改语义都要同步改三份——
+     * 这正是上一版容易漂移的点，收成一个函数后就不会再分叉。
+     */
+
+    // 取当前生效配置：优先取宿主的实时读法 washerGetConfig()，
+    // 退回静态 washerConfig，都没有则用 DEFAULT_CONFIG。
+    function readConfig(props) {
+      return (typeof props.washerGetConfig === 'function' ? props.washerGetConfig() : props.washerConfig) || DEFAULT_CONFIG;
+    }
+
+    // 取翻译函数 t / tr。注册 slot 时传了 locale: LOCALE_NS，渲染器给的 t
+    // 已是本命名空间内的裸 key；拿不到时退回 identity（显示 key 本身）。
+    function useTr(props) {
+      const t = typeof props.t === 'function' ? props.t : (key) => key;
+      return { t, tr: (key) => t(key) };
+    }
+
+    // useTrajectory 缺失时的稳定 fallback（模块级常量，保证引用不变）
+    function NO_TRAJECTORY() { return undefined; }
+
+    /* ------------------------------------------------------------------ *
+     * 设置页控件的样式常量
+     *
+     * 设置页挂在 settings.section 里，**不在** .dsh-washer 范围内，拿不到
+     * 插件自己的 --dw-* 变量（实测 --dw-run 算出空串）。而 var(--x, fallback)
+     * 只在"变量无效"时回退，空串算"已定义"，整条背景色会失效、开关变透明方块。
+     * 所以这里直接用宿主 token，且不套自家变量层。
+     *
+     * 配色跟着宿主 label-primary（浅色近黑 / 深色自动翻浅）走，和整套设置页一致。
+     * 抽成常量而不是每次 render 新建对象：设置页不常重渲染，但常量能让
+     * 样式集中、可读，且不会在 sw/seg 里散落一长串字面量。
+     * ------------------------------------------------------------------ */
+    const SET_BRAND = 'var(--dsw-alias-label-primary)';
+    const SET_BRAND_FG = 'var(--dsw-alias-label-primary-inverted)';
+    const SET_LINE = 'var(--dsw-alias-border-l1)';
+
+    // 开关（role="switch"）的轨道样式；选中态背景由调用处按 on 决定
+    const SW_TRACK = {
+      position: 'relative',
+      display: 'inline-block',
+      flex: '0 0 auto',
+      width: '40px',
+      height: '22px',
+      padding: '0',
+      border: '0',
+      borderRadius: '11px',
+      cursor: 'pointer',
+      transition: 'background-color 0.18s ease',
+      verticalAlign: 'middle',
+    };
+    // 开关滑块（圆点）；left 由调用处按 on 决定
+    const SW_THUMB = {
+      position: 'absolute',
+      top: '2px',
+      width: '18px',
+      height: '18px',
+      borderRadius: '50%',
+      // 宿主自己的开关滑块色；写死 #fff 在深色主题下会突兀
+      background: 'var(--dsw-alias-switch-thumb, #fff)',
+      boxShadow: '0 1px 2px rgba(0,0,0,.28)',
+      transition: 'left 0.18s cubic-bezier(.32,.72,0,1)',
+    };
+    // 胶囊分段按钮的基础样式；selected 相关（底色/字色/边框）由调用处叠加
+    const SEG_BTN = {
+      appearance: 'none',
+      borderRadius: '999px',
+      padding: '4px 11px',
+      font: 'inherit',
+      fontSize: '11px',
+      lineHeight: '1.3',
+      cursor: 'pointer',
+      transition: 'background-color .14s ease, color .14s ease, border-color .14s ease',
+    };
+    const SEG_GROUP = { display: 'inline-flex', gap: '4px', flexWrap: 'wrap' };
+
 
     /**
      * 减弱动态效果：只跟随系统，不再提供设置项。
@@ -435,6 +512,36 @@ window.__ModuleLoader__.load({
       if (resolved === 'pixel') return PixelSprite(state);
       if (resolved === null) return null;
       return BigMachine(resolved, state, WASHER_STRIP_MACHINE_W, screenTime);
+    }
+
+    /**
+     * 停靠条 / 浮窗共用的那条横条。
+     *
+     * 两处原本各写一遍 `机器 + dw-text(t1/t2)` 的骨架，浮窗那份还写死了
+     * PixelSprite——用户改了皮肤浮窗纹丝不动。抽到这里后两边都走
+     * MachineStrip(skin)，皮肤真正统一；骨架只维护一份，不会再漂移。
+     *
+     * 入参：
+     *   skin     —— 当前皮肤（由调用方决定；浮窗也读得到 cfg.skin）
+     *   state    —— 状态名（喂给造型层）
+     *   dur      —— 计时/件数区文案（screenTime）
+     *   title/sub—— 两行文案
+     *   tone     —— 第一行的语义色（error/warn/ok/undefined）
+     *   label    —— aria-label 前缀（已本地化的"洗衣机"）
+     *   subHidden—— 第二行加 data-hide="compact"，窄档位下让位
+     * 结构交给调用方包根节点（dock 与 overlay 根节点不同）。
+     */
+    function StripBar(skin, state, dur, title, sub, tone, label, subHidden) {
+      return h('div', {
+        className: 'dw-strip',
+        role: 'status',
+        'aria-label': label + ': ' + title + ' · ' + sub,
+        title: label + ': ' + title + ' · ' + sub,
+      },
+      MachineStrip(skin, state, dur),
+      h('span', { className: 'dw-text' },
+        h('span', { className: 'dw-t1', 'data-tone': tone }, title),
+        h('span', { className: 'dw-t2', 'data-hide': subHidden ? 'compact' : undefined }, sub)));
     }
 
     /* 任意机型统一放进固定尺寸 + transform 缩放的框里：重排一次都不做 */
@@ -572,10 +679,11 @@ window.__ModuleLoader__.load({
       const variant = props.washerVariant === 'header' ? 'header' : 'dock';
       // useTrajectory 是宿主标准 prop，但只在 conversation 相关 slot 上稳定存在；
       // 拿不到时退回一个永远返回 undefined 的 hook（压缩态自动降级，不影响其它状态）。
+      // fallback 提到模块级常量，别每次 render 新建函数（否则每帧都是新引用）。
       const useTrajectory = typeof props.useTrajectory === 'function'
         ? props.useTrajectory
-        : () => undefined;
-      const cfg = (typeof props.washerGetConfig === 'function' ? props.washerGetConfig() : props.washerConfig) || DEFAULT_CONFIG;
+        : NO_TRAJECTORY;
+      const cfg = readConfig(props);
       // 订阅全局偏好：任何一处改了配置，这里跟着重渲染
       usePrefRevision(props);
       // 本地覆盖层：点完立刻见效，不等宿主把配置回传（避免一次往返的空档）
@@ -586,8 +694,7 @@ window.__ModuleLoader__.load({
         if (typeof props.washerSetPref === 'function') props.washerSetPref(key, value);
       }, [props.washerSetPref]);
       // 注册 slot 时传了 locale: LOCALE_NS，渲染器给的 t 已是本命名空间内的裸 key
-      const t = typeof props.t === 'function' ? props.t : (key) => key;
-      const tr = (key) => t(key);
+      const { t, tr } = useTr(props);
 
       const running = useSession((s) => s.running === true);
       const removed = useSession((s) => s.removed === true);
@@ -834,37 +941,8 @@ window.__ModuleLoader__.load({
        * 按下去却什么都不会发生——比不给焦点更让人困惑。
        * 状态信息改用 role="status" 传达，读屏会主动播报状态变化。
        */
-      const strip = h('div', {
-        className: 'dw-strip',
-        role: 'status',
-        'aria-label': tr('label.washer') + ': ' + title + ' · ' + sub,
-        title: tr('label.washer') + ': ' + title + ' · ' + sub,
-      },
-      /*
-       * 皮肤要真的生效。
-       *
-       * 删掉 M/L 展开卡时，这里跟着变成了写死的 PixelSprite——条上永远是像素小图，
-       * 用户改设置页皮肤当然一点变化没有。三台机器本来都在（BigMachine 还在），
-       * 只是没人调用它们了。
-       *
-       * 停靠条里机器只占 30px 宽，三套造型在这个尺寸下都还能认出来，
-       * 所以按 skin 直接选；老配置里的 'auto' 由 resolveSkin 兜底成 pixel。
-       */
-      /*
-       * 三档自适应靠 CSS @media 窗口宽度查询（见 style.css，别用 @container——
-       * 宿主父容器是 fit-content，容器查询会自激锁死在极简档）。
-       * 这里只管把三份信息都吐出去，由宽度决定露多少：
-       *   紧凑 —— 机器 + 状态 + 计时/件数（两行）
-       *   迷你 —— 机器 + 状态 + 计时（一行）
-       *   极简 —— 只留机器
-       *
-       * dw-dot 已删除：机器造型、水位、指示灯都在表达状态，
-       * 再挂一颗圆点是同一件事说三遍，而且窄档位里它是最先该让位的。
-       */
-      MachineStrip(mergedCfg.skin, state, dur),
-      h('span', { className: 'dw-text' },
-        h('span', { className: 'dw-t1', 'data-tone': tone }, title),
-        h('span', { className: 'dw-t2', 'data-hide': 'compact' }, sub)));
+      const strip = StripBar(
+        mergedCfg.skin, state, dur, title, sub, tone, tr('label.washer'), true);
 
       return h('div', {
         className: 'dsh-washer',
@@ -884,9 +962,8 @@ window.__ModuleLoader__.load({
      * 读路径 = 默认配置 ← 插件行 config ← localStorage 里的用户改动。
      * ------------------------------------------------------------------ */
     function WasherSettings(props) {
-      const t = typeof props.t === 'function' ? props.t : (key) => key;
-      const tr = (key) => t(key);
-      const cfg = (typeof props.washerGetConfig === 'function' ? props.washerGetConfig() : props.washerConfig) || DEFAULT_CONFIG;
+      const { t, tr } = useTr(props);
+      const cfg = readConfig(props);
       usePrefRevision(props);
       const caps = useCapabilities();
       const setPref = (key, value) => {
@@ -918,9 +995,6 @@ window.__ModuleLoader__.load({
        * 浅色主题下是 #0f1115（近黑），深色主题下自动翻成浅色。
        * 跟着它走就和整套设置页一致了。
        */
-      const BRAND = 'var(--dsw-alias-label-primary)';
-      const BRAND_FG = 'var(--dsw-alias-label-primary-inverted)';
-      const LINE = 'var(--dsw-alias-border-l1)';
       const sw = (key, on, ariaLabel) => h('button', {
         key,
         type: 'button',
@@ -929,42 +1003,18 @@ window.__ModuleLoader__.load({
         'aria-label': ariaLabel,
         className: 'dw-switch',
         'data-on': on ? '1' : '0',
-        style: {
-          position: 'relative',
-          display: 'inline-block',
-          flex: '0 0 auto',
-          width: '40px',
-          height: '22px',
-          padding: '0',
-          border: '0',
-          borderRadius: '11px',
-          background: on ? BRAND : LINE,
-          cursor: 'pointer',
-          transition: 'background-color 0.18s ease',
-          verticalAlign: 'middle',
-        },
+        style: Object.assign({}, SW_TRACK, { background: on ? SET_BRAND : SET_LINE }),
         onClick: () => setPref(key, !on),
       }, h('span', {
         'aria-hidden': 'true',
-        style: {
-          position: 'absolute',
-          top: '2px',
-          left: on ? '20px' : '2px',
-          width: '18px',
-          height: '18px',
-          borderRadius: '50%',
-          // 宿主自己的开关滑块色；写死 #fff 在深色主题下会突兀
-          background: 'var(--dsw-alias-switch-thumb, #fff)',
-          boxShadow: '0 1px 2px rgba(0,0,0,.28)',
-          transition: 'left 0.18s cubic-bezier(.32,.72,0,1)',
-        },
+        style: Object.assign({}, SW_THUMB, { left: on ? '20px' : '2px' }),
       }));
 
       /* 少数只能多选一的项（皮肤 / 初始档位）保留成"胶囊按钮"，
          同样内联样式，选中态用实心色块——跟开关拉开视觉层次。 */
       const seg = (groupLabel, options, current, onPick) => h('span', {
         className: 'dw-seg', role: 'group', 'aria-label': groupLabel,
-        style: { display: 'inline-flex', gap: '4px', flexWrap: 'wrap' },
+        style: SEG_GROUP,
       }, options.map(([value, text]) => {
         const on = String(current) === String(value);
         return h('button', {
@@ -973,21 +1023,13 @@ window.__ModuleLoader__.load({
           className: 'dw-seg-btn',
           'data-on': on ? '1' : '0',
           'aria-pressed': on ? 'true' : 'false',
-          style: {
-            appearance: 'none',
-            border: '1px solid ' + (on ? BRAND : LINE),
-            background: on ? BRAND : 'transparent',
+          style: Object.assign({}, SEG_BTN, {
+            border: '1px solid ' + (on ? SET_BRAND : SET_LINE),
+            background: on ? SET_BRAND : 'transparent',
             // 选中态底色是黑（深色主题是白），字必须反着来，不能写死 #fff
-            color: on ? BRAND_FG : 'var(--dsw-alias-label-secondary)',
-            borderRadius: '999px',
-            padding: '4px 11px',
-            font: 'inherit',
-            fontSize: '11px',
-            lineHeight: '1.3',
+            color: on ? SET_BRAND_FG : 'var(--dsw-alias-label-secondary)',
             fontWeight: on ? '600' : '400',
-            cursor: 'pointer',
-            transition: 'background-color .14s ease, color .14s ease, border-color .14s ease',
-          },
+          }),
           onClick: () => onPick(value),
         }, text);
       }));
@@ -1079,10 +1121,9 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
     function WasherOverlay(props) {
       const { useSessions, useSessionStatus } = props;
-      const cfg = (typeof props.washerGetConfig === 'function' ? props.washerGetConfig() : props.washerConfig) || DEFAULT_CONFIG;
+      const cfg = readConfig(props);
       usePrefRevision(props);
-      const t = typeof props.t === 'function' ? props.t : (key) => key;
-      const tr = (key) => t(key);
+      const { t, tr } = useTr(props);
 
       // 与宿主 DocumentTitle 同一套取法：retainedBy.mainView > 0 的那个就是当前会话
       const sessionId = useSessions((state) => {
@@ -1135,15 +1176,12 @@ window.__ModuleLoader__.load({
         'data-variant': 'overlay',
         'data-reduce-motion': reduceMotionFlag(),
       },
-      h('button', {
-        type: 'button',
-        className: 'dw-strip',
-        'aria-label': tr('label.washer') + ': ' + title + ' · ' + sub,
-      },
-      PixelSprite(state),
-      h('span', { className: 'dw-text' },
-        h('span', { className: 'dw-t1' }, title),
-        h('span', { className: 'dw-t2' }, sub))));
+      /*
+       * 浮窗用与停靠条同一个 StripBar，皮肤跟着 cfg.skin 走——
+       * 此前这里写死 PixelSprite，用户改成精密皮肤后浮窗还是像素小人。
+       * dur 传 0：浮窗不显示计时（.dw-overlay-root .dw-t2 已 display:none）。
+       */
+      StripBar(cfg.skin, state, 0, title, sub, undefined, tr('label.washer'), false));
     }
 
     /* ------------------------------------------------------------------ *

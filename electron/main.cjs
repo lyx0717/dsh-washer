@@ -132,28 +132,48 @@ const SOUNDS = {
  * 一模一样，却根本查不出来。
  * 现在改成发一次真请求：能回 200 就说明那头有个活着的宿主，pid 对不对不重要。
  *
- * 同步调用（Atomics.wait 睡的是主进程线程）：探活最多等 300ms，可以接受，
- * 换来的是调用方不用改成 async——那条链路上全是同步代码。
+ * 用本地 http.request 异步探活。做错了两件事，现在一起修：
+ *
+ *   1. 旧实现用 spawnSync 起子进程（Atomics.wait 睡的是主进程线程），
+ *      单次阻塞最多 ~1s——启动路径上探活会把主进程/GUI 冻一下。
+ *   2. 更糟的是把 port/token 用字符串拼进 `node -e` 的源码里。token 是
+ *      本地随机串，一旦哪天格式变了（或端点文件被写脏）就可能拼出可执行代码，
+ *      是典型的命令注入面。改成直接把值交给 http 请求选项，不做任何源码拼接。
  */
 const HEALTH_TIMEOUT_MS = 300;
 
 function probeHealth(info) {
-  const { spawnSync } = require('node:child_process');
-  const script = "const h=require('node:http');"
-    + `const r=h.get({host:'127.0.0.1',port:${info.port},path:'/dsh-washer/health',`
-    + `headers:{authorization:'Bearer ${info.token}'},timeout:${HEALTH_TIMEOUT_MS}},`
-    + 's=>{let b="";s.on("data",c=>{b+=c});s.on("end",()=>{process.exit(s.statusCode===200?0:1)})});'
-    + 'r.on("error",()=>process.exit(1));r.on("timeout",()=>{r.destroy();process.exit(1)});';
-  const res = spawnSync(process.execPath, ['-e', script], {
-    timeout: HEALTH_TIMEOUT_MS + 700,
-    stdio: 'ignore',
-    // 这里只是探活，不需要 Electron 的运行时
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    let req;
+    try {
+      req = require('node:http').request({
+        host: '127.0.0.1',
+        port: info.port,
+        path: '/dsh-washer/health',
+        method: 'GET',
+        headers: { authorization: `Bearer ${info.token}` },
+        timeout: HEALTH_TIMEOUT_MS,
+      }, (res) => {
+        res.on('data', () => { /* 丢弃 body，只看状态码 */ });
+        res.on('end', () => finish(res.statusCode === 200));
+        res.resume();
+      });
+      req.on('timeout', () => { req.destroy(); finish(false); });
+      req.on('error', () => finish(false));
+      req.end();
+    } catch {
+      finish(false);
+    }
   });
-  return res.status === 0;
 }
 
-function readEndpoint() {
+async function readEndpoint() {
   let info = null;
   try {
     info = JSON.parse(readFileSync(ENDPOINT_FILE, 'utf8'));
@@ -173,7 +193,7 @@ function readEndpoint() {
       if (err.code === 'ESRCH') return null;
     }
   }
-  return probeHealth(info) ? info : null;
+  return (await probeHealth(info)) ? info : null;
 }
 
 /**
@@ -189,8 +209,8 @@ function readEndpoint() {
  * 失败一律吞掉：宿主可能没起、可能退了，此时窗口本身还能用，
  * 下次宿主起来读到文件里的值也能补上。为一条同步失败弹错误框是添乱。
  */
-function notifyHost(patch) {
-  const ep = readEndpoint();
+async function notifyHost(patch) {
+  const ep = await readEndpoint();
   if (ep === null || !ep.port || !ep.token) return;
   const body = JSON.stringify(patch);
   try {
@@ -1034,9 +1054,9 @@ app.whenReady().then(() => {
   ipcMain.on('washer:set-click-through', (_event, on) => setClickThrough(on));
   ipcMain.on('washer:reduce-motion', (_event, on) => { reduceMotion = on === true; });
   ipcMain.on('washer:toggle-click-through', () => setClickThrough(!clickThrough));
-  ipcMain.handle('washer:state', () => ({
+  ipcMain.handle('washer:state', async () => ({
     clickThrough,
-    endpoint: readEndpoint(),
+    endpoint: await readEndpoint(),
     escapeAccelerator: ESCAPE_ACCELERATOR,
     size: sizeMode,
     skin,
