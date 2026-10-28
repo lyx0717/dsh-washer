@@ -233,6 +233,22 @@ globalThis.__storageDump = (k) => (STORE.has(k) ? STORE.get(k) : null);
  * 重点不是模拟 HTTP，而是能**断言发出去/收进来的内容**。
  * ------------------------------------------------------------------ */
 const FETCH_CALLS = [];
+/*
+ * /dsh-washer/stop 的可控桩（见 fetch 里那段注释）。
+ *   stopDelayGate     null 时立即 resolve；设成 true 后请求挂起，
+ *                     等用例调 __resolveStop() 才回来，好模拟"结论晚到"。
+ *   stopPayloadOverride  宿主回的 stoppedTurn（-1 表示没被按停）。
+ *   pendingStopResolvers  挂起的请求的解药队列。
+ */
+let stopDelayGate = null;
+let stopPayloadOverride = -1;
+const pendingStopResolvers = [];
+globalThis.__delayStop = (on) => { stopDelayGate = on ? true : null; };
+globalThis.__setStopPayload = (n) => { stopPayloadOverride = n; };
+globalThis.__resolveStop = () => {
+  const fns = pendingStopResolvers.splice(0);
+  for (const fn of fns) fn();
+};
 /** 下一次 GET /dsh-washer/prefs 要回什么。没设就回 {} */
 let nextPrefsPayload = {};
 /**
@@ -249,6 +265,23 @@ globalThis.fetch = (url, init) => {
   FETCH_CALLS.push({ url, method, body: init && init.body ? init.body : null });
   if (method === 'GET' && String(url).includes('/dsh-washer/capabilities')) {
     return Promise.resolve({ ok: true, json: () => Promise.resolve(capabilitiesPayload) });
+  }
+  /*
+   * /dsh-washer/stop：默认立即 resolve（表示宿主说"没被按停"）。
+   * 但真机的 fetch 是真实网络、几十毫秒才回来——测试若也立即 resolve，
+   * 就模拟不出"结论晚于第二次渲染"的竞态。所以留一个可控延迟钩子：
+   * __delayStop(true) 之后，stop 请求返回一个要手动 __resolveStop() 的 Promise，
+   * 让用例自己决定"结论什么时候到"。
+   */
+  if (method === 'GET' && String(url).includes('/dsh-washer/stop')) {
+    const stopPayload = { stoppedTurn: stopPayloadOverride };
+    if (stopDelayGate === null) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(stopPayload) });
+    }
+    return new Promise((resolve) => {
+      pendingStopResolvers.push(() =>
+        resolve({ ok: true, json: () => Promise.resolve(stopPayload) }));
+    });
   }
   const payload = method === 'GET' ? nextPrefsPayload : { ok: true };
   return Promise.resolve({
@@ -748,6 +781,64 @@ await test('正常结束 → done 保持，窗口过后回 idle（AC6）', async
   assert.ok(m.text().includes('洗完了'), 'done 要有完成文案');
   await m.settle(380);
   assert.equal(m.state, 'idle', '保持窗口过后回 idle');
+  m.unmount();
+});
+
+await test('正常结束：running 变 false 与 nodes 落地差一帧，绿勾也不能丢（回归）', async () => {
+  /*
+   * 真机上 running 变 false 与 turn-end 节点落地是两个不同的 store 更新、
+   * 差一帧，effect 会因 nodes 变化重跑一次。早先"等 fetch 回来才点绿勾"
+   * 的写法就被这次重跑的 cleanup 取消了，绿勾永远不点，dock 一直待机——
+   * 用户报的"正常完成任务 dock 显示待机"就是这个。
+   *
+   * AC6 只 set 一次（running 与 outline 同时变），模拟不出两帧，所以它
+   * 抓不到这个 bug。这里显式分两次 set，中间让微任务推进，钉住"先点绿勾"。
+   */
+  // 让 stop 请求挂起，模拟真机"网络几十毫秒才回来"
+  globalThis.__delayStop(true);
+  globalThis.__setStopPayload(-1); // 宿主说：没被按停
+  const m = mount(streaming({}));
+  await m.settle(450);
+  assert.equal(m.state, 'washing', '前置：正在洗');
+
+  // 第一帧：running 变 false（此时还没有 turn-end 节点落地），stop 请求已发出但挂着
+  m.set({ running: false, partial: null });
+  await m.settle(10);
+  assert.equal(m.state, 'done', '第一帧就该点亮绿勾，不能等宿主回复');
+
+  // 第二帧：turn-end / 节点随后落地，触发 effect 重跑（旧异步写法的 cleanup 在这里取消结论）
+  m.set({ nodes: [{ kind: 'turn-end', turn: 1 }] });
+  await m.settle(20);
+  assert.equal(m.state, 'done', '节点随后落地不能让绿勾消失');
+
+  // 现在宿主才回话（没按停）——绿勾应保持
+  globalThis.__resolveStop();
+  await m.settle(20);
+  assert.equal(m.state, 'done', '宿主说没按停，绿勾保持在 done');
+
+  globalThis.__delayStop(false);
+  m.unmount();
+});
+
+await test('用户按停：绿勾会被宿主回复撤销，回 idle 待机（回归）', async () => {
+  /*
+   * 按停也是"没错误、running 变 false"，dock 会先乐观地点绿勾；宿主随后
+   * 回 stoppedTurn === 这一轮，绿勾要被撤掉、回 idle 待机。这条钉住撤销那半。
+   */
+  globalThis.__delayStop(true);
+  globalThis.__setStopPayload(1); // 宿主说：第 1 轮被按停了
+  const m = mount(streaming({}));
+  await m.settle(450);
+
+  m.set({ running: false, partial: null, outline: [{ turn: 1, seq: 1, prompt: 'hi', response: '' }] });
+  await m.settle(10);
+  assert.equal(m.state, 'done', '先乐观点亮绿勾');
+
+  globalThis.__resolveStop();
+  await m.settle(20);
+  assert.equal(m.state, 'idle', '宿主说这轮被按停，绿勾撤销、回 idle');
+
+  globalThis.__delayStop(false);
   m.unmount();
 });
 
@@ -2279,10 +2370,23 @@ await test('dock 不能自己判断"洗完了"：必须问宿主这一轮是否�
   assert.ok(src.includes('/dsh-washer/stop'), '必须真的往这个端点问宿主的裁决');
   assert.ok(src.includes('stoppedByUser'), '要有 stoppedByUser 这个查询函数');
 
-  // 点 done 的那段里必须真的调用了 stoppedByUser，并据此分叉
-  const m = src.match(/stoppedByUser\(([^)]*)\)[\s\S]{0,400}?setSticky\(\{ kind: 'done'/);
-  assert.ok(m !== null, 'running 结束时点 done 之前必须先问 stoppedByUser');
+  /*
+   * 顺序必须是"先乐观点绿勾，再异步校正"——反过来（等 fetch 回来才点）
+   * 会踩 effect 竞态：running 变 false 与 nodes 落地差一帧，effect 重跑时
+   * cleanup 把在飞的结论丢掉，绿勾永远不点，dock 一直待机。
+   * 所以这里断言 setSticky done 出现在 stoppedByUser 调用**之前**。
+   */
+  const doneIdx = src.indexOf("setSticky({ kind: 'done'");
+  assert.ok(doneIdx !== -1, '必须有点亮绿勾的 setSticky');
+  /*
+   * 找 stoppedByUser 的**调用**，不是函数定义（定义里也含这个名字）。
+   * 调用后面紧跟 .then( —— 用这个特征定位，避开定义行。
+   */
+  const callIdx = src.search(/stoppedByUser\(sessionId, turn\)\s*\.then/);
+  assert.ok(callIdx !== -1, '要有 stoppedByUser 调用');
+  assert.ok(doneIdx < callIdx, '必须先点绿勾再问宿主；反过来会因 effect 竞态丢绿勾');
 });
+
 
 await test('状态音效：三个提醒点各一个音，不是每个状态都响', () => {
   /*

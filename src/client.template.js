@@ -694,10 +694,22 @@ window.__ModuleLoader__.load({
        * 拿不到 turn/end 的 reason（useChat legacy 只给 nodes / turnTimings /
        * turnEnds / partial / runningCalls，turnEnds 里只有 seq 没有 reason），
        * 所以只能问宿主：GET /dsh-washer/stop 回这一轮的最终裁决。
-       * 宿主说这轮是被按停的，就不点绿勾，画面自然回 idle 待机。
        *
-       * 拉取异步，失败就退回原行为（宁可偶尔点错绿勾，也不要因为一次
-       * 网络抖动让"洗完了"彻底不出现）。
+       * 关键设计：**先点绿勾，再异步校正**，不要反过来。
+       *
+       * 早先的写法是"先等 fetch 回来，宿主说不按停才点绿勾"。那个写法必踩一个
+       * React effect 竞态：正常完成时 running 变 false 与 turn-end 节点落地
+       * 往往差一帧，effect 会因 nodes 变化重跑，cleanup 把 cancelled 置真，
+       * 于是正在飞的 fetch 回来时被丢弃 —— 绿勾永远不点，dock 一直待机。
+       * 也就是说，"异步结果决定要不要 setState"这种写法，只要 effect 依赖里
+       * 有会晚一拍更新的值（nodes / outline），结论就会被自己取消掉。
+       *
+       * 现在的顺序相反：
+       *   1) 立刻点绿勾（同步，和修复前一样快、一样不会丢）；
+       *   2) 再问宿主；若宿主说"这轮是被用户按停的"，把绿勾撤掉，回待机。
+       * 撤销是**又一次 setState**，不受那次 cleanup 影响。代价只是按停时
+       * 会先闪一下绿勾（几十~几百毫秒），比一直待机或一直绿勾都好。
+       * 问不到宿主就保持绿勾（原行为），不让网络抖动把"洗完了"弄丢。
        */
       React.useEffect(() => {
         if (running === true) {
@@ -709,19 +721,17 @@ window.__ModuleLoader__.load({
           prevRunning.current = false;
           const turn = latestTurnOf(outline);
           if (findTurnError(nodes, turn) !== undefined) return undefined;
-          let cancelled = false;
+          // 1) 先乐观点亮，保证"正常完成"永远看得到绿勾
+          setSticky({ kind: 'done', turn, until: Date.now() + mergedCfg.doneHoldMs });
+          // 2) 事后校正：宿主说这轮是被按停的，就把绿勾撤掉
           stoppedByUser(sessionId, turn)
             .then((stopped) => {
-              // 组件已卸载、或用户已开新一轮：这帧的结论作废
-              if (cancelled || stopped) return;
-              setSticky({ kind: 'done', turn, until: Date.now() + mergedCfg.doneHoldMs });
+              if (!stopped) return;
+              // 只在绿勾还属于这一轮时才撤，别把用户新起的任务误伤
+              setSticky((cur) => (cur !== null && cur.kind === 'done' && cur.turn === turn ? null : cur));
             })
-            .catch(() => {
-              if (cancelled) return;
-              // 问不到宿主就按原样点绿勾，不让这个功能把"洗完了"弄丢
-              setSticky({ kind: 'done', turn, until: Date.now() + mergedCfg.doneHoldMs });
-            });
-          return () => { cancelled = true; };
+            .catch(() => { /* 问不到就保持绿勾，原行为 */ });
+          return undefined;
         }
         prevRunning.current = false;
         return undefined;
