@@ -96,6 +96,8 @@ const SSE_HEARTBEAT_MS = 25000;
 const WEB_PENDING_PATH = '/dsh-washer/pending';
 /** 平台能力探测：客户端拿不到 process.platform，只能问宿主 */
 const WEB_CAPABILITIES_PATH = '/dsh-washer/capabilities';
+/** 客户端问「这一轮是不是被用户按停的」——它拿不到 turn/end 的 reason */
+const WEB_STOP_PATH = '/dsh-washer/stop';
 /** 上报体上限。就两个字段，1KB 已经非常宽松。 */
 const PENDING_BODY_LIMIT = 1024;
 
@@ -132,6 +134,16 @@ function createSessionState() {
      * 需要一个不依赖渲染进程存活的时间点，所以存在这里。
      */
     doneUntil: 0,
+    /**
+     * 最近一次被用户自己按停的轮次号（没有则 -1）。
+     *
+     * 为什么要单独记：浏览器端的 dock 从 useChat legacy 里拿不到 turn/end
+     * 的 reason（只有 nodes / turnTimings / turnEnds / partial / runningCalls），
+     * 于是它只能靠"running 从 true 变 false 且没有错误"推断"洗完了"——
+     * 用户按停也会命中这个条件，dock 就点了个绿勾。宿主这边判得准
+     * （isUserAbort），所以把这个事实存下来，让 dock 拉一次对齐。
+     */
+    stoppedTurn: -1,
     /** 最近一次 agent/status */
     running: false,
     /**
@@ -285,6 +297,11 @@ export function setDoneHoldMs(ms) {
  * 其余（completed / blocked / max-tokens / aborted-by-user）都不算错误：
  * 用户自己按停不该报红灯。
  *
+ * 注意：aborted-by-user 返回 undefined **不代表它不用管**。它只是不是失败，
+ * 但也不是干完了——「按停」和「洗完了」是两回事，see isUserAbort()。
+ * turn/end 里必须两头都判：这里判失败（报红灯），isUserAbort 判按停（不亮绿勾）。
+ * 只判这里会漏掉按停，用户掐断任务却看到「洗完了」。
+ *
  * 早先这里根本不存在——turn-error 节点从来没人写，deriveState 里
  * `findTurnError(...) === 'error'` 那条分支在桌面端是死代码，
  * 账号登出、上下文超限、进程被中断，悬浮窗一律掉回 idle 装没事。
@@ -309,6 +326,30 @@ export function endFailureOf(reason) {
     return { code: 'INTERRUPTED', message: 'The DSH process exited before this turn finished.' };
   }
   return undefined;
+}
+
+/**
+ * 这一轮是不是被用户自己按停的。
+ *
+ * 和 endFailureOf 分开判，因为两者语义不同：按停**不是失败**（不该报红灯），
+ * 但也**不是干完了**（不该亮绿勾「洗完了」）。之前只有 endFailureOf，
+ * aborted-by-user 落在"不是失败"这边，于是 turn/end 里顺手点亮了洗完了
+ * ——用户掐断任务，洗衣机说它洗完了，这是错的。
+ *
+ * 只认 reason.kind === 'aborted'，并且不是登出那种被动中止
+ * （登出走 endFailureOf 的 ACCOUNT_SIGNED_OUT，是错误，这里不掺和）。
+ *
+ * @param {unknown} reason turn/end 的 data.reason
+ * @returns {boolean}
+ */
+export function isUserAbort(reason) {
+  if (reason === null || typeof reason !== 'object') return false;
+  if (reason.kind !== 'aborted') return false;
+  const r = reason.reason;
+  if (r && typeof r === 'object' && r.kind === 'hook' && r.reason === 'deepseek-account/signed-out') {
+    return false;
+  }
+  return true;
 }
 
 export function foldEvent(state, event, now) {
@@ -484,8 +525,17 @@ export function foldEvent(state, event, now) {
       if (failure !== undefined) {
         pushNode(state, { kind: 'turn-error', turn, code: failure.code, message: failure.message });
       }
-      // 只有这一轮没出错才亮「洗完了」——出错的轮次归 error，不能同时报完成
-      if (failure === undefined && !hasError(state.nodes)) {
+      /*
+       * 只有这一轮没出错、也不是用户按停的，才亮「洗完了」。
+       * 按停既不算失败也不算干完：不记 turn-error（不报红灯），
+       * 也不点 doneUntil（不亮绿勾），画面自然回落到 idle 待机。
+       */
+      const abortedByUser = isUserAbort(data.reason);
+      if (abortedByUser) {
+        // 记下来：浏览器端的 dock 判断不了按停，会自己点绿勾，靠这个字段对齐
+        state.stoppedTurn = turn;
+      }
+      if (failure === undefined && !abortedByUser && !hasError(state.nodes)) {
         state.doneUntil = now + (Number.isFinite(doneHoldMs) ? doneHoldMs : DEFAULT_DONE_HOLD_MS);
       }
       pushNode(state, { kind: 'turn-end', turn });
@@ -1241,6 +1291,11 @@ export function apply(ctx, config) {
         isError: t.isError,
       })),
       toolCount: toolCountOf(s.nodes, turn),
+      /*
+       * 最近被用户按停的轮次号。浏览器端 dock 拿不到 turn/end 的 reason，
+       * 靠这个字段判断"这轮是停了，不是洗完了"，不点绿勾。见 stoppedTurn 注释。
+       */
+      stoppedTurn: s.stoppedTurn,
       // 详情面板用：模型、速度、token 用量。tokenUsage 早先是恒 null，
       // 现在 assistant/message 的 usage 能填上了。
       model: s.model,
@@ -1924,6 +1979,34 @@ export function apply(ctx, config) {
         res.end(JSON.stringify(payload));
       },
     }), 'dsh-washer: capabilities route');
+
+    /*
+     * 客户端问「这一轮是不是被用户按停的」。
+     *
+     * 为什么需要：dock 跑在浏览器里，useChat legacy 只给
+     * nodes / turnTimings / turnEnds / partial / runningCalls，
+     * turnEnds 里只有 seq、没有 reason —— 判断不了"按停"和"干完了"。
+     * 宿主这边 isUserAbort() 判得准，所以客户端在 running 从 true 变 false
+     * 那一刻来问一次，拿到的是这一轮的最终裁决。
+     *
+     * 同源、无 token、GET，只回 { stoppedTurn }，不含任何会话内容。
+     */
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: WEB_STOP_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'GET') {
+          res.writeHead(405, { 'content-type': 'application/json', allow: 'GET' });
+          res.end(JSON.stringify({ error: 'method not allowed' }));
+          return;
+        }
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        const sessionId = url.searchParams.get('sessionId');
+        const s = sessionId === null ? undefined : sessions.get(sessionId);
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ stoppedTurn: s === undefined ? -1 : s.stoppedTurn }));
+      },
+    }), 'dsh-washer: stop query route');
 
   }
 

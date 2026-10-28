@@ -13,7 +13,7 @@ import { writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 
 import {
   foldEvent, encodeWsText, apply, isOwnEndpoint, speedOf, rankTools,
-  endFailureOf, writeOverlayPrefs,
+  endFailureOf, isUserAbort, writeOverlayPrefs,
 } from '../index.js';
 import { deriveState } from '../src/core.js';
 
@@ -232,11 +232,17 @@ function makeCtx() {
  * writeHead / end / destroy，照着它要的形状给就行。
  */
 function callRoute(ctx, path, method, body) {
-  const spec = ctx.routes.get(path);
-  assert.ok(spec !== undefined, `路由 ${path} 必须注册过`);
+  // path 可以带查询串（如 /dsh-washer/stop?sessionId=s1）：
+  // 路由是按 pathname 精确注册的，所以查表用去掉查询串那一段；
+  // 但 handler 里读 req.url / req.url.searchParams，所以要原样带上。
+  const queryIndex = path.indexOf('?');
+  const routeKey = queryIndex === -1 ? path : path.slice(0, queryIndex);
+  const spec = ctx.routes.get(routeKey);
+  assert.ok(spec !== undefined, `路由 ${routeKey} 必须注册过`);
   const chunks = [];
   const req = {
     method,
+    url: path,
     headers: {},
     destroy: () => {},
     on: (event, fn) => {
@@ -953,6 +959,46 @@ test('turn/end 正常完成 → 桌面端也能进 done（不再恒为 null）',
   assert.equal(at(s.doneUntil + 1), 'idle', '保持窗口过了就该回 idle');
 });
 
+test('用户手动按停：不亮「洗完了」，也不报故障', () => {
+  /*
+   * 用户按停时宿主给的是 { kind:'aborted', reason:{ kind:'user' } }。
+   * endFailureOf 按设计返回 undefined（按停不是失败，不该报红灯），
+   * 但早先 turn/end 顺手点亮了 doneUntil —— 用户掐断任务，
+   * 洗衣机却说「洗完了」。按停既不是失败也不是干完，画面该回 idle。
+   */
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('assistant/message', { turn: 1, message: { source: { model: 'm' } } }), NOW + 100);
+  foldEvent(s, ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } }), NOW + 200);
+
+  assert.equal(s.doneUntil, 0, '按停不能点亮洗完了');
+  assert.ok(
+    !s.nodes.some((n) => n.kind === 'turn-error'),
+    '按停不是故障，不能记 turn-error',
+  );
+
+  const derived = deriveState({
+    sessionId: 's1', running: false, pending: undefined, runningCalls: [],
+    partial: null, nodes: s.nodes, outline: [{ turn: 1 }], trajectory: undefined,
+    sticky: s.doneUntil > 0 ? { kind: 'done', turn: 1, until: s.doneUntil } : null, now: NOW + 300,
+  });
+  assert.equal(derived, 'idle', '按停后应回待机，不显示洗完了');
+});
+
+test('isUserAbort：只认主动按停，登出和普通错误不算', () => {
+  assert.equal(isUserAbort({ kind: 'aborted', reason: { kind: 'user' } }), true);
+  // 没带 reason 的 aborted 也算按停
+  assert.equal(isUserAbort({ kind: 'aborted' }), true);
+  // 登出是被动中止，走 endFailureOf 的红灯，不算按停
+  assert.equal(
+    isUserAbort({ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } }),
+    false,
+  );
+  assert.equal(isUserAbort({ kind: 'completed' }), false);
+  assert.equal(isUserAbort({ kind: 'error', error: { code: 'X' } }), false);
+  assert.equal(isUserAbort(null), false);
+});
+
 test('新一轮开始立刻清掉 done（转起来的机器不能还挂绿勾）', () => {
   const s = freshState();
   foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
@@ -1653,6 +1699,56 @@ test('客户端报 pending：坏请求一律拒掉，别让脏数据污染状态
 
   const notPost = await callRoute(ctx, '/dsh-washer/pending', 'GET', undefined);
   assert.notEqual(notPost.status, 200, 'GET 不该给 200');
+
+  ctx.dispose();
+});
+
+/*
+ * dock 判不了"按停"，只能问宿主。这条断言整条链路：宿主记住 stoppedTurn，
+ * 端点把它吐出来，客户端据此不点绿勾（客户端侧行为在 render 测试里查源码）。
+ */
+test('/dsh-washer/stop 回这一轮是否被用户按停，只收 GET', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } }));
+
+  // 宿主自己认为这一轮没点亮"洗完了"，而且记下了 stoppedTurn
+  assert.equal(api.snapshot().stoppedTurn, 1, '宿主应记下被按停的轮次');
+
+  const q = await callRoute(ctx, '/dsh-washer/stop?sessionId=s1', 'GET');
+  assert.equal(q.status, 200);
+  assert.equal(q.body.stoppedTurn, 1, '按停的轮次应回 1');
+
+  // 未知会话回 -1，不报错
+  const none = await callRoute(ctx, '/dsh-washer/stop?sessionId=nope', 'GET');
+  assert.equal(none.status, 200);
+  assert.equal(none.body.stoppedTurn, -1);
+
+  // 只收 GET
+  const wrong = await callRoute(ctx, '/dsh-washer/stop', 'POST', {});
+  assert.equal(wrong.status, 405);
+
+  ctx.dispose();
+});
+
+/*
+ * 正常跑完的轮次不该被算成"按停"：stoppedTurn 必须留在 -1，
+ * 否则 dock 会以为每次结束都是按停，从此再也不点绿勾。
+ */
+test('/dsh-washer/stop 正常跑完的一轮不算按停', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('turn/end', { turn: 1, reason: { kind: 'completed' } }));
+
+  assert.equal(api.snapshot().stoppedTurn, -1);
+  const q = await callRoute(ctx, '/dsh-washer/stop?sessionId=s1', 'GET');
+  assert.equal(q.body.stoppedTurn, -1, '正常结束不该被标记为按停');
 
   ctx.dispose();
 });

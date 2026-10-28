@@ -67,6 +67,28 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ *
+     * 问宿主「这一轮是不是被你按停的」
+     *
+     * dock 自己判不了：useChat legacy 只给 nodes / turnTimings / turnEnds /
+     * partial / runningCalls，turnEnds 里只有 seq、没有 turn/end 的 reason。
+     * 于是"running 从 true 变 false 且没有错误"这个条件，用户按停也会命中，
+     * dock 就点了绿勾（洗完了）。宿主的 isUserAbort() 判得准，问它一次。
+     *
+     * 同源相对路径、GET、无 token，和 /dsh-washer/pending 一个路子。
+     * 只有 running 真的从 true 变 false 时才调用一次（一次任务一次），
+     * 没有轮询、没有定时器。异常一律抛出，让调用方决定怎么兜底。
+     */
+    const STOP_PATH = '/dsh-washer/stop';
+    async function stoppedByUser(sessionId, turn) {
+      if (sessionId === undefined || sessionId === null) return false;
+      const url = STOP_PATH + '?sessionId=' + encodeURIComponent(String(sessionId));
+      const res = await fetch(url, { headers: { accept: 'application/json' } });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return typeof data === 'object' && data !== null && data.stoppedTurn === turn;
+    }
+
+    /* ------------------------------------------------------------------ *
      * 问宿主「这台机器能做什么」
      *
      * 客户端跑在浏览器里，拿不到 process.platform。音效走的是 macOS 自带的
@@ -665,21 +687,45 @@ window.__ModuleLoader__.load({
         }
       }, [motionSig]);
 
-      /* running 由 true → false 且这一轮没有错误：进入 done 保持窗口 */
+      /*
+       * running 由 true → false 且这一轮没有错误：进入 done 保持窗口。
+       *
+       * 但"没错误"不等于"干完了"——用户自己按停也是没错误。浏览器端
+       * 拿不到 turn/end 的 reason（useChat legacy 只给 nodes / turnTimings /
+       * turnEnds / partial / runningCalls，turnEnds 里只有 seq 没有 reason），
+       * 所以只能问宿主：GET /dsh-washer/stop 回这一轮的最终裁决。
+       * 宿主说这轮是被按停的，就不点绿勾，画面自然回 idle 待机。
+       *
+       * 拉取异步，失败就退回原行为（宁可偶尔点错绿勾，也不要因为一次
+       * 网络抖动让"洗完了"彻底不出现）。
+       */
       React.useEffect(() => {
         if (running === true) {
           prevRunning.current = true;
           if (sticky !== null) setSticky(null);
-          return;
+          return undefined;
         }
         if (prevRunning.current === true) {
+          prevRunning.current = false;
           const turn = latestTurnOf(outline);
-          if (findTurnError(nodes, turn) === undefined) {
-            setSticky({ kind: 'done', turn, until: Date.now() + mergedCfg.doneHoldMs });
-          }
+          if (findTurnError(nodes, turn) !== undefined) return undefined;
+          let cancelled = false;
+          stoppedByUser(sessionId, turn)
+            .then((stopped) => {
+              // 组件已卸载、或用户已开新一轮：这帧的结论作废
+              if (cancelled || stopped) return;
+              setSticky({ kind: 'done', turn, until: Date.now() + mergedCfg.doneHoldMs });
+            })
+            .catch(() => {
+              if (cancelled) return;
+              // 问不到宿主就按原样点绿勾，不让这个功能把"洗完了"弄丢
+              setSticky({ kind: 'done', turn, until: Date.now() + mergedCfg.doneHoldMs });
+            });
+          return () => { cancelled = true; };
         }
         prevRunning.current = false;
-      }, [running, mergedCfg.doneHoldMs, outline, nodes, sticky]);
+        return undefined;
+      }, [running, mergedCfg.doneHoldMs, outline, nodes, sticky, sessionId]);
 
       /* 只有「在跑」或「done 保持窗口」才走 1s 心跳；闲着时零开销 */
       const needsClock = running === true || sticky !== null;

@@ -2267,6 +2267,23 @@ await test('客户端要真的把 pending 报给宿主，而且只在变化时�
   assert.ok(!/\bpending\b(?!Kind)/.test(deps), '依赖里不能直接放 pending 对象，否则每帧都发');
 });
 
+await test('dock 不能自己判断"洗完了"：必须问宿主这一轮是否被按停', () => {
+  /*
+   * 用户按停后 dock 照点绿勾，因为浏览器端拿不到 turn/end 的 reason
+   * （useChat legacy 只给 nodes/turnTimings/turnEnds/partial/runningCalls），
+   * 只能靠"没错误"推断，于是把按停也当成干完了。宿主判得准，dock 要么
+   * 问一次，要么彻底不能自己拍板。这条钉住"问宿主"这个动作，防止有人
+   * 以后觉得慢就悄悄改回本地推断。
+   */
+  const src = readFileSync(join(root, 'client.js'), 'utf8');
+  assert.ok(src.includes('/dsh-washer/stop'), '必须真的往这个端点问宿主的裁决');
+  assert.ok(src.includes('stoppedByUser'), '要有 stoppedByUser 这个查询函数');
+
+  // 点 done 的那段里必须真的调用了 stoppedByUser，并据此分叉
+  const m = src.match(/stoppedByUser\(([^)]*)\)[\s\S]{0,400}?setSticky\(\{ kind: 'done'/);
+  assert.ok(m !== null, 'running 结束时点 done 之前必须先问 stoppedByUser');
+});
+
 await test('状态音效：三个提醒点各一个音，不是每个状态都响', () => {
   /*
    * 用户要「各种状态都有声音提示」，真按字面做会立刻被关掉：
