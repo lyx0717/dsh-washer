@@ -1796,16 +1796,19 @@ export function apply(ctx, config) {
   }
 
   /*
-   * 网页端 → 悬浮窗偏好：走宿主自己的 webServer，同源相对路径。
+   * 把「给宿主自己网页用」的 5 条 webServer 路由注册集中到一个函数。
    *
-   * 这条路由跟上面那个 127.0.0.1:随机端口 的服务不是一回事，别混：
-   *   - 上面那个：给**独立 Electron 进程**用，必须带 token（其它本机程序也连得上）
-   *   - 这条：给**宿主自己的网页**用，同源 fetch，天然只对登录态页面开放
-   *
-   * 只收 POST：GET 会被链接预取、页面预览之类的自动请求命中，
-   * 那种请求不该有副作用。
+   * 这些路由都挂在同源 webServer 上（不用端口、不用 token，天然只对登录态页面开放），
+   * 与 127.0.0.1 那个带 token 的服务无关。抽出来是为了让 apply 主体短一截、
+   * 且这些「注册即挂载」的样板能在一处读全。所需的状态/函数显式由 deps 传入，
+   * 不直接吃闭包——调用方在 apply 里传一次即可，语义等价。
    */
-  if (ctx.webServer !== undefined) {
+  function registerWebRoutes(deps) {
+    const {
+      prefClients, clientPending, sessions, schedulePush,
+      overlayLaunchErrorRef,
+    } = deps;
+    const ctx = deps.ctx;
 
     /*
      * 偏好变化推送（SSE）：设置页长连着这条，收到就重渲染。
@@ -1887,7 +1890,7 @@ export function apply(ctx, config) {
         try { patch = JSON.parse(read.value); } catch { patch = null; }
         // 走 syncOverlayPrefs：拨「显示悬浮窗」时要拉起/杀掉进程，
         // 光写文件那段代码走不到，用户看到的就是"开关没反应"
-        const saved = syncOverlayPrefs(patch);
+        const saved = deps.syncOverlayPrefs(patch);
         if (saved === null) {
           res.writeHead(400, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: 'bad request' }));
@@ -1985,7 +1988,7 @@ export function apply(ctx, config) {
           overlayReason: !overlaySupported
             ? 'platform'
             : (overlayBinary === null ? 'missing' : null),
-          overlayError: overlayLaunchError,
+          overlayError: overlayLaunchErrorRef.value,
         };
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify(payload));
@@ -2022,112 +2025,156 @@ export function apply(ctx, config) {
 
   }
 
-  // ---------- 事件订阅 ----------
-  ctx.on('session/event', (subject, event) => {
-    const sessionId = resolveSessionId(subject);
-    if (sessionId === null || !event) return;
-    currentSessionId = sessionId;
-    const state = stateFor(sessionId);
-    const before = state.nodes;
-    foldEvent(state, event, Date.now());
-    // turn/end 之后 Agent 不再忙；其余事件说明这一轮还在跑。
-    // 但重复投递（宿主重放、订阅重复）不该把已结束的轮又点成 running，
-    // 否则状态会在 idle/done 之间抖。只有真正改变了状态的事件才翻转。
-    if (event.type === 'turn/end') state.running = false;
-    else if (event.type === 'turn/start') state.running = true;
-    else if (state.running || state.nodes !== before) state.running = true;
-    schedulePush();
+  /*
+   * 网页端 → 悬浮窗偏好：走宿主自己的 webServer，同源相对路径。
+   *
+   * 这条路由跟上面那个 127.0.0.1:随机端口 的服务不是一回事，别混：
+   *   - 上面那个：给**独立 Electron 进程**用，必须带 token（其它本机程序也连得上）
+   *   - 这条：给**宿主自己的网页**用，同源 fetch，天然只对登录态页面开放
+   *
+   * 只收 POST：GET 会被链接预取、页面预览之类的自动请求命中，
+   * 那种请求不该有副作用。
+   */
+  registerWebRoutes({
+    ctx, prefClients, clientPending, sessions, schedulePush,
+    // syncOverlayPrefs 是后面才声明的 const，且 handler 是延迟执行的（请求来了才跑）。
+    // 这里不能在调用点立即求值，否则踩 TDZ；用 getter 保持原来的"用到才算"语义。
+    get syncOverlayPrefs() { return syncOverlayPrefs; },
+    overlayLaunchErrorRef: { get value() { return overlayLaunchError; } },
   });
 
   /*
-   * 会话关掉就把它的状态丢掉。
+   * 订阅宿主事件，把它们折叠进各会话的运行状态。
    *
-   * 早先 sessions 只 set 不 delete：每开过一个会话就永久留一份
-   * createSessionState()（含最近 200 条节点、token 采样、最多 50 轮计时）。
-   * 一天开几十个会话，几天下来内存单调增长，而且没有任何东西会回收它。
-   *
-   * 不接这个事件也不会崩（地图上限就那么点），但接了才是对的：
-   * 会话生命周期结束，它攒的那一份状态就没有读者了。
+   * 这些 ctx.on 订阅是 apply 的「输入侧」：session/event 折叠节点、session/disposed 回收、
+   * agent/status 同步 running、两条 pending 请求各记一笔。集中成一处便于通读，
+   * 所需状态由 deps 显式传入（currentSessionId / pinnedSessionId 是可变的，走 setter）。
    */
-  ctx.on('session/disposed', (session) => {
-    const sessionId = resolveSessionId(session);
-    if (sessionId === null) return;
-    sessions.delete(sessionId);
-    if (currentSessionId === sessionId) currentSessionId = null;
-    // 钉住的会话没了就自动放开，否则 viewSessionId 会一直回退到跟随，
-    // 但 UI 上还显示着"已钉住"——那是在骗人。
-    if (pinnedSessionId === sessionId) pinnedSessionId = null;
-    schedulePush();
-  });
+  function subscribeEvents(deps) {
+    const {
+      ctx, sessions, schedulePush, resolveSessionId, stateFor, foldEvent,
+      pendingApprovals, sessionState,
+    } = deps;
 
-  ctx.on('agent/status', (payload) => {
-    const status = payload && payload.status;
-    const agent = payload && payload.agent;
-    const sessionId = resolveSessionId(agent && agent.session ? agent.session : agent);
-    if (sessionId === null) return;
-    currentSessionId = sessionId;
-    const state = stateFor(sessionId);
-    state.running = status === 'running';
-    schedulePush();
-  });
-
-  /*
-   * 「在等你」这件事有**两条**独立的事件，别只接一条。
-   *
-   * 网页端从 `useSessionStatus().pendingInteraction` 就能知道在等用户，
-   * 但那是**客户端** uiSession 的投影：客户端插件分别靠
-   * `ctx.remote.$on('approval/request')` 和 `ctx.remote.$on('user-questions/request')`
-   * 拦截到请求才有值。Host 侧没有那个投影，浮窗这一路原本写死
-   * `pending: undefined`，最该提醒的时刻反而不提醒。
-   *
-   * 两条的语义不一样，用户都要看到：
-   *   approval/request       —— 工具授权，批不批
-   *   user-questions/request —— ask_user_question 在向你提问
-   *
-   * 只接审批那条的话，模型一提问，浮窗就会显示"漂洗中"继续转，
-   * 而网页端明明停在"等你确认"——两边打架。
-   *
-   * 两条都是 **waterfall**：必须把 `next()` 的结果原样返回，
-   * 否则审批/提问链在这里断掉，整个会话卡死。所以我们只做观察，不做决策。
-   *
-   * 生命周期：请求进来记一条，promise settle（回答/批准/拒绝/取消/中断都算）
-   * 就删掉。用计数而不是布尔，是因为同一会话可能同时挂着多个。
-   */
-  function bumpPending(sessionId, delta) {
-    const next = (pendingApprovals.get(sessionId) || 0) + delta;
-    if (next <= 0) pendingApprovals.delete(sessionId);
-    else pendingApprovals.set(sessionId, next);
-    schedulePush();
-  }
-
-  /**
-   * 挂一个只观察、不干预的 waterfall 监听。
-   *
-   * 两条事件的结构一致（请求对象上都带 `agent`，见宿主里
-   * `{...request, agent}` 的构造），所以共用这一段。
-   */
-  function watchPendingRequest(eventName) {
-    ctx.on(eventName, (request, next) => {
-      const sessionId = resolveSessionId(request && request.agent && request.agent.session)
-        ?? resolveSessionId(request && request.agent && request.agent.id)
-        ?? resolveSessionId(request && request.agent)
-        ?? currentSessionId;
-      if (sessionId === null) return next();
-      bumpPending(sessionId, 1);
-      let result;
-      try {
-        result = next();
-      } catch (error) {
-        bumpPending(sessionId, -1);
-        throw error;
-      }
-      // next() 正常会返回 promise；万一返回同步值也要收尾，不能少减一次
-      return Promise.resolve(result).finally(() => bumpPending(sessionId, -1));
+    // ---------- 事件订阅 ----------
+    ctx.on('session/event', (subject, event) => {
+      const sessionId = resolveSessionId(subject);
+      if (sessionId === null || !event) return;
+      sessionState.currentId = sessionId;
+      const state = stateFor(sessionId);
+      const before = state.nodes;
+      foldEvent(state, event, Date.now());
+      // turn/end 之后 Agent 不再忙；其余事件说明这一轮还在跑。
+      // 但重复投递（宿主重放、订阅重复）不该把已结束的轮又点成 running，
+      // 否则状态会在 idle/done 之间抖。只有真正改变了状态的事件才翻转。
+      if (event.type === 'turn/end') state.running = false;
+      else if (event.type === 'turn/start') state.running = true;
+      else if (state.running || state.nodes !== before) state.running = true;
+      schedulePush();
     });
+
+    /*
+     * 会话关掉就把它的状态丢掉。
+     *
+     * 早先 sessions 只 set 不 delete：每开过一个会话就永久留一份
+     * createSessionState()（含最近 200 条节点、token 采样、最多 50 轮计时）。
+     * 一天开几十个会话，几天下来内存单调增长，而且没有任何东西会回收它。
+     *
+     * 不接这个事件也不会崩（地图上限就那么点），但接了才是对的：
+     * 会话生命周期结束，它攒的那一份状态就没有读者了。
+     */
+    ctx.on('session/disposed', (session) => {
+      const sessionId = resolveSessionId(session);
+      if (sessionId === null) return;
+      sessions.delete(sessionId);
+      if (sessionState.currentId === sessionId) sessionState.currentId = null;
+      // 钉住的会话没了就自动放开，否则 viewSessionId 会一直回退到跟随，
+      // 但 UI 上还显示着"已钉住"——那是在骗人。
+      if (sessionState.pinnedId === sessionId) sessionState.pinnedId = null;
+      schedulePush();
+    });
+
+    ctx.on('agent/status', (payload) => {
+      const status = payload && payload.status;
+      const agent = payload && payload.agent;
+      const sessionId = resolveSessionId(agent && agent.session ? agent.session : agent);
+      if (sessionId === null) return;
+      sessionState.currentId = sessionId;
+      const state = stateFor(sessionId);
+      state.running = status === 'running';
+      schedulePush();
+    });
+
+    /*
+     * 「在等你」这件事有**两条**独立的事件，别只接一条。
+     *
+     * 网页端从 `useSessionStatus().pendingInteraction` 就能知道在等用户，
+     * 但那是**客户端** uiSession 的投影：客户端插件分别靠
+     * `ctx.remote.$on('approval/request')` 和 `ctx.remote.$on('user-questions/request')`
+     * 拦截到请求才有值。Host 侧没有那个投影，浮窗这一路原本写死
+     * `pending: undefined`，最该提醒的时刻反而不提醒。
+     *
+     * 两条的语义不一样，用户都要看到：
+     *   approval/request       —— 工具授权，批不批
+     *   user-questions/request —— ask_user_question 在向你提问
+     *
+     * 只接审批那条的话，模型一提问，浮窗就会显示"漂洗中"继续转，
+     * 而网页端明明停在"等你确认"——两边打架。
+     *
+     * 两条都是 **waterfall**：必须把 `next()` 的结果原样返回，
+     * 否则审批/提问链在这里断掉，整个会话卡死。所以我们只做观察，不做决策。
+     *
+     * 生命周期：请求进来记一条，promise settle（回答/批准/拒绝/取消/中断都算）
+     * 就删掉。用计数而不是布尔，是因为同一会话可能同时挂着多个。
+     */
+    function bumpPending(sessionId, delta) {
+      const next = (pendingApprovals.get(sessionId) || 0) + delta;
+      if (next <= 0) pendingApprovals.delete(sessionId);
+      else pendingApprovals.set(sessionId, next);
+      schedulePush();
+    }
+
+    /**
+     * 挂一个只观察、不干预的 waterfall 监听。
+     *
+     * 两条事件的结构一致（请求对象上都带 `agent`，见宿主里
+     * `{...request, agent}` 的构造），所以共用这一段。
+     */
+    function watchPendingRequest(eventName) {
+      ctx.on(eventName, (request, next) => {
+        const sessionId = resolveSessionId(request && request.agent && request.agent.session)
+          ?? resolveSessionId(request && request.agent && request.agent.id)
+          ?? resolveSessionId(request && request.agent)
+          ?? sessionState.currentId;
+        if (sessionId === null) return next();
+        bumpPending(sessionId, 1);
+        let result;
+        try {
+          result = next();
+        } catch (error) {
+          bumpPending(sessionId, -1);
+          throw error;
+        }
+        // next() 正常会返回 promise；万一返回同步值也要收尾，不能少减一次
+        return Promise.resolve(result).finally(() => bumpPending(sessionId, -1));
+      });
+    }
+
+    watchPendingRequest('approval/request');
+    watchPendingRequest('user-questions/request');
   }
 
-  watchPendingRequest('approval/request');
-  watchPendingRequest('user-questions/request');
+  subscribeEvents({
+    ctx, sessions, schedulePush, resolveSessionId, stateFor, foldEvent, pendingApprovals,
+    // currentSessionId / pinnedSessionId 是 apply 里可变的 let，事件回调要读也要写，
+    // 传给 subscribeEvents 的必须能回写原变量，故用带 get/set 的存取器对象。
+    sessionState: {
+      get currentId() { return currentSessionId; },
+      set currentId(v) { currentSessionId = v; },
+      get pinnedId() { return pinnedSessionId; },
+      set pinnedId(v) { pinnedSessionId = v; },
+    },
+  });
 
 
   // 卸载：先断连接再关端口，顺序反了会让已连的悬浮窗挂在半开状态
