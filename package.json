@@ -63,7 +63,7 @@
   ],
   "scripts": {
     "build": "node build.mjs && node build-float.mjs",
-    "test": "node --test --test-force-exit test/core.test.mjs test/host.test.mjs test/build.test.mjs",
+    "test": "node --test --test-force-exit test/core.test.mjs test/host.test.mjs test/build.test.mjs test/market.test.mjs",
     "prepublishOnly": "npm run build && npm test"
   },
   "dsh": {

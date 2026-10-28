@@ -6,23 +6,26 @@
  * 线上市场就会指向旧版本——这是最容易漏的一步。这里在 push 前拦一道。
  *
  * 做法（保守，不偷偷改提交）：
- *   1. 用当前 HEAD / package.json 版本在内存里算出一份「应该长什么样」的索引；
- *   2. 和已提交的 docs/index.json 比对；
- *   3. 不一致 → 自动把它重写到工作区，并**中止本次 push**，提示你 review + commit；
- *   4. 一致 → 放行。
+ *   1. 以已提交的索引为底，只把 version / commit 改成「现在应该长的样子」；
+ *   2. 和已提交的 docs/index.json 比对，一致 → 放行；
+ *   3. 版本**没变**但代码改过（没发版的改动）→ 只拦不改，提示升版本或 --no-verify；
+ *      索引仍钉已发布的那个提交，因为它说的是「线上这版是从哪份代码出的」；
+ *   4. 版本变了（真发版）→ 自动把它重写到工作区，并**中止本次 push**，
+ *      提示你 review + commit。
+ *
+ * 为什么是「打补丁」而不是「重新生成」：重新生成会用自己的文案覆盖已发布的
+ * 市场文案，旧版本还少了 metadata.keywords，结果每推一次非发版提交，
+ * 线上索引就被降级一次。文案与 keywords 的唯一来源在 scripts/market-index.mjs，
+ * 这里不再各写一份。
  *
  * 只读 git / package.json，重写仅限 docs/index.json，绝不自动 commit。
  * 逃生：git push --no-verify
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const INDEX_PATH = join(ROOT, 'docs', 'index.json');
-const PKG_PATH = join(ROOT, 'package.json');
-const ICON_PATH = join(ROOT, 'icon.svg');
+import {
+  INDEX_PATH, ROOT, buildIndex, fingerprint, headCommit, patchIndex, readPackage,
+} from './market-index.mjs';
 
 // 只在推送 main 时检查索引（推别的分支无所谓）
 const refs = readFileSync(0).toString().trim().split('\n').filter(Boolean);
@@ -33,50 +36,10 @@ const pushesMain = refs.some((line) => {
 });
 if (!pushesMain) process.exit(0);
 
-const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'));
-const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT }).toString().trim();
+const pkg = readPackage();
+const commit = headCommit();
 const version = pkg.version;
 
-function buildIndex(publishTimestamp) {
-  const svg = readFileSync(ICON_PATH, 'utf8').replace(/\s+/g, ' ').trim();
-  const icon = 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
-  return {
-    format: 1,
-    title: { en: 'Dogdan plugins', zh: '狗蛋儿的插件' },
-    plugins: [
-      {
-        name: pkg.name,
-        title: { en: 'Washer · Agent status machine', zh: '滚筒洗衣机' },
-        description: {
-          en: 'Show what the Agent is doing as a front-loading washing machine: wash = streaming, rinse = tool running, spin = wrapping up, pause = waiting for your approval.',
-          zh: '用一台滚筒洗衣机的运转状态实时显示 Agent 在干什么：洗涤=出字、漂洗=工具在跑、脱水=收尾、暂停=等你批准。',
-        },
-        icon,
-        author: '李永轩',
-        homepage: 'https://github.com/lyx0717/dsh-washer#readme',
-        repository: { url: 'https://github.com/lyx0717/dsh-washer' },
-        versions: [
-          {
-            version,
-            publishTimestamp: 0, // 比对时忽略
-            source: { type: 'git', url: 'https://github.com/lyx0717/dsh-washer', commit },
-          },
-        ],
-      },
-    ],
-  };
-}
-
-// 与 docs/index.json 做「实质相等」比较：忽略 publishTimestamp（时间戳每次都变）
-function fingerprint(idx) {
-  const clone = JSON.parse(JSON.stringify(idx));
-  for (const p of clone.plugins || []) {
-    for (const v of p.versions || []) delete v.publishTimestamp;
-  }
-  return JSON.stringify(clone);
-}
-
-const want = buildIndex(0);
 let current = null;
 if (existsSync(INDEX_PATH)) {
   try {
@@ -85,6 +48,11 @@ if (existsSync(INDEX_PATH)) {
     current = null;
   }
 }
+
+const nowSec = Math.floor(Date.now() / 1000);
+const want = current
+  ? patchIndex(current, { name: pkg.name, version, commit, publishTimestamp: nowSec })
+  : buildIndex({ name: pkg.name, version, commit, publishTimestamp: nowSec });
 
 // 索引可以钉在 HEAD 本身，也可以钉在 HEAD 之前的某个「代码提交」上——
 // 因为刷新索引那次提交只改 docs/index.json，不该逼着索引再指回它自己（会死循环）。
@@ -130,32 +98,44 @@ if (current && fingerprint(current) === fingerprint(want)) {
   process.exit(0);
 }
 
-if (current) {
-  const v = current?.plugins?.[0]?.versions?.[0];
-  const idxCommit = v?.source?.commit;
-  const idxVer = v?.version;
-  if (
-    idxVer === version &&
-    idxCommit &&
-    /^[0-9a-f]{40}$/.test(idxCommit) &&
-    isCommitAncestor(idxCommit) &&
-    !codeChangedSince(idxCommit)
-  ) {
-    // 版本对、索引 commit 在当前历史里、且自那以后代码没变：放行。
-    // （常见于「只提交了 docs/index.json 刷新」之后的这次 push）
-    process.exit(0);
-  }
+const curVer = current?.plugins?.[0]?.versions?.[0];
+const idxCommit = curVer?.source?.commit;
+const idxVer = curVer?.version;
+const idxOk = Boolean(
+  idxVer === version && idxCommit && /^[0-9a-f]{40}$/.test(idxCommit) && isCommitAncestor(idxCommit),
+);
+
+// 放行：索引钉的 commit 在当前历史里，且自那以后代码没动过。
+// （常见于「只提交了 docs/index.json 刷新」之后的这次 push）
+if (idxOk && !codeChangedSince(idxCommit)) process.exit(0);
+
+/*
+ * 版本没变、但代码在索引 commit 之后改过：这次是**没发版的改动**（重构、修文档夹带的代码）。
+ *
+ * 这种情况下索引不该跟着动——它钉的是「已发布的 0.7.3 是从哪份代码出的」，
+ * 现在 npm 上那份 tarball 就是 commit 3ff3ae1 的内容，把它改指到后面的重构提交
+ * 是在谎报来源。所以这里只拦不改：要发新版本就升版本号 + 刷索引；
+ * 纯重构就显式跳过这道检查。
+ */
+if (idxOk && codeChangedSince(idxCommit)) {
+  console.error('');
+  console.error('✗ 代码在索引 commit 之后改过，但版本还是 ' + version + '（没有发版）。');
+  console.error(`   索引钉的发布提交 : ${String(idxCommit).slice(0, 7)} / ${idxVer}`);
+  console.error(`   当前 HEAD        : ${commit.slice(0, 7)} / ${version}`);
+  console.error('');
+  console.error('   索引保持不动是对的（线上 ' + version + ' 就是从那个提交发出去的）。');
+  console.error('   · 要发新版本：升 package.json 版本 + node scripts/refresh-market.mjs，提交后再推；');
+  console.error('   · 只是重构/修文档：git push --no-verify');
+  console.error('');
+  process.exit(1);
 }
 
-// 不一致：重写到工作区（保留一个真实时间戳），并中止 push
-const next = buildIndex(Math.floor(Date.now() / 1000));
-writeFileSync(INDEX_PATH, JSON.stringify(next, null, 2) + '\n');
+// 版本对不上（或索引缺失/commit 不在历史里）：重写到工作区，并中止 push
+writeFileSync(INDEX_PATH, JSON.stringify(want, null, 2) + '\n');
 
-const curVer = current?.plugins?.[0]?.versions?.[0];
-const curCommit = curVer?.source?.commit || '(无)';
 console.error('');
 console.error('✗ 市场索引与当前 HEAD 不一致，已自动重写 docs/index.json 并中止 push。');
-console.error(`   索引版本/commit : ${curVer?.version || '(无)'} / ${String(curCommit).slice(0, 7)}`);
+console.error(`   索引版本/commit : ${idxVer || '(无)'} / ${String(idxCommit || '(无)').slice(0, 7)}`);
 console.error(`   当前 HEAD/版本  : ${commit.slice(0, 7)} / ${version}`);
 console.error('');
 console.error('   请检查后提交再推：');
