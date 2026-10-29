@@ -713,6 +713,12 @@
     --dw-sig-err: #f26064;
     --dw-sig-ok: #3fbf7a;
     --dw-sig-off: #4c5762;
+    /* 立体投影：浮窗的机身同样被缩到 64/112px，机身内的影子会一起缩没，
+       所以阴影由缩放框按屏幕像素补（规则在 skin-precision.css） */
+    --dw-frame-halo: rgba(0, 0, 0, 0.55);
+    --dw-frame-drop: rgba(0, 0, 0, 0.5);
+    --dw-frame-edge-hi: rgba(255, 255, 255, 0.22);
+    --dw-frame-edge-lo: rgba(0, 0, 0, 0.45);
   }
   /* ---------- 状态光：整机被状态色"照亮" ---------- */
   /*

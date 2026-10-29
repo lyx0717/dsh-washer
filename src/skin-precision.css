@@ -233,3 +233,39 @@
   50%{transform:translate3d(.5px,.3px,0)}
   75%{transform:translate3d(-.3px,.5px,0)}
   100%{transform:translate3d(0,0,0)}}
+
+/* ------------------------------------------------------------------ *
+ * 立体感：缩放框上的投影与倒角
+ *
+ * 为什么写在缩放框（.dw-frame）上，而不是机身里：
+ * 两套造型都是按宽度 transform:scale() 缩的——停靠条 32px、极简浮窗
+ * 64px、正常浮窗 112px。画在机身里、按 300px 定的影子会跟着一起缩，
+ * 32px 档只剩零点几像素的模糊，等于没有；白机身贴在白底上就只剩一个
+ * 玻璃圆。.dw-frame 在缩放外面，这里的 px 就是屏幕 px，缩多小都不掉。
+ *
+ * 不限定皮肤：像素造型同样被缩到 32px，那条深色描边也是按 256px 画的，
+ * 缩完一样虚。两套造型都吃这层，谁也躲不开"和背景同色"。
+ * ------------------------------------------------------------------ */
+.dw-frame {
+  /* 两层：贴边那圈跟着轮廓走，把剪影从底色里勾出来；
+     下面那层是接地投影，让机器看着是坐在台面上而不是浮着。 */
+  filter:
+    drop-shadow(0 0 1.5px var(--dw-frame-halo))
+    drop-shadow(0 2px 4px var(--dw-frame-drop));
+}
+.dw-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  /* 圆角走百分比：机身圆角是相对 330px 宽定的，这里按框算，
+     32px 档自动落到 2.3px，不会给机器凭空加一个大圆角。 */
+  border-radius: 7.3% / 5.9%;
+  /* 光从左上：顶边和左边提亮、底边和右边压暗，机身从一张贴纸变成实体 */
+  box-shadow:
+    inset 0 1.5px 0 var(--dw-frame-edge-hi),
+    inset 1.5px 0 0 var(--dw-frame-edge-hi),
+    inset 0 -1.5px 2px var(--dw-frame-edge-lo),
+    inset -1.5px 0 1px var(--dw-frame-edge-lo);
+}
