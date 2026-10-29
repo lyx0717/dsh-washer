@@ -582,12 +582,32 @@
     0%, 100% { opacity: .18; transform: scale(.86); }
     50%      { opacity: .5;  transform: scale(1.06); }
   }
+  /*
+     极简档洗完没有横幅也没有气泡，只剩一圈静态绿光——余光里分不出来。
+     让它闪两下：亮起、落回、再亮起，然后停在常态亮度上。
+     首尾必须等于常态光晕值，否则动画一结束画面会跳一下。
+     亮靠提亮、不靠放大：机器离窗口左右边只剩约 5px，半径一过 5px
+     光晕就顶到边界被切出一条硬线（实测 9px 时四边全贴死、整圈削平）。
+     所以峰值半径只到 4.5px，把"闪"交给透明度 .45 → .95 去做。
+   */
+  @keyframes tiny-done-flash {
+    0%, 100% { filter: drop-shadow(0 0 3.5px rgba(46, 224, 106, .45)); }
+    18%      { filter: drop-shadow(0 0 4.5px rgba(46, 224, 106, .95)); }
+    38%      { filter: drop-shadow(0 0 3.5px rgba(46, 224, 106, .45)); }
+    58%      { filter: drop-shadow(0 0 4.5px rgba(46, 224, 106, .95)); }
+  }
 
   /* ---------- 尺寸档位 ---------- */
   /* 正常态：132x200，机器 + 气泡 */
   body[data-size="normal"] .wrap { width: 132px; height: 200px; }
   /* 极简态：76x96，只剩机器和角上的指示灯，气泡整个不占位 */
   body[data-size="tiny"] .wrap { width: 76px; height: 96px; }
+  /*
+     .wrap 底部那 8px 是给气泡投影留的，极简档气泡高度塌成 0、根本不投影，
+     这 8px 全是白扔。留 2px 收边，腾出的 6px 挪到机器头顶——
+     机器顶距从 4px 变 10px，按比例缩小的光晕才不会被窗口上沿切平。
+   */
+  body[data-size="tiny"] .wrap { padding-bottom: 2px; }
   body[data-size="tiny"] .washer { width: 64px; height: 78px; }
   /*
      极简态气泡不占位。但不能直接 display:none —— 那样没有过渡，
@@ -602,7 +622,7 @@
     overflow: hidden;
     pointer-events: none;
   }
-  /* 极简态没有气泡，状态全靠机器自己的指示灯表达，给它加点辉光 */
+  /* 极简态没有气泡，指示灯要自己发光；整机那圈状态光见下面"状态光"一节 */
 
 
   /* ---------- 状态灯 ---------- */
@@ -723,7 +743,41 @@
   /* 待机不要发光，静就得真的静 */
   .machine[data-state="idle"] > .skin-host,
   .machine[data-state="off"] > .skin-host { filter: none; }
-  body[data-size="tiny"] .machine > .skin-host { filter: none; }
+  /*
+     极简档也要发光，只是按机器尺寸同比缩小。
+     正常档机器宽 112px、半径 6~8px；极简档机器只有 64px，
+     半径照搬的话 8px 光晕裹着 64px 的机器，看着像一团雾不像一台机在发亮。
+     64/112 ≈ 0.571，取 3.5~4.5px。
+     这块以前是 `filter: none`，注释理由是"状态全靠机器自己的指示灯表达"——
+     实际效果是远看分不出在等确认还是在故障，只剩一颗 4px 的小灯在闪。
+   */
+  body[data-size="tiny"] .machine[data-state="starting"] > .skin-host,
+  body[data-size="tiny"] .machine[data-state="washing"] > .skin-host,
+  body[data-size="tiny"] .machine[data-state="rinsing"] > .skin-host,
+  body[data-size="tiny"] .machine[data-state="spinning"] > .skin-host,
+  body[data-size="tiny"] .machine[data-state="draining"] > .skin-host {
+    filter: drop-shadow(0 0 4px rgba(58, 160, 255, .55));
+  }
+  body[data-size="tiny"] .machine[data-state="waiting"] > .skin-host {
+    filter: drop-shadow(0 0 4px rgba(245, 185, 58, .5));
+  }
+  body[data-size="tiny"] .machine[data-state="error"] > .skin-host {
+    filter: drop-shadow(0 0 4.5px rgba(229, 72, 77, .6));
+  }
+  body[data-size="tiny"] .machine[data-state="done"] > .skin-host {
+    filter: drop-shadow(0 0 3.5px rgba(46, 224, 106, .45));
+    animation: tiny-done-flash 1.8s ease-out 1 both;
+  }
+  /*
+     吸气(pop)和洗完闪光都要写 animation，而 animation 是同一个属性，
+     两条规则只会互相覆盖、不会叠加。同时命中时合并成一条，否则洗完那一下
+     要么不吸气、要么不闪。
+   */
+  body[data-size="tiny"] .machine[data-state="done"][data-pop="1"] > .skin-host {
+    animation: pop .24s cubic-bezier(.34, 1.56, .64, 1), tiny-done-flash 1.8s ease-out 1 both;
+  }
+  body[data-size="tiny"] .machine[data-state="idle"] > .skin-host,
+  body[data-size="tiny"] .machine[data-state="off"] > .skin-host { filter: none; }
 
   /* ---------- 减弱动态 / 不可见时暂停 ---------- */
   /*
@@ -732,7 +786,12 @@
    * 浮窗是另一个页面，样式表不通。
    */
   @media (prefers-reduced-motion: reduce) {
-    .machine, .machine[data-pop="1"], .props > * { animation: none !important; }
+    /*
+       `.machine[data-pop="1"]` 写的是机器自己，可 pop 动画挂在
+       `.machine[data-pop="1"] > .skin-host` 上——这条以前其实没关掉它。
+       洗完的闪光同理，也挂在 .skin-host 上，一起在这里关。
+    */
+    .machine, .machine > .skin-host, .props > * { animation: none !important; }
     .machine[data-state="waiting"] .props .p-q,
     .machine[data-state="error"] .props .p-bolt,
     .machine[data-state="done"] .props .p-stars,

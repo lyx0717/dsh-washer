@@ -2337,8 +2337,10 @@ await test('浮窗明暗：透明背景（rgba alpha=0）不算黑，落到 toke
 /* ---------- 最终汇总 ---------- *
  * 必须放在文件最末：CSS_TEXT 与截图之后还追加了几条用例，
  * 提前 process.exit 会让它们"没跑却显示通过"。
+ *
+ * finalFailed 也必须在最末现算。它曾经写在文件中间，是 results 的一份快照——
+ * 之后追加的用例即使失败，退出码照样是 0，看起来全绿。
  */
-const finalFailed = results.filter((r) => !r.ok);
 await test('客户端要真的把 pending 报给宿主，而且只在变化时报', () => {
   /*
    * 悬浮窗的 pending 是自己推断的，dock 手上那份 pendingInteraction 才是
@@ -2616,6 +2618,136 @@ await test('悬浮窗：气泡有描边和投影，白底上分得清边界', ()
   assert.ok(!/\b(1[0-9]|[2-9][0-9])px rgba\(0, 0, 0/.test(body), '投影模糊半径不许超过一位数，否则糊成灰雾');
 });
 
+/* 把一段 CSS 拆成 {selector, body} 规则表。
+   只用在没有嵌套的花括号（不含 @media / @keyframes 的片段）上，
+   所以这里不实现完整解析器——够用就停。 */
+function cssRuleList(css) {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const out = [];
+  for (const chunk of clean.split('}')) {
+    const brace = chunk.indexOf('{');
+    if (brace === -1) continue;
+    out.push({
+      selector: chunk.slice(0, brace).replace(/\s+/g, ' ').trim(),
+      body: chunk.slice(brace + 1).replace(/\s+/g, ' ').trim(),
+    });
+  }
+  return out;
+}
+
+await test('极简窗：状态光晕按机器尺寸缩小，不是整层关掉', () => {
+  /*
+   * 用户原话：「悬浮窗的极简窗增加周围光效和确认状态等效果，和正常窗一样」。
+   *
+   * 改之前是一条 `body[data-size="tiny"] .machine > .skin-host { filter: none }`
+   * 把所有状态光一次关掉，理由是"状态全靠机器自己的指示灯表达"。
+   * 实际效果：极简档只剩一颗 4px 指示灯在闪，远看分不出是在等确认还是出了故障——
+   * 而这恰恰是浮窗存在的两个理由。
+   *
+   * 但不能直接复用正常档的 6~8px：极简档机器只有 64px 宽（正常档 112px），
+   * 半径照搬会糊成一团雾。按 64/112 ≈ 0.571 缩到 3.5~4.5px。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+
+  const start = html.indexOf('body[data-size="tiny"] .machine[data-state="starting"]');
+  assert.ok(start > 0, '找不到极简档的光晕规则块');
+  const end = html.indexOf('/* ---------- 减弱动态', start);
+  const tinyRules = cssRuleList(html.slice(start, end))
+    .filter((r) => r.selector.includes('body[data-size="tiny"]') && r.selector.includes('.skin-host'));
+
+  // 八个需要人看一眼的状态，各自都要有光
+  for (const s of ['starting', 'washing', 'rinsing', 'spinning', 'draining', 'waiting', 'error', 'done']) {
+    const rule = tinyRules.find((r) => r.selector.includes('data-state="' + s + '"') && /filter: drop-shadow/.test(r.body));
+    assert.ok(rule !== undefined, '极简档 ' + s + ' 必须有状态光晕');
+  }
+
+  // 半径必须真的比正常档小
+  const radii = tinyRules
+    .flatMap((r) => [...r.body.matchAll(/drop-shadow\(0 0 (\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1])));
+  // 五个运行态共用一条规则，所以是 4 条规则、每条一个半径
+  assert.ok(radii.length >= 4, '光晕规则都要写出半径，实际 ' + radii.length);
+  assert.ok(Math.max(...radii) < 7, '极简档光晕半径上限必须小于正常档的 7~8px，实际 ' + Math.max(...radii));
+
+  // 待机和熄屏仍然要黑着，静就得真的静
+  for (const s of ['idle', 'off']) {
+    const rule = tinyRules.find((r) => r.selector.includes('data-state="' + s + '"'));
+    assert.ok(rule !== undefined, '极简档 ' + s + ' 要有显式规则');
+    assert.ok(/filter: none/.test(rule.body), '极简档 ' + s + ' 不许发光');
+  }
+
+  // 旧的"一刀关掉"规则必须消失，否则上面的规则再全也没用
+  assert.ok(
+    !/body\[data-size="tiny"\] \.machine > \.skin-host \{[^}]*filter: none/.test(html.replace(/\s+/g, ' ')),
+    '不许再有"极简档一律不发光"的一刀切规则',
+  );
+
+  /*
+   * 光晕要放得下：.wrap 底部那 8px 原本是给气泡投影留的，
+   * 极简档气泡高度塌成 0、根本不投影，这 8px 全是白扔。
+   * 留 2px 收边，腾出的 6px 挪到机器头顶（实测机器顶距 4px → 10px），
+   * 3.5~4.5px 的光晕才不会被窗口上沿切平。
+   */
+  const wrapRule = cssRuleList(html).find(
+    (r) => r.selector === 'body[data-size="tiny"] .wrap' && /padding-bottom/.test(r.body),
+  );
+  assert.ok(wrapRule !== undefined, '极简档要单独给 .wrap 收底部留白');
+  assert.ok(/padding-bottom: 2px/.test(wrapRule.body), '极简档底部只留 2px，其余让给头顶');
+});
+
+await test('极简窗：洗完绿光晕闪两下，减弱动态时不许漏', () => {
+  /*
+   * 极简档没有完成横幅、没有气泡文字，洗完只剩一圈静态绿光——
+   * 余光里根本分不出来。让它闪两下，补上"洗完了"这件事。
+   *
+   * 两个坑：
+   * 1) 闪光和吸气(pop)都写 animation，animation 是单属性，两条规则只会互相覆盖。
+   *    同时命中时必须合并成一条，否则洗完那一下要么不吸气、要么不闪。
+   * 2) 关键帧首尾必须等于常态亮度，否则动画一结束画面会跳一下。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+
+  const at = html.indexOf('@keyframes tiny-done-flash');
+  assert.ok(at > 0, '要有 tiny-done-flash 关键帧');
+  const frames = html.slice(at, at + 500);
+  assert.ok(/0%, 100%\s+\{ filter: drop-shadow\(0 0 3\.5px/.test(frames), '首尾要回到常态亮度');
+  const peaks = [...frames.matchAll(/drop-shadow\(0 0 (\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]));
+  assert.ok(Math.max(...peaks) > 3.5, '峰值半径要大于常态 3.5px，实际 ' + Math.max(...peaks));
+  /*
+   * 上限 6px 是量出来的：极简窗 76×96，机器 64×80，离左右边只剩 6px、离上下 6~10px。
+   * 半径再大，光晕就顶到窗口边界被切出一条硬线（实测 9px 时四边全贴死、整圈被削平）。
+   */
+  assert.ok(Math.max(...peaks) <= 6, '峰值半径不许超过 6px，否则顶到窗口边界被切，实际 ' + Math.max(...peaks));
+
+  const doneRule = cssRuleList(html).find(
+    (r) => r.selector === 'body[data-size="tiny"] .machine[data-state="done"] > .skin-host',
+  );
+  assert.ok(doneRule !== undefined, '极简档洗完必须有独立规则');
+  assert.ok(/animation: tiny-done-flash/.test(doneRule.body), '洗完要挂上闪光动画');
+
+  // 同时命中 pop 时合并成一条，两个动画都留着
+  const merged = cssRuleList(html).find(
+    (r) =>
+      r.selector.includes('data-size="tiny"') &&
+      r.selector.includes('data-state="done"') &&
+      r.selector.includes('[data-pop="1"]') &&
+      r.selector.includes('.skin-host'),
+  );
+  assert.ok(merged !== undefined, 'pop 与闪光同时命中必须有合并规则');
+  assert.ok(/animation:[^;]*\bpop\b/.test(merged.body), '合并规则里要保留吸气');
+  assert.ok(/animation:[^;]*tiny-done-flash/.test(merged.body), '合并规则里要保留闪光');
+
+  /*
+   * 减弱动态必须真能关掉这两个动画。
+   * 原来那条写的是 `.machine[data-pop="1"]`——机器自己，可 pop 动画挂在
+   * `.machine[data-pop="1"] > .skin-host` 上，等于一直没关掉过。
+   */
+  const reduce = html.slice(html.indexOf('@media (prefers-reduced-motion: reduce)'));
+  const kill = reduce.slice(0, reduce.indexOf('}'));
+  assert.ok(/\.machine > \.skin-host/.test(kill), '减弱动态要把 .skin-host 上的动画一起关掉');
+  assert.ok(/animation: none !important/.test(kill), '并且必须是 !important 的 none');
+});
+
+const finalFailed = results.filter((r) => !r.ok);
 if (finalFailed.length > 0) {
   for (const f of finalFailed) console.error('  ✗ ' + f.name + '\n      ' + f.error);
 }
