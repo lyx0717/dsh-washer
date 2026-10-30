@@ -235,7 +235,7 @@
   100%{transform:translate3d(0,0,0)}}
 
 /* ------------------------------------------------------------------ *
- * 立体感：缩放框上的投影与倒角
+ * 立体感：缩放框上的投影
  *
  * 为什么写在缩放框（.dw-frame）上，而不是机身里：
  * 两套造型都是按宽度 transform:scale() 缩的——停靠条 32px、极简浮窗
@@ -245,27 +245,18 @@
  *
  * 不限定皮肤：像素造型同样被缩到 32px，那条深色描边也是按 256px 画的，
  * 缩完一样虚。两套造型都吃这层，谁也躲不开"和背景同色"。
+ *
+ * 只用 filter: drop-shadow，不在框上画内描边：
+ * 试过用 ::after + inset box-shadow 做「倒角」，不行——机身 .dw-pw 不是
+ * 跟着缩放框走的盒子（浮窗里它只占框的左上部分，右边空 9.09%、底部空
+ * 9.58%；dock 里又是另一套），照框画一圈线，右边和底部那两条就悬在机器
+ * 外面，看着像外头多套了一个边框。drop-shadow 用的是元素真实轮廓，
+ * 没有这个对齐问题。
  * ------------------------------------------------------------------ */
 .dw-frame {
   /* 两层：贴边那圈跟着轮廓走，把剪影从底色里勾出来；
      下面那层是接地投影，让机器看着是坐在台面上而不是浮着。 */
   filter:
-    drop-shadow(0 0 1.5px var(--dw-frame-halo))
-    drop-shadow(0 2px 4px var(--dw-frame-drop));
-}
-.dw-frame::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  /* 圆角走百分比：机身圆角是相对 330px 宽定的，这里按框算，
-     32px 档自动落到 2.3px，不会给机器凭空加一个大圆角。 */
-  border-radius: 7.3% / 5.9%;
-  /* 光从左上：顶边和左边提亮、底边和右边压暗，机身从一张贴纸变成实体 */
-  box-shadow:
-    inset 0 1.5px 0 var(--dw-frame-edge-hi),
-    inset 1.5px 0 0 var(--dw-frame-edge-hi),
-    inset 0 -1.5px 2px var(--dw-frame-edge-lo),
-    inset -1.5px 0 1px var(--dw-frame-edge-lo);
+    drop-shadow(0 0 2px var(--dw-frame-halo))
+    drop-shadow(0 2px 5px var(--dw-frame-drop));
 }

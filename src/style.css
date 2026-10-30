@@ -65,10 +65,8 @@
    * 缩到多小都不会掉。四个值分开是因为深色主题要反过来：
    * 亮色靠投影压出边界，深色靠顶边高光和更黑的接地阴影。
    */
-  --dw-frame-halo: rgba(24, 40, 60, 0.28);
-  --dw-frame-drop: rgba(24, 40, 60, 0.26);
-  --dw-frame-edge-hi: rgba(255, 255, 255, 0.85);
-  --dw-frame-edge-lo: rgba(24, 40, 60, 0.26);
+  --dw-frame-halo: rgba(24, 40, 60, 0.34);
+  --dw-frame-drop: rgba(24, 40, 60, 0.32);
 
   display: flex;
   flex-direction: column;
@@ -105,10 +103,8 @@
   --dw-sig-err: #f26064;
   --dw-sig-ok: #3fbf7a;
   --dw-sig-off: #4c5762;
-  --dw-frame-halo: rgba(0, 0, 0, 0.55);
-  --dw-frame-drop: rgba(0, 0, 0, 0.5);
-  --dw-frame-edge-hi: rgba(255, 255, 255, 0.22);
-  --dw-frame-edge-lo: rgba(0, 0, 0, 0.45);
+  --dw-frame-halo: rgba(0, 0, 0, 0.6);
+  --dw-frame-drop: rgba(0, 0, 0, 0.55);
 }
 
 /* 状态色绑定：皮肤内部引用 --dw-sig，避免每个皮肤重复写颜色 */

@@ -2751,26 +2751,40 @@ await test('极简窗：洗完绿光晕闪两下，减弱动态时不许漏', ()
 /*
  * 立体感：机身贴图是按 300px 画的，停靠条把它缩到 32px，画在机身里的影子
  * 会跟着缩到零点几像素——白机身贴在白底上就只剩一个玻璃圆（用户原话
- * 「和背景色太相近了，看着不明显」）。所以投影和倒角必须挂在缩放框
- * .dw-frame 上，那里的 px 就是屏幕 px。
+ * 「和背景色太相近了，看着不明显」）。所以投影必须挂在缩放框 .dw-frame
+ * 上，那里的 px 就是屏幕 px。
  */
-await test('立体感：投影与倒角挂在缩放框上，不进被缩放的内层', () => {
+await test('立体感：投影挂在缩放框上，不进被缩放的内层', () => {
   const skin = readFileSync(join(root, 'src', 'skin-precision.css'), 'utf8');
   const frame = skin.slice(skin.indexOf('.dw-frame {'));
   const frameBody = frame.slice(0, frame.indexOf('}'));
-  assert.ok(/drop-shadow\(0 0 1\.5px var\(--dw-frame-halo\)\)/.test(frameBody),
+  assert.ok(/drop-shadow\(0 0 2px var\(--dw-frame-halo\)\)/.test(frameBody),
     '缩放框上要有一圈贴边的投影，把剪影从底色里勾出来');
-  assert.ok(/drop-shadow\(0 2px 4px var\(--dw-frame-drop\)\)/.test(frameBody),
+  assert.ok(/drop-shadow\(0 2px 5px var\(--dw-frame-drop\)\)/.test(frameBody),
     '缩放框上要有接地投影，让机器看着是坐在台面上');
-  const after = skin.slice(skin.indexOf('.dw-frame::after'));
-  const afterBody = after.slice(0, after.indexOf('}'));
-  assert.ok(/border-radius:\s*7\.3% \/ 5\.9%/.test(afterBody),
-    '倒角圆角要按百分比跟着框走，否则 32px 档会被加一个大圆角');
-  assert.ok(/inset 0 1\.5px 0 var\(--dw-frame-edge-hi\)/.test(afterBody), '顶边要有高光');
-  assert.ok(/inset 0 -1\.5px 2px var\(--dw-frame-edge-lo\)/.test(afterBody), '底边要压暗');
-  /* 反例：影子写进机身就等于没写——机身被 scale(0.097) 缩到 32px，影子跟着缩没 */
-  assert.equal(/\.dw-pw[^{]*\{[^}]*drop-shadow/.test(skin), false,
+  /* 反例：影子写进机身就等于没写——机身被 scale(0.097) 缩到 32px，影子跟着缩没。
+     先剥掉注释再查：上面那段解释里就写着 .dw-pw 和 drop-shadow 两个词。 */
+  const code = skin.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.equal(/\.dw-pw[^{]*\{[^}]*drop-shadow/.test(code), false,
     '投影不能挂在 .dw-pw 上，它整个被 transform: scale() 缩放');
+});
+
+await test('立体感：不在缩放框上画内描边，那圈线会悬在机身外面', () => {
+  /* 曾经用 .dw-frame::after + inset box-shadow 做「倒角」，用户报
+     「右下边框像多了一圈」。原因是机身 .dw-pw 不跟着缩放框走：浮窗里它
+     只占框的左上部分（右边空 9.09%、底部空 9.58%），dock 里又是另一套，
+     照框画一圈线，右边和底部那两条就落在机器外面。drop-shadow 用的是
+     元素真实轮廓，没有这个对齐问题——所以这层不许再加回来。 */
+  const skinRaw = readFileSync(join(root, 'src', 'skin-precision.css'), 'utf8');
+  const skin = skinRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.equal(skin.includes('.dw-frame::after'), false,
+    '不要在缩放框上用伪元素画边框，它会和机身真实边界对不上');
+  assert.equal(/inset\s+0\s+-?1\.5px\s+0\s+var\(--dw-frame-edge/.test(skin), false,
+    '也不要用 inset 阴影模拟边框');
+  /* 变量漏一个就是 filter 里的 var() 变成无效值，整条 filter 当场失效 */
+  const style = readFileSync(join(root, 'src', 'style.css'), 'utf8');
+  assert.equal(style.includes('--dw-frame-edge-'), false,
+    '倒角层删了，edge 变量就没有引用者了，不要留死变量');
 });
 
 await test('立体感：投影进了两个构建产物，亮暗两套都有定义', () => {
@@ -2780,9 +2794,8 @@ await test('立体感：投影进了两个构建产物，亮暗两套都有定�
   const machines = readFileSync(new URL('../debug/float.machines.js', import.meta.url), 'utf8');
   assert.ok(/\.dw-frame \{[^}]*--dw-frame-drop/.test(machines) || /\.dw-frame \{[\s\S]{0,200}--dw-frame-drop/.test(machines),
     'float.machines.js 里也要有缩放框投影');
-  /* 变量漏一个就是 filter 里的 var() 变成无效值，整条 filter 当场失效 */
   const style = readFileSync(join(root, 'src', 'style.css'), 'utf8');
-  for (const name of ['--dw-frame-halo', '--dw-frame-drop', '--dw-frame-edge-hi', '--dw-frame-edge-lo']) {
+  for (const name of ['--dw-frame-halo', '--dw-frame-drop']) {
     const hits = style.split(name + ':').length - 1;
     assert.equal(hits, 2, name + ' 要在 style.css 的亮色和暗色两块里各定义一次');
     assert.ok(CSS_TEXT.includes(name + ':'), name + ' 要出现在构建产物里');
