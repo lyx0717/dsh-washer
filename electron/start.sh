@@ -29,6 +29,30 @@ if [ -z "$ELECTRON" ] || [ ! -x "$ELECTRON" ]; then
   echo "用 ELECTRON_PATH（或 DSH_WASHER_ELECTRON）指定 Electron 可执行文件路径" >&2
   exit 1
 fi
+
+# 最低版本校验：与 index.js 的 MIN_ELECTRON_MAJOR 保持一致。
+# 只在自动发现（未用 ELECTRON_PATH 覆盖）、且运行时目录带 version 文件时做——
+# 自编译/其他来源的 Electron 没有 version 文件，放行别拦。
+if [ -z "${ELECTRON_PATH:-}" ]; then
+  MIN_MAJOR=43
+  for vf in "$(dirname "$ELECTRON")/version" "$HOME/.dsh/electron/version"; do
+    if [ -f "$vf" ]; then
+      VER="$(cat "$vf" 2>/dev/null)"
+      MAJOR="${VER%%.*}"
+      case "$MAJOR" in
+        ''|*[!0-9]*) : ;;  # 读不出主版本号，跳过校验
+        *)
+          if [ "$MAJOR" -lt "$MIN_MAJOR" ]; then
+            echo "Electron 运行时版本过旧：${VER}（${vf}），至少需要 ${MIN_MAJOR}。" >&2
+            echo "请升级 ~/.dsh/electron（DSH 自带的 Electron 运行时），或更新 DSH。" >&2
+            exit 1
+          fi
+          ;;
+      esac
+      break
+    fi
+  done
+fi
 # 绝对路径 + 独立进程组：从 shell / 自动化脚本里拉起时，
 # 相对路径会因工作目录不同而找不到 app 目录。
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"

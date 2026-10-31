@@ -33,11 +33,10 @@ import {
   formatDuration,
   stalledForOf,
   stateWeight,
-  typicalTurnMs,
-  remainingOf,
   shouldSwitch,
   SWITCH_HOLD_MS,
   toolActionOf,
+  activeTool,
 } from './src/core.js';
 
 export const name = 'dsh-washer';
@@ -193,6 +192,8 @@ function createSessionState() {
     stoppedTurn: -1,
     /** 最近一次 agent/status */
     running: false,
+    /** 最近几轮的「成绩单」，详情面板的「最近」段用（最多留 20 条） */
+    turnHistory: [],
     /**
      * 最新的 usage 快照（来自 assistant/message.data.usage）。
      * 注意：这些数字是**累加**的（同一 turn 内单调增长），不是每条消息各自的量，
@@ -302,6 +303,10 @@ export function rankTools(nodes, turn, limit = 6) {
 
 function pushNode(state, node) {
   state.nodes.push(node);
+  // 单调递增的变更计数。subscribeEvents 靠它判断「这条事件有没有真的改状态」——
+  // 早先比的是 state.nodes 数组引用，可 pushNode 是原地 push，引用永远不变，
+  // 同 turn 里 running 被 agent/status 置 false 后就再也没法靠事件复活。
+  state.nodesRev = (state.nodesRev || 0) + 1;
   // 只留最近 200 条：deriveState 只看当前 turn 的末尾，留太多白占内存
   if (state.nodes.length > 200) state.nodes.splice(0, state.nodes.length - 200);
 }
@@ -551,7 +556,10 @@ export function foldEvent(state, event, now) {
         }
       }
       state.partial = null;
-      pushNode(state, { kind: 'assistant-message', turn: data.turn, model: src ? src.model : null });
+      // 必须用白名单里的 'assistant'，不能用 'assistant-message'：
+      // core.js 的 OUTPUT_NODE_KINDS（dsh-client-ui-chat legacy 口径）只认 'assistant'，
+      // 写成别的 kind 会让纯文本轮次被判成 starting（spinning 永远不可达）。
+      pushNode(state, { kind: 'assistant', turn: data.turn, model: src ? src.model : null });
       return state;
     }
     case 'turn/end': {
@@ -585,6 +593,24 @@ export function foldEvent(state, event, now) {
       if (failure === undefined && !abortedByUser && !hasError(state.nodes)) {
         state.doneUntil = now + (Number.isFinite(doneHoldMs) ? doneHoldMs : DEFAULT_DONE_HOLD_MS);
       }
+      /*
+       * 「最近几轮」成绩单：详情面板要能回看刚跑完的几轮（耗时/工具数/成败）。
+       * 记在会话状态里跨轮保留，只留最近 20 条，避免长会话越攒越大。
+       */
+      const startedAt = state.turnTimings.has(turn) ? state.turnTimings.get(turn).startTime : undefined;
+      const hadError = hasError(state.nodes);
+      const lastErrNode = hadError ? lastErrorNode(state.nodes) : undefined;
+      if (!Array.isArray(state.turnHistory)) state.turnHistory = [];
+      state.turnHistory.push({
+        turn,
+        ok: failure === undefined && !abortedByUser && !hadError,
+        aborted: abortedByUser,
+        errorCode: lastErrNode === undefined ? null : errorCodeOf(lastErrNode),
+        durationMs: Number.isFinite(startedAt) && Number.isFinite(now) ? Math.max(0, now - startedAt) : null,
+        toolCount: toolCountOf(state.nodes, turn),
+        at: now,
+      });
+      if (state.turnHistory.length > 20) state.turnHistory.splice(0, state.turnHistory.length - 20);
       pushNode(state, { kind: 'turn-end', turn });
       return state;
     }
@@ -634,8 +660,15 @@ export function encodeWsText(text, opcode = 0x1) {
     header[1] = 126;
     header.writeUInt16BE(length, 2);
   } else {
-    // 超大快照：不该发生，真发生了就丢掉，别让单条消息把连接搞乱
-    return null;
+    /*
+     * ≥64KB：用 127 + 8 字节扩展长度（RFC 6455 §5.2，最高位必须为 0）。
+     * 之前这里直接 return null，会静默丢帧——超大会话的快照永远推不出去，
+     * 浮窗就冻在最后一帧上，且没有任何报错。状态快照理论上远小于 64KB，
+     * 但"理论"不能当成丢数据的理由：编码层就要能正确表达任意大小。
+     */
+    header = Buffer.alloc(10);
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(length), 2);
   }
   header[0] = 0x80 | opcode; // FIN + opcode
   return Buffer.concat([header, payload]);
@@ -646,6 +679,35 @@ function safeEqual(a, b) {
   const right = Buffer.from(String(b), 'utf8');
   if (left.length !== right.length) return false;
   return timingSafeEqual(left, right);
+}
+
+/*
+ * 本机来源校验（防 DNS rebinding / 恶意网页借浏览器戳本机端口）。
+ *
+ * 服务只绑 127.0.0.1 且要 token，理论上已经够；但浏览器里任何网页都能向
+ * 127.0.0.1 发请求（同源策略只挡读响应、不挡发请求）。两层廉价防线：
+ *   - Host 头必须是 127.0.0.1 / localhost / [::1]（rebinding 会换掉 Host）；
+ *   - Origin 头存在时必须是本机来源（file:// 页面给 "null"/"file://"，放行）。
+ * 缺失 Host/Origin 的非浏览器客户端（Electron 主进程、node 脚本）交给 token 兜。
+ */
+function hostHeaderAllowed(req) {
+  const host = req.headers.host;
+  if (typeof host !== 'string') return true;
+  const name = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
+  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
+}
+
+function originHeaderAllowed(req) {
+  const origin = req.headers.origin;
+  if (typeof origin !== 'string' || origin === '' || origin === 'null' || origin.startsWith('file://')) return true;
+  try {
+    const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  } catch { return false; }
+}
+
+function localRequestAllowed(req) {
+  return hostHeaderAllowed(req) && originHeaderAllowed(req);
 }
 
 /**
@@ -756,6 +818,52 @@ function electronBinaryCandidates() {
   return [join(homedir(), '.dsh', 'electron', 'Electron.app', 'Contents', 'MacOS', 'Electron')];
 }
 
+/*
+ * Electron 运行时最低主版本。42 已于 2026-10-20 EOL，43 起才在维护窗口内。
+ * 与 electron/start.sh 的 MIN_MAJOR 保持一致。
+ */
+const MIN_ELECTRON_MAJOR = 43;
+
+/**
+ * 读运行时目录里的 version 文件（Electron 发行包自带，内容形如 "43.3.0"）。
+ * 自编译/其他来源可能没有这个文件 → 返回 null，表示"版本未知，放行"。
+ */
+function electronRuntimeMajor(candidate) {
+  // 候选路径 → 发行包根目录：Mac 上是 .../Electron.app/Contents/MacOS/Electron
+  // 往上四层；另外兜底试 ~/.dsh/electron/version。
+  const roots = [dirname(dirname(dirname(dirname(candidate)))), join(homedir(), '.dsh', 'electron')];
+  for (const root of roots) {
+    try {
+      const m = /^(\d+)\./.exec(readFileSync(join(root, 'version'), 'utf8').trim());
+      if (m) return Number(m[1]);
+    } catch { /* 没有就试下一个 */ }
+  }
+  return null;
+}
+
+/**
+ * 找出能用的 Electron 可执行文件，并说明找不到的原因。
+ * reason: 'ok' | 'platform' | 'missing' | 'old'。
+ */
+function electronBinaryStatus() {
+  // 非 macOS 不找——不是"没找到"，是这个平台就没有
+  if (!overlayPlatformSupported()) return { binary: null, reason: 'platform' };
+  const fromEnv = process.env.DSH_WASHER_ELECTRON;
+  const isOverride = typeof fromEnv === 'string' && fromEnv !== '';
+  let sawOld = null;
+  for (const candidate of electronBinaryCandidates()) {
+    if (!existsSync(candidate)) continue;
+    // 显式覆盖：用户自己负责版本，不做拦截
+    if (!isOverride) {
+      const major = electronRuntimeMajor(candidate);
+      if (major !== null && major < MIN_ELECTRON_MAJOR) { sawOld = major; continue; }
+    }
+    return { binary: candidate, reason: 'ok' };
+  }
+  if (sawOld !== null) return { binary: null, reason: 'old', major: sawOld };
+  return { binary: null, reason: 'missing' };
+}
+
 /**
  * 找出能用的 Electron 可执行文件。找不到返回 null。
  *
@@ -763,12 +871,7 @@ function electronBinaryCandidates() {
  * 用户分不清是「没装」还是「装了但路径不对」。调用方据此提示用户。
  */
 function electronBinary() {
-  // 非 macOS 不找——不是"没找到"，是这个平台就没有
-  if (!overlayPlatformSupported()) return null;
-  for (const candidate of electronBinaryCandidates()) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
+  return electronBinaryStatus().binary;
 }
 
 /**
@@ -1034,6 +1137,9 @@ export function apply(ctx, config) {
    */
   let shownState = null;
   let shownStateAt = 0;
+  // 迟滞是"按会话"的：切到别的会话时，上一台残留的 shownState/时间戳会把新
+  // 会话拖住（短暂显示错状态、颜色也跟着错）。记住当前是哪个会话的显示态。
+  let shownSession = null;
   /** 迟滞窗口到点重算用的定时器（见 settleState 末尾） */
   let pendingSwitchTimer = null;
   let lastPushAt = 0;
@@ -1093,8 +1199,11 @@ export function apply(ctx, config) {
        * 之后什么都不发生，日志里也看不出所以然。
        */
       const candidates = electronBinaryCandidates().join(' / ');
-      const why = electronBinary() === null
-        ? `找不到 Electron 运行时，试过：${candidates}`
+      const status = electronBinaryStatus();
+      const why = status.binary === null
+        ? (status.reason === 'old'
+            ? `Electron 运行时版本过旧（${status.major}.x），至少需要 ${MIN_ELECTRON_MAJOR}，请升级 ~/.dsh/electron`
+            : `找不到 Electron 运行时，试过：${candidates}`)
         : '找不到 electron/main.cjs';
       ctx.logger?.warn?.(`[dsh-washer] 悬浮窗没起来：${why}`);
       overlayLaunchError = why;
@@ -1144,6 +1253,9 @@ export function apply(ctx, config) {
    * 一个是"浏览器那边渲染时认定在等"，来源不同，判据要能分别看。
    */
   const clientPending = new Map();
+  // 客户端可能刷新页面/关掉 dock 后再也没来撤销 pending。留个 TTL，过期就当它
+  // 没报过——否则浮窗会永久亮着"等你确认"，Map 也会无限增长。
+  const CLIENT_PENDING_TTL_MS = 30000;
 
   /*
    * 正在等人回答的提问工具。
@@ -1172,7 +1284,10 @@ export function apply(ctx, config) {
      * 那边可能只是还没收到。取并集才不会被一边的滞后熄灭。
      */
     const reported = clientPending.get(sessionId);
-    if (reported !== undefined && reported !== null) return reported;
+    if (reported !== undefined && reported !== null) {
+      if (Date.now() - reported.at < CLIENT_PENDING_TTL_MS) return { kind: reported.kind };
+      clientPending.delete(sessionId);   // 过期的旧上报，清掉当没报
+    }
     if ((pendingApprovals.get(sessionId) || 0) > 0) return { kind: 'approval' };
     return awaitingAnswer(state) ? { kind: 'question' } : undefined;
   }
@@ -1278,6 +1393,8 @@ export function apply(ctx, config) {
         tools: [],
         toolRank: [],
         toolCount: 0,
+        loadFactor: 0,
+        history: [],
         model: null,
         speed: null,
         tokenUsage: null,
@@ -1296,14 +1413,29 @@ export function apply(ctx, config) {
     const turn = latestTurnOf(outline);
     const elapsedMs = elapsedOf(s.turnTimings, turn, now) || 0;
     const speed = speedOf(s.tokenSamples, now);
+    // 当前正在跑的工具（没有就是 undefined）。卡住时浮窗要据此说「卡在哪个动作」。
+    const active = activeTool(s.runningCalls);
     /*
-     * 预计还要多久。只有「正在跑」才有意义：已经结束的一轮说"还剩 2 分钟"
-     * 是胡话。超过典型时长显示 0，前端据此换成"该好了"而不是负数。
+     * 负载强度：拿「最近几个工具的动作类型」估一个 0~1 的可解释信号，
+     * 驱动浮窗画面节奏（读单个文件=轻、批量重构/跑命令=重）。
+     * 不做随机动画——每个数值都能对回真实动作权重，用户看得到也验证得了。
      */
-    const typicalMs = typicalTurnMs(s.turnTimings);
-    const remainingMs = derived !== 'done' && derived !== 'idle' && derived !== 'off'
-      ? remainingOf(typicalMs, elapsedMs)
-      : null;
+    const lfTools = recentTools(s.nodes, 6);
+    let loadFactor = 0;
+    if (derived !== 'idle' && derived !== 'off' && lfTools.length > 0) {
+      const LOAD_W = { command: 1, write: 0.9, edit: 0.9, subagent: 0.9, browser: 0.7, websearch: 0.5, webfetch: 0.5, search: 0.5, find: 0.4, read: 0.4, list: 0.3, plan: 0.2 };
+      let loadSum = 0;
+      for (const t of lfTools) {
+        const w = LOAD_W[toolActionOf(t.name)];
+        loadSum += w === undefined ? 0.4 : w;
+      }
+      loadFactor = Math.round((loadSum / lfTools.length) * 100) / 100;
+    }
+    /*
+     * 不预测剩余时间。一轮跑多久取决于这轮调几次工具、每次多慢，历史中位数
+     * 几乎没有预测力；给个错的时间比不给更糟（用户会信它）。README 早就把这
+     * 功能删了，这里不再算 typicalMs/remainingMs——省得下发一份没人用的死数据。
+     */
     return {
       version: 1,
       sessionId,
@@ -1311,11 +1443,16 @@ export function apply(ctx, config) {
       turn,
       elapsedMs,
       durationText: formatDuration(elapsedMs),
+      // 负载强度 0~1，驱动浮窗动画节奏（详情/浮窗都能用）
+      loadFactor,
+      // 最近几轮成绩单（新→旧，最多 10 条），详情面板「最近」段用
+      history: (Array.isArray(s.turnHistory) ? s.turnHistory : []).slice(-10).reverse(),
       // 看着在转、其实没动静。没卡是 null，前端据此决定要不要改副标题。
       stalledMs: stalledForOf(s.tokenSamples, derived, now),
-      // 预计剩余。基于这个会话自己最近几轮的中位数，不跨会话借数据。
-      typicalMs,
-      remainingMs,
+      // 卡住时"卡在哪个动作"：action 用户看得懂，name 留给诊断对日志。
+      activeTool: active === undefined
+        ? null
+        : { name: active.name, action: toolActionOf(active.name) },
       /*
        * action 是中文动作说明（toolActionOf），name 保留技术名。
        * 两个都给：状态条和浮窗显示 action（用户看得懂"跑命令"，
@@ -1413,16 +1550,28 @@ export function apply(ctx, config) {
      * /dsh-washer/state 直接读，那是"宿主当下算出来什么"的诊断口径，
      * 掺进迟滞就查不出真问题了。
      */
+    // 切了会话就清掉上一台的显示态，别让它的迟滞残留拖住新会话。
+    if (snap.sessionId !== shownSession) {
+      shownSession = snap.sessionId;
+      shownState = null;
+      shownStateAt = 0;
+    }
     snap.state = settleState(snap.state, Date.now());
     // 面板数据（模型/速度/token）也要进签名，否则它们变了却不推——
     // 洗衣机本体不变不代表详情没变。
     const usage = snap.tokenUsage;
     const tokenSig = usage === null ? '' : `${usage.input}/${usage.output}/${usage.cacheRead}`;
+    // 会话概览也要进签名：后台会话跑完/故障/等你确认时，顶层 state（当前显示
+    // 的那台）可能一点没变，少了这一段签名，pushNow 会判定"没变化"直接吞掉，
+    // 浮窗上的圆点就永远慢半拍、甚至漏报。
+    const sessionsSig = (Array.isArray(snap.sessions) ? snap.sessions : [])
+      .map((r) => r.sessionId + ':' + r.state).join(',');
     const signature = [
       snap.state, snap.turn, snap.toolCount, snap.durationText, snap.errorCode,
       snap.model, Math.round(snap.speed === null ? -1 : snap.speed), tokenSig,
       // 卡住与否是个开关，不是时长：把秒数进签名会让推送节流失效
       snap.stalledMs === null ? 0 : 1,
+      sessionsSig,
     ].join('|');
     const text = JSON.stringify(snap);
     if (signature === lastPushed) return;
@@ -1581,7 +1730,7 @@ export function apply(ctx, config) {
 
   function onUpgrade(req, socket) {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-    if (url.pathname !== '/dsh-washer/stream' || !authorized(req, url)) {
+    if (url.pathname !== '/dsh-washer/stream' || !localRequestAllowed(req) || !authorized(req, url)) {
       socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n');
       return;
     }
@@ -1676,7 +1825,7 @@ export function apply(ctx, config) {
             res.end(JSON.stringify({ error: 'sessionId must be a short string or null' }));
             return;
           }
-          schedulePush();
+          schedulePush(true);
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ pinnedSessionId }));
         },
@@ -1721,6 +1870,11 @@ export function apply(ctx, config) {
 
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (!localRequestAllowed(req)) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden' }));
+        return;
+      }
       if (!authorized(req, url)) {
         res.writeHead(401, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -1948,7 +2102,7 @@ export function apply(ctx, config) {
          * 这里再挡一道：重复投递不该让浮窗白闪一下。
          */
         if (next === null) clientPending.delete(rawId);
-        else clientPending.set(rawId, next);
+        else clientPending.set(rawId, { kind: next.kind, at: Date.now() });
         if (changed) schedulePush(true);
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify({ ok: true, changed }));
@@ -1979,7 +2133,8 @@ export function apply(ctx, config) {
          */
         const isMac = process.platform === 'darwin';
         const overlaySupported = overlayPlatformSupported();
-        const overlayBinary = overlaySupported ? electronBinary() : null;
+        const overlayStatus = overlaySupported ? electronBinaryStatus() : { binary: null, reason: 'platform' };
+        const overlayBinary = overlayStatus.binary;
         const payload = {
           platform: process.platform,
           dock: true,
@@ -1987,7 +2142,7 @@ export function apply(ctx, config) {
           overlay: overlaySupported && overlayBinary !== null,
           overlayReason: !overlaySupported
             ? 'platform'
-            : (overlayBinary === null ? 'missing' : null),
+            : (overlayBinary === null ? overlayStatus.reason : null),
           overlayError: overlayLaunchErrorRef.value,
         };
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -2062,14 +2217,14 @@ export function apply(ctx, config) {
       if (sessionId === null || !event) return;
       sessionState.currentId = sessionId;
       const state = stateFor(sessionId);
-      const before = state.nodes;
+      const before = state.nodesRev || 0;
       foldEvent(state, event, Date.now());
       // turn/end 之后 Agent 不再忙；其余事件说明这一轮还在跑。
       // 但重复投递（宿主重放、订阅重复）不该把已结束的轮又点成 running，
       // 否则状态会在 idle/done 之间抖。只有真正改变了状态的事件才翻转。
       if (event.type === 'turn/end') state.running = false;
       else if (event.type === 'turn/start') state.running = true;
-      else if (state.running || state.nodes !== before) state.running = true;
+      else if (state.running || (state.nodesRev || 0) !== before) state.running = true;
       schedulePush();
     });
 
@@ -2087,6 +2242,7 @@ export function apply(ctx, config) {
       const sessionId = resolveSessionId(session);
       if (sessionId === null) return;
       sessions.delete(sessionId);
+      clientPending.delete(sessionId);   // 会话没了，它那条 pending 也别留着
       if (sessionState.currentId === sessionId) sessionState.currentId = null;
       // 钉住的会话没了就自动放开，否则 viewSessionId 会一直回退到跟随，
       // 但 UI 上还显示着"已钉住"——那是在骗人。

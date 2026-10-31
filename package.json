@@ -29,7 +29,8 @@
     "ui"
   ],
   "engines": {
-    "dsh": ">=0.2.0-rc.2"
+    "dsh": ">=0.2.0-rc.2",
+    "node": ">=24"
   },
   "publishConfig": {
     "access": "public",
@@ -63,7 +64,7 @@
   ],
   "scripts": {
     "build": "node build.mjs && node build-float.mjs",
-    "test": "node --test --test-force-exit test/core.test.mjs test/host.test.mjs test/build.test.mjs test/market.test.mjs",
+    "test": "node --test --test-force-exit test/core.test.mjs test/host.test.mjs test/build.test.mjs test/market.test.mjs test/freshness.test.mjs && node test/render.mjs --no-shots",
     "prepublishOnly": "npm run build && npm test"
   },
   "dsh": {

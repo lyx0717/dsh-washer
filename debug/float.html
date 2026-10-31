@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src ws://127.0.0.1:*;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src ws://127.0.0.1:* http://127.0.0.1:*;">
 <title>dsh-washer</title>
 <style>
   /*
@@ -85,7 +85,8 @@
     justify-content: center;
     /* 极简/正常切换时机器本体跟着缩，不是瞬间跳变 */
     transition: width var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
-                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1));
+                height var(--size-dur, 220ms) var(--size-ease, cubic-bezier(.32, 0, .68, 1)),
+                opacity 1.2s ease, filter 1.2s ease;
   }
   /* 甩干时整台机器会抖，这是它看起来"在工作"的关键 */
   .machine[data-shake="1"] { animation: shake .18s steps(2, end) infinite; }
@@ -198,8 +199,9 @@
     background: rgba(58, 16, 20, 0.92);
     border-color: rgba(229, 72, 77, 0.5);
   }
-  /* 等确认用琥珀调，和 waiting 状态的指示灯同色系 */
-  .flash[data-kind="waiting"] {
+  /* 等确认 / 卡住用琥珀调，和 waiting 状态的指示灯同色系 */
+  .flash[data-kind="waiting"],
+  .flash[data-kind="stalled"] {
     background: rgba(52, 40, 12, 0.92);
     border-color: rgba(245, 185, 58, 0.5);
   }
@@ -395,7 +397,15 @@
     border-radius: 50%;
     background: var(--dim);
     cursor: pointer;
+    position: relative;
     transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  /* 视觉只有 6px，但热区用 ::before 撑到 18px：Fitts 定律，6px 点不稳。 */
+  .dots i::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
   }
   .dots i:hover { transform: scale(1.5); }
   /* 钉住的那颗带一圈光晕，否则用户不知道自己钉着 */
@@ -415,8 +425,11 @@
     line-height: 1;
     color: var(--dim);
     margin-left: -1px;
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: pointer;
+    padding: 0 1px;
   }
+  .dots .more:hover, .dots .more:focus-visible { color: var(--text); }
   /* 极小态放不下，藏掉——那颗机器本身已经在报状态了 */
   body[data-size="tiny"] .dots { display: none; }
 
@@ -789,6 +802,31 @@
    * 必须自己写：style.css 里那几条 @media 只覆盖 dock 的 sprite，
    * 浮窗是另一个页面，样式表不通。
    */
+  /* ---- 彩蛋层：打盹变暗 / 空闲轻抖 / 连续失败 / 成就贴纸 ----
+     纯装饰，不依赖新数据源，只在静息态触发；减弱动效时由上面的
+     @media 统一关掉动画（变暗是颜色过渡不算动效，仍然保留）。 */
+  body[data-doze="1"] .machine { opacity: .4; filter: saturate(.5) brightness(.85); }
+  .machine[data-idle-shake="1"] { animation: idle-shake .65s ease-in-out; }
+  @keyframes idle-shake {
+    0%, 100% { transform: translateX(0); }
+    30% { transform: translateX(-1.5px); }
+    70% { transform: translateX(1.5px); }
+  }
+  .egg-badge {
+    position: absolute; top: 5px; z-index: 25;
+    width: 15px; height: 15px; line-height: 15px;
+    text-align: center; border-radius: 50%;
+    font-size: 9px; font-weight: 700;
+    opacity: 0; transform: scale(.6);
+    transition: opacity .3s ease, transform .3s ease;
+    pointer-events: none;
+  }
+  #eggMedal { right: 5px; background: rgba(245,185,58,.92); color: #3a2a00; box-shadow: 0 0 6px rgba(245,185,58,.8); }
+  #eggFail { left: 5px; background: rgba(229,72,77,.92); color: #fff; box-shadow: 0 0 6px rgba(229,72,77,.8); }
+  body[data-medal="1"] #eggMedal { opacity: 1; transform: scale(1); }
+  body[data-stuck-lid="1"] #eggFail { opacity: 1; transform: scale(1); }
+  body[data-size="tiny"] .egg-badge { display: none; }
+
   @media (prefers-reduced-motion: reduce) {
     /*
        `.machine[data-pop="1"]` 写的是机器自己，可 pop 动画挂在
@@ -843,6 +881,9 @@
     盖在机器上方而不是塞进气泡：气泡那行已经放着状态、计时、
     会话圆点，横向空间用满了，再挤会看不清。浮窗总共才 132×200。
   -->
+  <!-- 彩蛋小徽章：成就(奖牌) / 连续失败(感叹)。纯装饰，由 body data-* 驱动 -->
+  <span class="egg-badge" id="eggMedal" aria-hidden="true">🏅</span>
+  <span class="egg-badge egg-fail" id="eggFail" aria-hidden="true">!</span>
   <div class="flash" id="flash" role="status" data-on="0">
     <span class="flash-t" id="flashT"></span>
     <span class="flash-s" id="flashS"></span>
@@ -856,6 +897,17 @@
     off: '未连接', idle: '待机', starting: '启动中', washing: '洗涤中',
     rinsing: '漂洗中', spinning: '脱水中', waiting: '等你确认',
     draining: '排水换水', done: '洗完了', error: '故障',
+  };
+  /* 错误码 → 一句话人话。浮窗只有 132px，说「能怎么办」比甩个 E-xx 有用；
+     原始 code 仍由 Host 下发（详情面板对日志用），这里只负责翻译给人看。 */
+  var ERR_HUMAN = {
+    'E-10': '模型账号不可用',
+    'E-20': '工具执行失败',
+    'E-21': '审批被拒',
+    'E-30': '上下文超长',
+    'E-40': '任务被中断',
+    'E-50': '被策略拦截',
+    'E-00': '未知故障',
   };
   // 和 src/core.js 的 VISUAL 一一对应；这里只保留悬浮窗用得到的四个量
   var VISUAL = {"off":{"water":7,"foam":0,"led":"#4a5560","blink":0,"spin":0},"idle":{"water":6.5,"foam":0,"led":"#7c8896","blink":0,"spin":0},"starting":{"water":3.5,"foam":0.3,"led":"#3aa0ff","blink":0,"spin":5},"washing":{"water":0.5,"foam":1,"led":"#3aa0ff","blink":0,"spin":2.4},"rinsing":{"water":0.5,"foam":0.6,"led":"#3aa0ff","blink":0,"spin":2.4},"spinning":{"water":4,"foam":0,"led":"#3aa0ff","blink":0,"spin":0.6},"waiting":{"water":4.5,"foam":0.2,"led":"#f5b93a","blink":0.6,"spin":0},"draining":{"water":7,"foam":0,"led":"#1f9aa8","blink":0,"spin":5},"done":{"water":6.5,"foam":0,"led":"#2ee06a","blink":0,"spin":0},"error":{"water":5,"foam":0,"led":"#e5484d","blink":0.35,"spin":0}};
@@ -968,6 +1020,7 @@
       // 读屏要说清这是哪个会话的什么状态，不能只念"按钮"
       dot.setAttribute('aria-label', (LABEL[row.state] || row.state) + ' · ' + String(row.sessionId).slice(0, 8)
         + (row.sessionId === pinned ? ' · 已钉住' : ''));
+      dot.title = (LABEL[row.state] || row.state) + ' · ' + String(row.sessionId).slice(0, 8);
       function toggle() { pinSession(row.sessionId === pinned ? null : row.sessionId); }
       dot.addEventListener('click', toggle);
       dot.addEventListener('keydown', function (ev) {
@@ -979,9 +1032,23 @@
       var more = document.createElement('span');
       more.className = 'more';
       more.textContent = '+' + overflow;
-      // 不只念"+3"，要把话说清：还有 3 个会话没显示
-      more.setAttribute('role', 'img');
-      more.setAttribute('aria-label', '还有 ' + overflow + ' 个会话');
+      // 之前只是个 role=img 的静态文字，第 4+ 个会话在浮窗上根本点不到；
+      // 若它正等你确认/出故障，等于被藏起来了。改成可点入口：弹会话切换菜单。
+      more.setAttribute('role', 'button');
+      more.tabIndex = 0;
+      more.setAttribute('aria-label', '还有 ' + overflow + ' 个会话，点击选择');
+      more.title = '更多会话';
+      function openSessionMenu() {
+        if (!host || typeof host.showSessionMenu !== 'function') return;
+        host.showSessionMenu({
+          sessions: all.map(function (r) { return { sessionId: r.sessionId, state: r.state }; }),
+          pinned: pinned,
+        });
+      }
+      more.addEventListener('click', openSessionMenu);
+      more.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openSessionMenu(); }
+      });
       box.appendChild(more);
     }
   }
@@ -1009,10 +1076,63 @@
    * done 保持窗口有 6 秒，那样会连着弹六条。
    */
   var lastNotifiedState = null;
+  /*
+   * 卡住提醒单独用 turn 去重：卡住时状态不变（还是 washing/rinsing/spinning），
+   * 光靠状态边沿检测不到。stalledMs 从 null 变成数字的那一刻才提醒，一轮一次。
+   * 用 turn 而不是布尔，是为了下一轮真卡住时还能再提醒。
+   */
+  var lastStalledTurn = null;
+  /* 等确认二次提醒：进入 waiting 后一直没人理，30s 再敲一次，别让唯一的提醒石沉大海。
+     页面照发，main 会按 desktopOverlayNotify 拦——通知没开就不响。 */
+  var WAITING_REMIND_MS = 30000;
+  var waitingTimer = null;
+  /* 其它会话（非当前显示那台）上次已知状态，用来做边沿检测。 */
+  var lastOtherStates = {};
   function maybeNotify(snap) {
     var s = snap.state || 'off';
     var prev = lastNotifiedState;
     lastNotifiedState = s;
+    if (prev !== s) {
+      if (waitingTimer) { clearTimeout(waitingTimer); waitingTimer = null; }
+      if (s === 'waiting' && prev !== null) {
+        waitingTimer = setTimeout(function () {
+          waitingTimer = null;
+          if (lastNotifiedState === 'waiting' && host && typeof host.notify === 'function') {
+            host.notify('waiting', '等你确认（还等着）');
+          }
+        }, WAITING_REMIND_MS);
+      }
+    }
+    var stalled = typeof snap.stalledMs === 'number' && snap.stalledMs !== null;
+    if (stalled && prev !== null && lastStalledTurn !== snap.turn) {
+      lastStalledTurn = snap.turn;
+      var stext = (snap.activeTool && snap.activeTool.action ? '卡在' + snap.activeTool.action + ' · ' : '')
+        + fmtDur(snap.stalledMs) + ' 没进展';
+      if (host && typeof host.notify === 'function') host.notify('stalled', stext);
+      showFlash('stalled', stext);
+    }
+    /*
+     * 其它会话也要叫人。之前只盯当前显示那个会话，后台跑完/卡住/等确认全被吞掉——
+     * 用户开着三台 agent，却只有正在看的那台会响。
+     * 其它会话只发系统通知、不弹窗口横幅（横幅属于当前显示的那台，乱弹会误导）。
+     */
+    var rows = Array.isArray(snap.sessions) ? snap.sessions : [];
+    var seen = {};
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!row || row.sessionId === snap.sessionId) continue;
+      seen[row.sessionId] = true;
+      var rs = row.state || 'off';
+      var rp = lastOtherStates[row.sessionId];
+      lastOtherStates[row.sessionId] = rs;
+      if (rp === undefined || rp === rs) continue;      // 首次发现不吵
+      if (rs !== 'done' && rs !== 'error' && rs !== 'waiting') continue;
+      var rtext = String(row.sessionId).slice(0, 6) + ' · '
+        + (rs === 'error' ? '出故障了' : rs === 'waiting' ? '等你确认' : '洗完了');
+      if (host && typeof host.notify === 'function') host.notify(rs, rtext);
+    }
+    for (var k in lastOtherStates) { if (!seen[k]) delete lastOtherStates[k]; }
+
     if (prev === null || prev === s) return;   // 首帧不通知，切到同一个状态也不通知
     /*
      * 三个要提醒的状态，中间的 starting/washing/rinsing/spinning/draining 全静音。
@@ -1024,10 +1144,11 @@
      */
     if (s !== 'done' && s !== 'error' && s !== 'waiting') return;
     var text = s === 'error'
-      ? ((LABEL[s] || s) + (snap.errorCode ? ' · ' + snap.errorCode : ''))
+      ? ((LABEL[s] || s) + (snap.errorCode ? ' · ' + (ERR_HUMAN[snap.errorCode] || snap.errorCode) : ''))
       : (s === 'waiting'
-        ? (snap.tools && snap.tools.length > 0 ? '等你确认' : '等你回答')
-        : (snap.durationText ? '用时 ' + snap.durationText : ''));
+        ? (snap.tools && snap.tools.length > 0 ? '等待批准' : '需要选择')
+        : ('用时 ' + (snap.durationText || '--:--')
+          + (typeof snap.toolCount === 'number' && snap.toolCount > 0 ? ' · ' + snap.toolCount + ' 个工具' : '')));
     if (host && typeof host.notify === 'function') host.notify(s, text);
     /*
      * 横幅和系统通知**同时**出，不是二选一。
@@ -1060,9 +1181,14 @@
      * 明明是在等你确认，横幅却说洗完了，比不显示更误导。
      */
     t.textContent = kind === 'error' ? '出故障了'
-      : (kind === 'waiting' ? '等你确认' : '洗完了');
+      : kind === 'waiting' ? '等你确认'
+      : kind === 'stalled' ? '卡住了'
+      : '洗完了';
     sub.textContent = text;
-    box.dataset.kind = kind === 'error' ? 'error' : (kind === 'waiting' ? 'waiting' : 'done');
+    box.dataset.kind = kind === 'error' ? 'error'
+      : kind === 'waiting' ? 'waiting'
+      : kind === 'stalled' ? 'stalled'
+      : 'done';
     box.dataset.on = '1';
     if (flashTimer !== null) clearTimeout(flashTimer);
     flashTimer = setTimeout(function () {
@@ -1132,11 +1258,15 @@
     paintLamp(s);
     buildMachine(snap);
 
+    var load = (typeof snap.loadFactor === 'number' && snap.loadFactor > 0) ? Math.min(1, snap.loadFactor) : 0;
+
     machine.style.setProperty('--water', String(v.water));
-    machine.style.setProperty('--foam', String(v.foam));
+    // 水花随负载变多：重活泡沫更旺。load 来自宿主按最近工具动作权重算的可解释值
+    machine.style.setProperty('--foam', String(Math.min(1, v.foam + load * 0.25)));
     machine.style.setProperty('--led', String(v.led));
-    // spin 是"每秒转多少圈"，换算成动画时长；0 就暂停在静止档
-    var spinDur = v.spin > 0 ? (1 / v.spin).toFixed(2) + 's' : '0s';
+    // spin 是"每秒转多少圈"，换算成动画时长；0 就暂停在静止档。
+    // 负载越重转得越快：读单个文件慢悠悠，批量重构/跑命令明显加速。
+    var spinDur = v.spin > 0 ? (1 / (v.spin * (1 + load))).toFixed(2) + 's' : '0s';
     machine.style.setProperty('--spin-dur', spinDur);
     machine.style.setProperty('--spin-play', v.spin > 0 ? 'running' : 'paused');
 
@@ -1181,16 +1311,22 @@
 
   /* 断线重连：宿主重启后端口和 token 都会变，所以每次都重新问主进程 */
   var retry = 0;
+  var currentWs = null;
+  var paused = false;
   function connect(port, token) {
     var ws;
     try { ws = new WebSocket('ws://127.0.0.1:' + port + '/dsh-washer/stream?token=' + encodeURIComponent(token)); }
     catch (e) { setConn('lost'); return; }
+    currentWs = ws;
     ws.onopen = function () { setConn('open'); retry = 0; };
     ws.onmessage = function (ev) {
       try { lastSnap = JSON.parse(ev.data); render(lastSnap); } catch (e) { /* 脏帧忽略 */ }
     };
     ws.onclose = function () {
+      if (currentWs === ws) currentWs = null;
       setConn('lost');
+      // 暂停监听时主动断开，不再自动重连；取消暂停时 applyPrefs 会重新 connect
+      if (paused) return;
       retry = Math.min(retry + 1, 5);
       setTimeout(reconnect, 500 * Math.pow(2, retry - 1));
     };
@@ -1228,6 +1364,16 @@
         document.body.dataset.theme = nextTheme;
       }
     }
+    if (typeof p.paused === 'boolean' && p.paused !== paused) {
+      paused = p.paused;
+      document.body.dataset.paused = paused ? '1' : '0';
+      if (paused) {
+        // 暂停监听：掐断 SSE/WS，画面冻结在最后一帧；主进程仍可随时恢复
+        if (currentWs) { try { currentWs.close(); } catch (e) {} currentWs = null; }
+      } else {
+        reconnect();
+      }
+    }
     if (skinChanged) {
       curState = null;
       if (lastSnap !== null) { buildMachine(lastSnap); paintLamp(lastSnap.state || 'off'); }
@@ -1253,7 +1399,7 @@
 
   if (host) {
     host.state().then(function (st) {
-      if (st) applyPrefs({ size: st.size, skin: st.skin, dark: st.dark });
+      if (st) applyPrefs({ size: st.size, skin: st.skin, dark: st.dark, paused: st.paused, opacity: st.opacity });
     });
     host.onPrefs(applyPrefs);
 
@@ -1268,6 +1414,53 @@
       mq.addEventListener('change', function (e) { host.setReduceMotion(e.matches); });
     }
   }
+
+  /* ---------------- 彩蛋层：全部是纯视觉、只用已有快照信号 ----------------
+     规则：只在待机/静息态触发，尊重 reduced-motion（CSS 媒体查询统一关动画），
+     不新增任何宿主依赖。 */
+  var IDLE_SHAKE_AFTER_MS = 60000;    // 待机满 1 分钟，开始偶尔轻轻晃一下
+  var DOZE_AFTER_MS = 5 * 60 * 1000;  // 待机满 5 分钟，进入"打盹"（整机变暗）
+  var idleSince = null;
+  var nextShakeAt = 0;
+  var failFlagged = false;
+  function eggTick() {
+    var snap = lastSnap;
+    if (!snap) return;
+    var s = snap.state || 'off';
+    var now = Date.now();
+    if (s === 'idle') { if (idleSince === null) idleSince = now; }
+    else { idleSince = null; nextShakeAt = 0; }
+    var dozing = idleSince !== null && (now - idleSince) >= DOZE_AFTER_MS;
+    document.body.dataset.doze = dozing ? '1' : '0';
+    // 空闲轻抖：待机够久后，隔 20~40s 轻轻晃一下（打盹时不晃）
+    if (idleSince !== null && !dozing) {
+      if (nextShakeAt === 0) nextShakeAt = idleSince + IDLE_SHAKE_AFTER_MS;
+      if (now >= nextShakeAt) {
+        nextShakeAt = now + 20000 + Math.random() * 20000;
+        machine.dataset.idleShake = '1';
+        setTimeout(function () { delete machine.dataset.idleShake; }, 650);
+      }
+    }
+    // 连续失败 / 小成就：只看最近几轮（history[0] 是最新，顺带 aborted 不算失败）
+    var hist = Array.isArray(snap.history) ? snap.history : [];
+    var failStreak = 0;
+    for (var i = 0; i < hist.length; i++) {
+      var h = hist[i];
+      if (h.ok === true || h.aborted === true) break;
+      failStreak++;
+    }
+    var okStreak = 0;
+    for (var j = 0; j < hist.length; j++) { if (hist[j].ok === true) okStreak++; else break; }
+    var failing = failStreak >= 3;
+    document.body.dataset.stuckLid = failing ? '1' : '0';
+    document.body.dataset.medal = okStreak >= 5 ? '1' : '0';
+    if (failing && !failFlagged) {
+      failFlagged = true;
+      showFlash('error', '连续 ' + failStreak + ' 轮出错，看看详情');
+    }
+    if (!failing) failFlagged = false;
+  }
+  setInterval(eggTick, 1000);
 
   if (host) reconnect();
 })();

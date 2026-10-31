@@ -8,7 +8,7 @@
  * 用 .cjs 后缀：插件本体是 ESM（package.json 里 type: module），
  * 但 Electron 主进程入口必须是 CommonJS。改后缀是让两者共存最省事的办法。
  */
-const { app, BrowserWindow, globalShortcut, ipcMain, Menu, Notification, screen, shell } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Menu, Notification, screen, session, shell } = require('electron');
 const { readFileSync, existsSync } = require('node:fs');
 const { homedir } = require('node:os');
 const { join, dirname } = require('node:path');
@@ -100,6 +100,21 @@ let lastNotifyAt = 0;
 let soundPref = false;
 /** 声音单独节流。比通知的 4 秒短——等待确认可能短时间内来回切。 */
 let lastSoundAt = 0;
+
+/**
+ * 勿扰总闸：开会/专注时全静音。压过 notifyPref / soundPref——两个都关，
+ * 浮窗照常显示。和"用户是不是在前台"是两码事：前台只是不打扰，勿扰是
+ * 明确要求任何提醒都别出声。
+ */
+let dndPref = false;
+
+/**
+ * 暂停监听：掐断浮窗与宿主的实时同步（画面冻结在最后一帧），但不动可见性和配置。
+ * 主进程只记开关，真正的断连/重连在页面 applyPrefs 里做。
+ */
+let paused = false;
+/** 浮窗整体不透明度（0.3~1）。太低会看不清，设置页/菜单里调。 */
+let opacity = 1;
 
 /**
  * 状态 → 系统音效。
@@ -379,6 +394,24 @@ function defaultPosition() {
 }
 
 /**
+ * 位置兜底：上次记住的坐标可能落在已拔掉的副屏上，或分辨率缩小后跑到屏幕外
+ * （窗口逻辑上存在、人却看不见也点不到，只能去手删配置文件）。
+ *
+ * 建窗前校验一次——窗口矩形至少要和某块屏的工作区相交；否则回退默认位置
+ * （主屏右上角）。拖动/切换屏幕后也复用这个函数纠正。
+ */
+function clampToVisible(pos) {
+  const { width, height } = winSize();
+  const displays = screen.getAllDisplays();
+  const intersects = displays.some((d) => {
+    const a = d.workArea;
+    return pos.x < a.x + a.width && pos.x + width > a.x
+      && pos.y < a.y + a.height && pos.y + height > a.y;
+  });
+  return intersects ? pos : defaultPosition();
+}
+
+/**
  * 穿透 = 窗口收不到任何鼠标事件，包括双击和右键。
  * 所以一旦开了，靠窗口自己关不回来——必须有一条窗口外的通道。
  * 这里用全局快捷键做救命绳，不依赖任何鼠标操作。
@@ -431,10 +464,18 @@ function updateEscapeShortcut() {
       if (!ok) {
         // 注册失败说明键位被占了。这是致命情况：穿透开出去就关不回来了，
         // 所以干脆不进入穿透状态，把问题暴露在开的那一刻，而不是关的时候。
+        //
+        // 关键：必须把 false **落盘并回传宿主**。setClickThrough 刚才已经把
+        // true 写进了偏好文件，若不撤销，watchPrefs 每 400ms 读到 true 又调
+        // setClickThrough(true)→又注册失败→又写回……形成永不收敛的写盘+POST
+        // 死循环，开关还会来回跳。写回 false 才能终止这个环。
         clickThrough = false;
+        writeFloatPrefs({ clickThrough: false });
+        notifyHost({ clickThrough: false });
         if (win !== null && !win.isDestroyed()) {
           win.setIgnoreMouseEvents(false, { forward: true });
           win.setFocusable(true);
+          win.webContents.send('washer:click-through', false);
           win.webContents.send('washer:escape-unavailable', ESCAPE_ACCELERATOR);
         }
       }
@@ -445,7 +486,7 @@ function updateEscapeShortcut() {
 }
 
 function createWindow() {
-  const pos = readPosition() || defaultPosition();
+  const pos = clampToVisible(readPosition() || defaultPosition());
   const size = SIZES[sizeMode] || SIZES.normal;
   win = new BrowserWindow({
     width: size.width,
@@ -532,6 +573,12 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  // 只允许加载本地 file:// 页面；任何试图导航到网络地址的都拦下。
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) event.preventDefault();
+  });
+  // 禁止嵌入 <webview>——本页不需要，放开等于多开一个不受控的浏览上下文。
+  win.webContents.on('will-attach-webview', (event) => event.preventDefault());
 
   win.loadFile(join(__dirname, '..', 'debug', 'float.html'));
 }
@@ -554,12 +601,14 @@ function createWindow() {
  *
  * 三条约束：
  *   1. 默认关。突然弹通知比错过更烦人，要用户自己去设置页开。
- *   2. 只在该报的时候报：完成、以及需要人动手的故障。
- *      正常运转的每一步都弹一遍，用户当天就会把它关掉。
+ *   2. 只在该报的时候报：完成、故障、等你确认、卡住——正好覆盖定位里的
+ *      三个叫人时刻（洗完 / 卡住 / 等你确认）。正常运转的每一步都弹一遍，
+ *      用户当天就会把它关掉。
  *   3. 窗口在前台时不弹——人就在看，还弹通知是打扰。
  */
 function notify(title, body) {
   if (notifyPref !== true) return;
+  if (dndPref === true) return;   // 勿扰：通知开关开着也不打扰
   /*
    * 前台不弹的判据只看 isFocused，不看 isVisible。
    *
@@ -600,6 +649,7 @@ function notify(title, body) {
  */
 function playSound(kind) {
   if (soundPref !== true) return;
+  if (dndPref === true) return;   // 勿扰：音效开关开着也不出声
   if (win !== null && !win.isDestroyed() && win.isFocused()) return;
   const file = SOUNDS[kind];
   if (file === undefined) return;
@@ -887,11 +937,102 @@ function openDetail() {
   detailWin.once('ready-to-show', () => detailWin.show());
   detailWin.on('closed', () => { detailWin = null; });
   detailWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  detailWin.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) event.preventDefault();
+  });
+  detailWin.webContents.on('will-attach-webview', (event) => event.preventDefault());
 }
 
 function closeDetail() {
   if (detailWin !== null && !detailWin.isDestroyed()) detailWin.close();
   detailWin = null;
+}
+
+/*
+ * 从主进程直接钉会话（浮窗的「+N」菜单用）。
+ *
+ * 复用宿主那套带 token 的 HTTP 接口，和页面里的 pinSession 走同一条路；
+ * 主进程自己拿 readEndpoint() 的 port/token，不依赖页面传凭据。
+ */
+function pinSessionAtHost(sessionId) {
+  readEndpoint().then((ep) => {
+    if (ep === null || !ep.port || !ep.token) return;
+    const body = JSON.stringify({ sessionId: sessionId === undefined ? null : sessionId });
+    try {
+      const req = require('node:http').request({
+        host: '127.0.0.1',
+        port: ep.port,
+        path: '/dsh-washer/pin?token=' + encodeURIComponent(ep.token),
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        timeout: 2000,
+      }, (res) => { res.resume(); });
+      req.on('error', () => { /* 宿主没起就算了 */ });
+      req.on('timeout', () => { req.destroy(); });
+      req.end(body);
+    } catch { /* 同上 */ }
+  });
+}
+
+/*
+ * 「+N」弹出的会话切换菜单。页面把当前会话概览传上来，这里只负责画菜单 +
+ * 点了去钉。之前 +N 只是个不可点的灰字，第 4 个及以后的会话在浮窗上够不到。
+ */
+function showSessionMenu(payload) {
+  const sessions = payload && Array.isArray(payload.sessions) ? payload.sessions : [];
+  const pinned = payload && typeof payload.pinned === 'string' ? payload.pinned : null;
+  const template = sessions.map((r) => ({
+    label: (r.sessionId === pinned ? '✓ ' : '') + String(r.sessionId || '').slice(0, 8) + ' · ' + (r.state || ''),
+    click: () => pinSessionAtHost(r.sessionId === pinned ? null : r.sessionId),
+  }));
+  if (pinned !== null) {
+    template.push({ type: 'separator' });
+    template.push({ label: '回到跟随', click: () => pinSessionAtHost(null) });
+  }
+  if (template.length === 0) return;
+  Menu.buildFromTemplate(template).popup({ window: win !== null && !win.isDestroyed() ? win : undefined });
+}
+
+/*
+ * 暂停 / 继续监听。只冻结页面与宿主的实时同步，不改可见性、不动配置。
+ * 页面收到 paused=true 会主动断开 WS 并停止自动重连。
+ */
+function setPaused(on) {
+  const next = on === true;
+  if (next === paused) return;
+  paused = next;
+  writeFloatPrefs({ paused: next });
+  notifyHost({ paused: next });
+  if (win !== null && !win.isDestroyed()) {
+    win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark, paused, opacity });
+  }
+}
+
+/*
+ * 打开 Harness 客户端。用 `open -a` 交给系统按应用名启动，找不到就算了——
+ * 这里只是给用户一个便利入口，不负责管理那个 App 的生命周期。
+ */
+function openHarnessApp() {
+  try {
+    const { execFile } = require('node:child_process');
+    execFile('open', ['-a', 'DeepSeek Harness'], () => { /* 找不到客户端就静默 */ });
+  } catch { /* 同上 */ }
+}
+
+/*
+ * 透明度。0.3 是下限：再低机身上的状态字就糊了，失去"一眼看到"的意义。
+ * 写回偏好文件，下次启动照旧；同时推给页面（目前页面不消费，留给将来）。
+ */
+function setOpacity(next) {
+  const v = typeof next === 'number' && isFinite(next) ? Math.min(1, Math.max(0.3, next)) : 1;
+  if (v === opacity) return;
+  opacity = v;
+  if (win !== null && !win.isDestroyed()) win.setOpacity(v);
+  writeFloatPrefs({ opacity: v });
+  notifyHost({ opacity: v });
+  if (win !== null && !win.isDestroyed()) {
+    win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark, paused, opacity });
+  }
 }
 
 function showMenu() {
@@ -901,6 +1042,7 @@ function showMenu() {
       label: detailOpen ? '✓ 查看详情' : '查看详情',
       click: () => (detailOpen ? closeDetail() : openDetail()),
     },
+    { label: '打开 Harness 客户端', click: () => openHarnessApp() },
     { type: 'separator' },
     {
       label: sizeMode === 'tiny' ? '✓ 极简' : '极简',
@@ -913,6 +1055,13 @@ function showMenu() {
         { label: skin === 'pixel' ? '✓ 像素' : '像素', click: () => setSkin('pixel') },
       ],
     },
+    {
+      label: '透明度',
+      submenu: [1, 0.85, 0.7, 0.5].map((v) => ({
+        label: (Math.abs(opacity - v) < 0.01 ? '✓ ' : '') + Math.round(v * 100) + '%',
+        click: () => setOpacity(v),
+      })),
+    },
     { type: 'separator' },
     {
       label: clickThrough ? `✓ 鼠标穿透（${ESCAPE_ACCELERATOR} 关闭）` : '鼠标穿透',
@@ -922,6 +1071,7 @@ function showMenu() {
       label: '重连并刷新',
       click: () => win !== null && win.webContents.reload(),
     },
+    { label: paused ? '✓ 暂停监听' : '暂停监听', click: () => setPaused(!paused) },
     { type: 'separator' },
     /*
      * 这是用户主动关掉浮窗，跟拨设置页开关同义，所以要落盘（persist 默认 true）。
@@ -989,18 +1139,33 @@ function watchPrefs() {
       const nextNotify = typeof prefs.notify === 'boolean' ? prefs.notify : notifyPref;
       // 声音开关同一条路：设置页 POST → 宿主写文件 → 这里读到就生效
       const nextSound = typeof prefs.sound === 'boolean' ? prefs.sound : soundPref;
+      // 勿扰总闸同一条路
+      const nextDnd = typeof prefs.dnd === 'boolean' ? prefs.dnd : dndPref;
+      // 暂停监听 / 透明度同一条路：设置页或菜单改 → 写文件 → 这里读到就应用
+      const nextPaused = typeof prefs.paused === 'boolean' ? prefs.paused : paused;
+      const nextOpacity = typeof prefs.opacity === 'number' ? prefs.opacity : opacity;
       if (nextSize !== sizeMode) setSizeMode(nextSize);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
       if (nextThrough !== clickThrough) setClickThrough(nextThrough);
       if (nextDark !== themeDark) setThemeDark(nextDark);
+      if (nextPaused !== paused) setPaused(nextPaused);
+      if (nextOpacity !== opacity) setOpacity(nextOpacity);
       notifyPref = nextNotify;
       soundPref = nextSound;
+      dndPref = nextDnd;
     });
   } catch { prefWatcher = null; }
 }
 
 app.whenReady().then(() => {
+  /*
+   * 权限基线：这两个窗口只加载本地文件、不碰摄像头/麦克风/地理位置等任何
+   * Web 权限。默认全部拒绝——将来页面即便被注入内容，也拿不到能力。
+   */
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
+
   // 宿主用 --size / --skin 把设置页里的偏好带进来（主进程读不到 localStorage）。
   // 命令行优先，其次是上一次在右键菜单里改的值。
   const prefs = floatPrefsOrEmpty();
@@ -1028,6 +1193,11 @@ app.whenReady().then(() => {
   if (typeof prefs.notify === 'boolean') notifyPref = prefs.notify;
   // 声音同理
   if (typeof prefs.sound === 'boolean') soundPref = prefs.sound;
+  // 勿扰同理
+  if (typeof prefs.dnd === 'boolean') dndPref = prefs.dnd;
+  // 暂停监听 / 透明度：沿用上次的值，避免启动后又突然开始推帧 / 跳回全不透明
+  if (typeof prefs.paused === 'boolean') paused = prefs.paused;
+  if (typeof prefs.opacity === 'number') opacity = Math.min(1, Math.max(0.3, prefs.opacity));
 
   /*
    * 单实例：重复点启动只是把已有窗口提到前面。
@@ -1050,6 +1220,22 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  // 启动就应用上次的不透明度（<1 才有必要 setOpacity，1 是默认值）
+  if (win !== null && !win.isDestroyed() && opacity < 1) win.setOpacity(opacity);
+
+  /*
+   * 屏幕拓扑变了（拔掉副屏、改分辨率、切主副屏）就把窗口拉回可见区。
+   * 否则窗口会留在已经不存在的坐标上——看得见的桌面里什么都没有。
+   */
+  const reclampWindow = () => {
+    if (win === null || win.isDestroyed()) return;
+    const [x, y] = win.getPosition();
+    const next = clampToVisible({ x, y });
+    if (next.x !== x || next.y !== y) win.setPosition(next.x, next.y);
+  };
+  screen.on('display-removed', reclampWindow);
+  screen.on('display-added', reclampWindow);
+  screen.on('display-metrics-changed', reclampWindow);
 
   ipcMain.on('washer:set-click-through', (_event, on) => setClickThrough(on));
   ipcMain.on('washer:reduce-motion', (_event, on) => { reduceMotion = on === true; });
@@ -1062,6 +1248,8 @@ app.whenReady().then(() => {
     skin,
     dark: themeDark,
     visible,
+    paused,
+    opacity,
   }));
   ipcMain.on('washer:notify', (_event, payload) => {
     const kind = payload && payload.kind;
@@ -1076,11 +1264,25 @@ app.whenReady().then(() => {
     playSound(kind);
     if (kind === 'done') notify('洗完了', text || '这一轮跑完了');
     else if (kind === 'error') notify('出故障了', text || '点开看看');
+    /*
+     * 「等你确认」是定位里最需要动手的时刻，之前只有声音、没有系统通知，
+     * 用户离开座位回来才发现任务早卡在等你拍板。补上这一条：
+     * 页面侧的边沿检测保证进入 waiting 只发一次 IPC，notify 自身还有
+     * 前台静音 + 4 秒节流兜底，不会刷屏。
+     */
+    else if (kind === 'waiting') notify('等你确认', text || '需要你拍板');
+    /*
+     * 卡住：定位三大时刻里唯一之前没有主动提醒的。页面侧用 stalledMs 边沿
+     * 检测（一轮只发一次），这里补系统通知；没配专门音效，静音即可。
+     */
+    else if (kind === 'stalled') notify('卡住了', text || '有一阵没进展了');
   });
   ipcMain.on('washer:set-size', (_event, mode) => setSizeMode(mode));
   ipcMain.on('washer:set-skin', (_event, name) => setSkin(name));
   ipcMain.on('washer:set-visible', (_event, on) => setVisible(on === true));
   ipcMain.on('washer:show-menu', () => showMenu());
+  ipcMain.on('washer:show-session-menu', (_event, payload) => showSessionMenu(payload));
+  ipcMain.on('washer:pin-session', (_event, id) => pinSessionAtHost(id || null));
   ipcMain.on('washer:open-detail', () => openDetail());
   ipcMain.on('washer:close-detail', () => closeDetail());
   /*

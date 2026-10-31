@@ -1419,10 +1419,11 @@ await test('设置页的开关是 role=switch 且带内联样式（不靠 class 
 
   const switches = html.match(/role="switch"/g) || [];
   /*
-   * macOS 上五个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知 / 状态音效。
-   * 前四个是 dock 与浮窗共用的，音效只在 macOS 上出现（走系统自带 afplay）。
+   * macOS 上六个：空闲隐藏 / 桌面悬浮窗 / 鼠标穿透 / 洗完通知 / 状态音效 / 勿扰。
+   * 前四个是 dock 与浮窗共用的，音效只在 macOS 上出现（走系统自带 afplay），
+   * 勿扰是通知与音效的总闸。
    */
-  assert.equal(switches.length, 5, 'macOS 上五个布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知/音效），实际 ' + switches.length);
+  assert.equal(switches.length, 6, 'macOS 上六个布尔项各一个开关（空闲隐藏/悬浮窗/穿透/洗完通知/音效/勿扰），实际 ' + switches.length);
   assert.ok(/aria-checked="true"/.test(html), '开着的开关 aria-checked=true');
   assert.ok(/aria-checked="false"/.test(html), '关着的开关 aria-checked=false');
 
@@ -1565,11 +1566,11 @@ await test('设置页：每个可写字段都在 DEFAULT_CONFIG 里，否则合�
   // 空配置下，每个开关都得渲染成明确的关/开（不能因为值是 undefined 就没有 aria-checked）
   const switches = [...html.matchAll(/<button[^>]*role="switch"[^>]*aria-checked="(true|false)"[^>]*>/g)];
   /*
-   * macOS 上五个：空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 音效。
+   * macOS 上六个：空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 音效 / 勿扰。
    * 这条用例的前提是"最完整的平台"，非 macOS 的裁剪由上面
    * 「Windows 上音效开关必须隐藏」那条用例单独守，不在这里混着测。
    */
-  assert.equal(switches.length, 5, 'macOS 上五个布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 音效）各一个开关，实际 ' + switches.length);
+  assert.equal(switches.length, 6, 'macOS 上六个布尔项（空闲隐藏 / 悬浮窗 / 穿透 / 洗完通知 / 音效 / 勿扰）各一个开关，实际 ' + switches.length);
   for (const m of switches) {
     if (/悬浮窗/.test(m[0])) assert.equal(m[1], 'false', '空配置下悬浮窗开关必须是关');
   }

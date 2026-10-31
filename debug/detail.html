@@ -126,6 +126,30 @@
   .tool .fill { height: 100%; border-radius: 2px; background: var(--run); transition: width .25s; }
   .tool .fill[data-err="1"] { background: var(--bad); }
 
+  /* 最近几轮：一眼回看刚跑完的几轮成败与耗时 */
+  .hist { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; font-variant-numeric: tabular-nums; }
+  .hist .h-l { color: var(--dim); }
+  .hist .h-r { color: var(--dim); flex: none; }
+  .hist .h-ok { color: var(--ok); }
+  .hist .h-bad { color: var(--bad); }
+  .hist .h-stop { color: var(--warn); }
+
+  /* 会话：点一行把详情/浮窗切到那个会话（固定/跟随由宿主决定） */
+  .sess { display: flex; align-items: center; gap: 8px; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; cursor: pointer; -webkit-app-region: no-drag; }
+  .sess:hover { background: var(--line); }
+  .sess .s-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--dim); }
+  .sess .s-dot[data-run] { background: var(--run); }
+  .sess .s-dot[data-urgent] { background: var(--warn); }
+  .sess .s-label { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess .s-tag { color: var(--faint); font-size: 10px; flex: none; }
+  .sess[data-cur] .s-label { color: var(--ok); }
+  .copy {
+    -webkit-app-region: no-drag; cursor: pointer; margin-left: 6px;
+    color: var(--dim); font-size: 10px; border: 1px solid var(--line);
+    border-radius: 4px; padding: 0 4px;
+  }
+  .copy:hover { color: var(--text); border-color: var(--dim); }
+
   .empty { color: var(--faint); font-size: 11px; padding: 2px 0; }
   .note { color: var(--faint); font-size: 10px; margin-top: 2px; }
 </style>
@@ -148,6 +172,12 @@
     <div class="row"><span class="k">模型</span><span class="v model" id="model" title=""></span></div>
     <div class="row"><span class="k">速度</span><span class="v" id="speed">—</span></div>
     <div class="row"><span class="k">本轮耗时</span><span class="v" id="elapsed">--:--</span></div>
+    <div class="row" id="errRow" style="display:none"><span class="k">错误</span><span class="v"><span id="errCode" style="color:var(--bad)"></span><span class="copy" id="copyErr" title="复制错误码">复制</span></span></div>
+  </div>
+
+  <div class="sec">
+    <h4>会话 <span id="sessHint" style="color:var(--faint);font-weight:400"></span></h4>
+    <div id="sessions"><div class="empty">只有一个会话</div></div>
   </div>
 
   <div class="sec">
@@ -162,6 +192,11 @@
   <div class="sec">
     <h4>工具耗时 <span id="toolHint" style="color:var(--faint);font-weight:400"></span></h4>
     <div id="tools"><div class="empty">本轮还没调用工具</div></div>
+  </div>
+
+  <div class="sec">
+    <h4>最近几轮 <span id="histHint" style="color:var(--faint);font-weight:400"></span></h4>
+    <div id="history"><div class="empty">还没有跑完的轮次</div></div>
   </div>
 </div>
 
@@ -260,6 +295,34 @@
     el('toolHint').textContent = '按最慢排序';
   }
 
+  /*
+   * 最近几轮成绩单：宿主 snapshot.history（新→旧，最多 10 条）。
+   * 每条只给"第几轮 / 成败 / 用时 / 工具数"——回看刚跑完的几轮，不铺开完整日志。
+   */
+  function renderHistory(list) {
+    var box = el('history');
+    if (!Array.isArray(list) || list.length === 0) {
+      box.innerHTML = '<div class="empty">还没有跑完的轮次</div>';
+      el('histHint').textContent = '';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < list.length; i++) {
+      var h = list[i];
+      var mark = h.aborted
+        ? '<span class="h-stop">已停止</span>'
+        : (h.ok
+          ? '<span class="h-ok">✓</span>'
+          : '<span class="h-bad">✕ ' + esc(h.errorCode || 'E-00') + '</span>');
+      html += '<div class="hist">'
+        + '<span class="h-l">第 ' + (h.turn || 0) + ' 轮</span>'
+        + '<span class="h-r">' + mark + ' · ' + fmtMs(h.durationMs) + ' · ' + (h.toolCount || 0) + ' 工具</span>'
+        + '</div>';
+    }
+    box.innerHTML = html;
+    el('histHint').textContent = '新→旧';
+  }
+
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -271,6 +334,40 @@
     if (ms < 1000) return Math.round(ms) + 'ms';
     if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
     return Math.floor(ms / 60000) + 'm' + Math.round((ms % 60000) / 1000) + 's';
+  }
+
+  /* 会话（多会话时才有一行行可选）：点一行让宿主把视图切/固定到该会话 */
+  var STATE_SHORT = { off: '离线', idle: '待机', starting: '启动', washing: '洗涤', rinsing: '漂洗', spinning: '脱水', waiting: '等你', draining: '排水', done: '完成', error: '故障' };
+  function renderSessions(list, pinned, current) {
+    var box = el('sessions');
+    var rows = Array.isArray(list) ? list : [];
+    if (rows.length <= 1) {
+      box.innerHTML = '<div class="empty">只有一个会话</div>';
+      el('sessHint').textContent = '';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var urgent = (r.state === 'waiting' || r.state === 'error');
+      var running = r.running || r.state === 'washing' || r.state === 'rinsing' || r.state === 'spinning';
+      var isCur = r.sessionId === current;
+      var tag = (r.sessionId === pinned) ? '固定' : (isCur ? '当前' : '');
+      html += '<div class="sess"' + (isCur ? ' data-cur' : '') + ' data-id="' + esc(r.sessionId) + '" title="' + esc(r.sessionId) + '">'
+        + '<span class="s-dot"' + (urgent ? ' data-urgent' : (running ? ' data-run' : '')) + '></span>'
+        + '<span class="s-label">' + esc(STATE_SHORT[r.state] || r.state) + ' · 第 ' + (r.turn || 0) + ' 轮</span>'
+        + (tag ? '<span class="s-tag">' + tag + '</span>' : '')
+        + '</div>';
+    }
+    box.innerHTML = html;
+    el('sessHint').textContent = pinned ? '点一行固定' : '点一行切换';
+    var items = box.querySelectorAll('.sess');
+    for (var j = 0; j < items.length; j++) {
+      items[j].addEventListener('click', function () {
+        var id = this.getAttribute('data-id');
+        if (host && host.pinSession) host.pinSession(id);
+      });
+    }
   }
 
   function render(snap) {
@@ -304,10 +401,34 @@
         : '—';
     }
     renderTools(snap.toolRank);
+
+    // 故障时给个「复制错误码」，方便贴给排查
+    if (s === 'error') {
+      lastSnap = snap;
+      el('errRow').style.display = '';
+      el('errCode').textContent = snap.errorCode || 'E-00';
+    } else {
+      el('errRow').style.display = 'none';
+    }
+    renderHistory(snap.history);
+    renderSessions(snap.sessions, snap.pinnedSessionId, snap.sessionId);
   }
 
+  var lastSnap = null;
   el('close').addEventListener('click', function () {
     if (host) host.closeDetail(); else window.close();
+  });
+  el('copyErr').addEventListener('click', function () {
+    var txt = (lastSnap && lastSnap.errorCode) ? lastSnap.errorCode : 'E-00';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt);
+    } else {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = txt; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+      } catch (e) { /* 复制失败不影响面板 */ }
+    }
   });
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 

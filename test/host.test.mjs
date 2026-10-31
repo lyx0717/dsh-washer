@@ -163,8 +163,13 @@ test('WS 帧编码：短文本、中等文本都带正确的 FIN+opcode', () => 
   assert.equal(medium.length, 4 + 300);
 });
 
-test('WS 帧编码：超过 64KB 返回 null（不静默截断）', () => {
-  assert.equal(encodeWsText('x'.repeat(70000)), null);
+test('WS 帧编码：超过 64KB 用 127 + 8 字节扩展长度（不丢帧）', () => {
+  const big = encodeWsText('x'.repeat(70000));
+  assert.notEqual(big, null, '超过 64KB 不能返回 null——编码层要能表达任意大小');
+  assert.equal(big[0], 0x81, 'FIN + text opcode');
+  assert.equal(big[1], 127, '≥65536 字节要用 64 位扩展长度');
+  assert.equal(big.readBigUInt64BE(2), 70000n, '8 字节长度必须等于 payload 字节数');
+  assert.equal(big.length, 10 + 70000);
 });
 
 /* ------------------------------------------------------------------ *
@@ -580,6 +585,22 @@ test('assistant/message 的 usage 要记录下来（详情面板的数据源）'
   assert.equal(state.usage.output, 1270);
   assert.equal(state.usage.cacheRead, 16640);
   assert.equal(state.model, 'deepseek-flash');
+});
+
+test('纯文本轮次：assistant/message 折叠后必须是 spinning，不能卡在 starting', () => {
+  // A1 回归：宿主曾把 assistant 消息记成 kind 'assistant-message'，但
+  // core 的 OUTPUT_NODE_KINDS 只认 'assistant'，于是纯问答轮次被判成
+  // starting、spinning 永远走不到——桌面浮窗整轮停在「启动中」。
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('assistant/message', { turn: 1, message: { source: { model: 'm' } } }), NOW + 100);
+  assert.equal(s.nodes[s.nodes.length - 1].kind, 'assistant', 'assistant 消息要记成白名单里的 assistant');
+  const derived = deriveState({
+    sessionId: 's1', running: true, pending: undefined, runningCalls: [],
+    partial: null, nodes: s.nodes, outline: [{ turn: 1 }], trajectory: undefined,
+    sticky: null, now: NOW + 200,
+  });
+  assert.equal(derived, 'spinning', '模型输出后应脱水收尾，不是启动中');
 });
 
 test('速度按累计 token 的差值算，不是按采样次数', () => {
@@ -1659,10 +1680,13 @@ test('非 macOS 上不找 Electron 运行时（判平台，不判文件在不在
   assert.ok(fn !== null, '要有 overlayPlatformSupported()');
   assert.ok(/process\.platform === 'darwin'/.test(fn[1]),
     '悬浮窗支持与否必须按 process.platform === \'darwin\' 判');
-  const bin = /function electronBinary\(\) \{([\s\S]{0,300}?)\}/.exec(src);
-  assert.ok(bin !== null, '要有 electronBinary()');
-  assert.ok(/if \(!overlayPlatformSupported\(\)\) return null;/.test(bin[1]),
-    'electronBinary 必须先判平台再找文件——不支持的平台连找都不找');
+  assert.ok(src.includes('function electronBinaryStatus()'), '要有 electronBinaryStatus()');
+  assert.ok(/if \(!overlayPlatformSupported\(\)\) return \{ binary: null, reason: 'platform' \};/.test(src),
+    'electronBinaryStatus 必须先判平台再找文件——不支持的平台连找都不找');
+  const wrapper = /function electronBinary\(\) \{([\s\S]{0,200}?)\}/.exec(src);
+  assert.ok(wrapper !== null, '要有 electronBinary()');
+  assert.ok(/electronBinaryStatus\(\)/.test(wrapper[1]),
+    'electronBinary 必须复用 electronBinaryStatus（平台判断留在唯一一处）');
 });
 
 test('客户端报的 waiting 和本地推断能叠加，谁高算谁', async () => {
@@ -1749,6 +1773,31 @@ test('/dsh-washer/stop 正常跑完的一轮不算按停', async () => {
   assert.equal(api.snapshot().stoppedTurn, -1);
   const q = await callRoute(ctx, '/dsh-washer/stop?sessionId=s1', 'GET');
   assert.equal(q.body.stoppedTurn, -1, '正常结束不该被标记为按停');
+
+  ctx.dispose();
+});
+
+/*
+ * 详情面板「最近几轮」：跑完一轮后 snapshot.history 必须记下这一轮（成败/耗时/工具数）。
+ * 同时 snapshot.loadFactor 必须是数值——「任务缩略预览 / 负载强度」靠这两个字段驱动。
+ */
+test('/dsh-washer/stream 跑完一轮后 snapshot.history 记下该轮', async () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
+  await waitForPort(api);
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  onEvent({ id: 's1' }, ev('tool/call', { turn: 1, name: 'bash', callId: 'h1' }));
+  onEvent({ id: 's1' }, ev('tool/result', { turn: 1, callId: 'h1' }));
+  onEvent({ id: 's1' }, ev('turn/end', { turn: 1, reason: { kind: 'completed' } }));
+
+  const snap = api.snapshot();
+  assert.equal(Array.isArray(snap.history), true);
+  assert.equal(snap.history.length, 1);
+  assert.equal(snap.history[0].turn, 1);
+  assert.equal(snap.history[0].ok, true);
+  assert.equal(snap.history[0].toolCount, 1);
+  assert.equal(typeof snap.loadFactor, 'number');
 
   ctx.dispose();
 });

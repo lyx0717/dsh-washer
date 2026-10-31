@@ -96,3 +96,32 @@ test('状态表覆盖所有状态', () => {
     assert.ok(node !== undefined && node !== null, `${state} 状态应该能渲染`);
   }
 });
+
+/*
+ * 下面是 client.js（浏览器半）本身的兜底。之前它完全没人管：语法错误只会在
+ * 用户浏览器里炸，本地 npm test 全绿。render.mjs 会真跑它，但那是独立脚本、
+ * 不在 `npm test` 的原生 --test 列表里（现在已并入）。这里补两道最快的哨兵：
+ *   1) 能被 JS 引擎解析（语法错误当场红）；
+ *   2) __ModuleLoader__.load 契约正确（id == 包名、带 factory）。
+ */
+test('client.js 语法可解析（构建产物不能有语法错误）', () => {
+  const code = readFileSync(join(ROOT, 'client.js'), 'utf8');
+  assert.doesNotThrow(() => new vm.Script(code, { filename: 'client.js' }), 'client.js 存在语法错误');
+});
+
+test('client.js 的 __ModuleLoader__.load 契约正确（id=包名，有 factory）', () => {
+  const code = readFileSync(join(ROOT, 'client.js'), 'utf8');
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  const loaded = [];
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (def) => loaded.push(def) } },
+    console,
+  };
+  sandbox.window.window = sandbox.window;
+  vm.createContext(sandbox);
+  // 只执行顶层的那次 load() 调用——factory 不会被调用，因此不需要真 React
+  vm.runInContext(code, sandbox, { filename: 'client.js' });
+  assert.equal(loaded.length, 1, '__ModuleLoader__.load 应被调用一次');
+  assert.equal(loaded[0].id, pkg.name, '模块 id 必须等于 package.json 的 name');
+  assert.equal(typeof loaded[0].factory, 'function', 'load 必须带 factory 函数');
+});

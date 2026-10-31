@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('washerHost', {
   setReduceMotion: (on) => ipcRenderer.send('washer:reduce-motion', on === true),
   /** 右键菜单 */
   showMenu: () => ipcRenderer.send('washer:show-menu'),
+  /** 「+N」会话切换菜单：把概览传给主进程，由主进程画原生菜单并钉会话 */
+  showSessionMenu: (payload) => ipcRenderer.send('washer:show-session-menu', payload),
   /** 退出 */
   quit: () => ipcRenderer.send('washer:quit'),
   /**
@@ -48,6 +50,8 @@ contextBridge.exposeInMainWorld('washerHost', {
   },
   /** 打开/关闭详情面板 */
   openDetail: () => ipcRenderer.send('washer:open-detail'),
+  /** 详情面板点会话行：固定/切换宿主视图会话（null = 回到跟随） */
+  pinSession: (sessionId) => ipcRenderer.send('washer:pin-session', sessionId || null),
   closeDetail: () => ipcRenderer.send('washer:close-detail'),
   /** 订阅"快捷键注册失败"的通知 */
   onEscapeUnavailable: (fn) => {

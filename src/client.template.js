@@ -153,6 +153,7 @@ window.__ModuleLoader__.load({
       'sub.error': '{code} · 点开看看',
       'label.washer': '洗衣机状态',
       'overlay.running': '浮窗模式 · 想看得更全请切回 dock',
+      'overlay.busy': '处理中',
       'label.skin': '外观',
       'skin.precision': '精密家电',
       'skin.pixel': '像素',
@@ -160,7 +161,7 @@ window.__ModuleLoader__.load({
       'set.intro': 'Agent 干活时的状态指示。改完立即生效。',
       'set.nav': '洗衣机',
       'set.hideIdle': '空闲时隐藏',
-      'set.restartHint': '档位和外观改完不用重启；成本需要先配好单价才会显示金额。',
+      'set.restartHint': '档位和外观改完不用重启，立即生效。',
       'set.overlay': '桌面悬浮窗',
       'set.overlayOn': '显示悬浮窗',
       'set.skinHint': '主界面和桌面悬浮窗共用这一套皮肤，改这里两边一起变。',
@@ -170,10 +171,12 @@ window.__ModuleLoader__.load({
       'ov.normal': '正常',
       'ov.tiny': '极简',
       'set.overlaySizeHint': '「极简」只留指示灯，不显示状态文字，占桌面空间最小。',
-      'set.overlayNotify': '洗完弹通知',
-      'set.overlayNotifyHint': '只报「洗完了」和「故障」，窗口在前台时不打扰。',
+      'set.overlayNotify': '弹通知',
+      'set.overlayNotifyHint': '完成、故障、等你确认、卡住都会叫你；窗口在前台时不打扰。',
       'set.overlaySound': '状态音效',
       'set.overlaySoundHint': '洗完了、出故障、等你确认各响一声，中间运转不吵。窗口在前台时静音。',
+      'set.overlayDnd': '勿扰模式',
+      'set.overlayDndHint': '开会/专注时全静音：浮窗照常显示，但不弹通知、不响音效。',
       'set.overlayThrough': '鼠标穿透',
       'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
       'tool.command': '跑命令',
@@ -216,6 +219,7 @@ window.__ModuleLoader__.load({
       'sub.error': '{code} · tap to inspect',
       'label.washer': 'Washer status',
       'overlay.running': 'Overlay mode - switch back to dock for full detail',
+      'overlay.busy': 'Working',
       'label.skin': 'Skin',
       'skin.precision': 'Precision',
       'skin.pixel': 'Pixel',
@@ -223,7 +227,7 @@ window.__ModuleLoader__.load({
       'set.intro': 'Live status while the agent works. Changes take effect immediately.',
       'set.nav': 'Washer',
       'set.hideIdle': 'Hide when idle',
-      'set.restartHint': 'Skin and size apply instantly; cost only shows once a unit price is configured.',
+      'set.restartHint': 'Skin and size apply instantly.',
       'set.overlay': 'Desktop overlay',
       'set.overlayOn': 'Show overlay',
       'set.skinHint': 'One skin shared by the dock bar and the desktop overlay — change it once, both update.',
@@ -247,10 +251,12 @@ window.__ModuleLoader__.load({
       'tool.browser': 'Using a browser',
       'tool.subagent': 'Running a subtask',
       'tool.plan': 'Planning',
-      'set.overlayNotify': 'Notify when done',
-      'set.overlayNotifyHint': 'Only “done” and “error”. Silent while the window is focused.',
+      'set.overlayNotify': 'Notifications',
+      'set.overlayNotifyHint': 'Done, error, waiting, or stuck — all will ping you. Silent while the window is focused.',
       'set.overlaySound': 'Sound cues',
       'set.overlaySoundHint': 'One chime for done, error, and waiting for you. Quiet while it works.',
+      'set.overlayDnd': 'Do not disturb',
+      'set.overlayDndHint': 'Mute everything while you focus: the float stays visible, but no notifications or sound.',
     };
 
     /* 每状态：水位 / 转速 / 泡沫。机型自己的表，和文案解耦 */
@@ -349,6 +355,11 @@ window.__ModuleLoader__.load({
        * 默认关，理由同上——突然出声比错过更烦人。
        */
       desktopOverlaySound: false,
+      /*
+       * 勿扰：开会/专注时全静音。浮窗照常显示状态，只是不弹系统通知、不响音效。
+       * 和 notify/sound 是两个层级的开关：勿扰是总闸，压过上面两个。
+       */
+      desktopOverlayDnd: false,
     };
 
     /* ------------------------------------------------------------------ *
@@ -399,6 +410,39 @@ window.__ModuleLoader__.load({
 
     // useTrajectory 缺失时的稳定 fallback（模块级常量，保证引用不变）
     function NO_TRAJECTORY() { return undefined; }
+
+    /*
+     * 宿主信号契约集中点。
+     *
+     * dock 依赖宿主的 useSession / useSessionStatus / useChat(legacy.*) /
+     * useProjection / useTrajectory —— 这些是宿主私有 API。字段名一变，这里就
+     * 静默失灵（取不到就当成"没在跑"，最坏永远停在 idle），而且散在组件里
+     * 十几行，改一次要翻半天。把取法收进一个 hook：宿主换契约只改这一处。
+     * legacy.* 逐个做存在性兜底，宿主换结构时退化为 undefined，而不是让整个
+     * 组件抛 TypeError 白屏。
+     */
+    function useDockSignals(props) {
+      const { sessionId, useSession, useSessionStatus, useChat, useProjection } = props;
+      const useTrajectory = typeof props.useTrajectory === 'function'
+        ? props.useTrajectory
+        : NO_TRAJECTORY;
+      const running = useSession((s) => s.running === true);
+      const removed = useSession((s) => s.removed === true);
+      const pending = useSessionStatus((status) => {
+        if (sessionId === undefined || status === undefined) return undefined;
+        const row = status.get(sessionId);
+        return row === undefined ? undefined : row.pendingInteraction;
+      });
+      // legacy.* 是宿主 useChat 的兼容层字段；逐个兜底，避免宿主换结构时整块崩
+      const runningCalls = useChat((s) => (s && s.legacy ? s.legacy.runningCalls : undefined));
+      const partial = useChat((s) => (s && s.legacy ? s.legacy.partial : undefined));
+      const nodes = useChat((s) => (s && s.legacy ? s.legacy.nodes : undefined));
+      const turnTimings = useChat((s) => (s && s.legacy ? s.legacy.turnTimings : undefined));
+      const outline = useProjection('turnOutline');
+      // 上下文压缩的实时信号（chat nodes 里的 compaction 节点是压缩**落地后**才有的）
+      const trajectory = useTrajectory((snapshot) => snapshot);
+      return { running, removed, pending, runningCalls, partial, nodes, turnTimings, outline, trajectory };
+    }
 
     /* ------------------------------------------------------------------ *
      * 设置页控件的样式常量
@@ -534,14 +578,14 @@ window.__ModuleLoader__.load({
     function StripBar(skin, state, dur, title, sub, tone, label, subHidden) {
       return h('div', {
         className: 'dw-strip',
-        role: 'status',
-        'aria-label': label + ': ' + title + ' · ' + sub,
         title: label + ': ' + title + ' · ' + sub,
       },
       MachineStrip(skin, state, dur),
       h('span', { className: 'dw-text' },
-        h('span', { className: 'dw-t1', 'data-tone': tone }, title),
-        h('span', { className: 'dw-t2', 'data-hide': subHidden ? 'compact' : undefined }, sub)));
+        /* live region 只包状态标题：计时/件数每秒都在变，整条一起当 live region
+           会让读屏每秒播报一次。把那些挪到 aria-hidden 的第二行里，只播状态。 */
+        h('span', { className: 'dw-t1', role: 'status', 'aria-label': label + ': ' + title, 'data-tone': tone }, title),
+        h('span', { className: 'dw-t2', 'aria-hidden': 'true', 'data-hide': subHidden ? 'compact' : undefined }, sub)));
     }
 
     /* 任意机型统一放进固定尺寸 + transform 缩放的框里：重排一次都不做 */
@@ -674,15 +718,9 @@ window.__ModuleLoader__.load({
     }
 
     function WasherDock(props) {
-      const { sessionId, useSession, useSessionStatus, useChat, useProjection } = props;
+      const { sessionId } = props;
       // 'dock' = 常规座位（输入框下方）；'header' = 审批接管输入框时的替补座位。
       const variant = props.washerVariant === 'header' ? 'header' : 'dock';
-      // useTrajectory 是宿主标准 prop，但只在 conversation 相关 slot 上稳定存在；
-      // 拿不到时退回一个永远返回 undefined 的 hook（压缩态自动降级，不影响其它状态）。
-      // fallback 提到模块级常量，别每次 render 新建函数（否则每帧都是新引用）。
-      const useTrajectory = typeof props.useTrajectory === 'function'
-        ? props.useTrajectory
-        : NO_TRAJECTORY;
       const cfg = readConfig(props);
       // 订阅全局偏好：任何一处改了配置，这里跟着重渲染
       usePrefRevision(props);
@@ -696,20 +734,8 @@ window.__ModuleLoader__.load({
       // 注册 slot 时传了 locale: LOCALE_NS，渲染器给的 t 已是本命名空间内的裸 key
       const { t, tr } = useTr(props);
 
-      const running = useSession((s) => s.running === true);
-      const removed = useSession((s) => s.removed === true);
-      const pending = useSessionStatus((status) => {
-        if (sessionId === undefined || status === undefined) return undefined;
-        const row = status.get(sessionId);
-        return row === undefined ? undefined : row.pendingInteraction;
-      });
-      const runningCalls = useChat((s) => s.legacy.runningCalls);
-      const partial = useChat((s) => s.legacy.partial);
-      const nodes = useChat((s) => s.legacy.nodes);
-      const turnTimings = useChat((s) => s.legacy.turnTimings);
-      const outline = useProjection('turnOutline');
-      // 上下文压缩的实时信号（chat nodes 里的 compaction 节点是压缩**落地后**才有的）
-      const trajectory = useTrajectory((snapshot) => snapshot);
+      // 宿主信号统一从 useDockSignals 取（契约集中点，见其定义处）
+      const { running, removed, pending, runningCalls, partial, nodes, turnTimings, outline, trajectory } = useDockSignals(props);
 
       const [, setTick] = React.useState(0);
       const [sticky, setSticky] = React.useState(null);
@@ -931,7 +957,7 @@ window.__ModuleLoader__.load({
       const motionIdleMs = now - lastMotion.current.at;
       const stalled = (state === 'washing' || state === 'rinsing' || state === 'spinning')
         && motionIdleMs >= STALL_AFTER_MS;
-      if (stalled) sub = fill(tr('sub.stalled'), { stalled: formatDuration(motionIdleMs) });
+      if (stalled) sub = (toolName ? toolName + ' · ' : '') + fill(tr('sub.stalled'), { stalled: formatDuration(motionIdleMs) });
 
       const tone = state === 'error' ? 'error' : (state === 'waiting' ? 'warn' : (state === 'done' ? 'ok' : undefined));
 
@@ -961,6 +987,8 @@ window.__ModuleLoader__.load({
      * 写路径走 localStorage（不用 ctx.configForms 的原因见下方 apply 内注释），
      * 读路径 = 默认配置 ← 插件行 config ← localStorage 里的用户改动。
      * ------------------------------------------------------------------ */
+    /* 侧边栏导航用的洗衣机图标（16px，跟随 currentColor 主题色，纯描边） */
+    const NAV_WASHER_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><rect x="3.5" y="2.5" width="17" height="19" rx="3" stroke="currentColor" stroke-width="1.7"/><rect x="6.5" y="5.3" width="6.5" height="1.7" rx="0.85" fill="currentColor"/><circle cx="17" cy="6.2" r="1.1" fill="currentColor"/><circle cx="12" cy="14" r="4.4" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/><path d="M8.4 15.2c1.2-.8 2.4-.8 3.6 0s2.4.8 3.6 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
     function WasherSettings(props) {
       const { t, tr } = useTr(props);
       const cfg = readConfig(props);
@@ -1100,6 +1128,13 @@ window.__ModuleLoader__.load({
             h('p', { key: 'sound-hint', className: 'dw-set-hint' }, tr('set.overlaySoundHint'))]
             : null,
           /*
+           * 勿扰：总闸。开了之后不管上面通知/音效各自开没开，一律不出声不出通知，
+           * 浮窗照常显示。开会/专注时用，省得一条条去关。
+           */
+          row('set.overlayDnd',
+            sw('desktopOverlayDnd', cfg.desktopOverlayDnd === true, tr('set.overlayDnd'))),
+          h('p', { key: 'dnd-hint', className: 'dw-set-hint' }, tr('set.overlayDndHint')),
+          /*
            * 平台支持、但找不到 Electron：这时候才说"缺运行时"。
            * 与上面"不支持这个平台"是两种不同的原因，不能混成一句话。
            */
@@ -1163,7 +1198,9 @@ window.__ModuleLoader__.load({
        * 那违背了这台洗衣机的第一条原则：每个动作都要对应一个可验证的宿主信号。
        */
       const state = pending !== undefined ? 'waiting' : 'starting';
-      const title = tr('state.' + state);
+      // data-state 仍用 starting（复用它的起转动画），但文案不再复用"启动中"——
+      // 它在忙但分不出细分，说"处理中"比谎称还在启动准确。
+      const title = pending !== undefined ? tr('state.waiting') : tr('overlay.busy');
       const sub = pending !== undefined ? tr('sub.waiting') : tr('overlay.running');
       // 等你确认时必须出现——那正是用户唯一需要看它的时候。
       // 其余情况盖住内容不合适，忙碌才浮现（浮层独有的默认，不复用 hideWhenIdle）。
@@ -1286,6 +1323,8 @@ window.__ModuleLoader__.load({
           desktopOverlayNotify: 'notify',
           // 状态音效，同样的通道、独立的开关
           desktopOverlaySound: 'sound',
+          // 勿扰总闸：开了之后主进程一律不弹通知、不响音效
+          desktopOverlayDnd: 'dnd',
           /*
            * skin 现在同时是主界面皮肤和浮窗造型，所以改它必须推一份给宿主，
            * 否则浮窗要等下次重启才换。反方向由 SSE 回灌（见 applyRemotePrefs）。
@@ -1354,6 +1393,7 @@ window.__ModuleLoader__.load({
             clickThrough: 'desktopOverlayClickThrough',
             notify: 'desktopOverlayNotify',
             sound: 'desktopOverlaySound',
+            dnd: 'desktopOverlayDnd',
           };
           let changed = false;
           for (const field of Object.keys(REVERSE)) {
@@ -1363,7 +1403,8 @@ window.__ModuleLoader__.load({
             // 本地字段名和文件字段名眼瞅着一样，但类型不同：
             // 文件里 size 是 'tiny'/'normal'，页面里是 desktopOverlaySize
             if ((key === 'desktopOverlay' || key === 'desktopOverlayClickThrough'
-              || key === 'desktopOverlayNotify' || key === 'desktopOverlaySound') && typeof value !== 'boolean') continue;
+              || key === 'desktopOverlayNotify' || key === 'desktopOverlaySound'
+              || key === 'desktopOverlayDnd') && typeof value !== 'boolean') continue;
             if (prefs[key] === value) continue;
             prefs[key] = value;
             changed = true;
@@ -1639,6 +1680,44 @@ window.__ModuleLoader__.load({
         ctx.effect(() => () => {
           try { offSettings(); } catch { /* noop */ }
         }, 'dsh-washer: settings section');
+
+        // 设置弹窗左侧导航的图标：壳按 section id 硬编码，未知 id 一律回落齿轮；
+        // 插件注册接口只有 id/order/label，没有 icon 字段。这里在运行时把「洗衣机」这行
+        // 的齿轮换成洗衣机图标（MutationObserver 就地修饰；壳改版需复核选择器与 aria）。
+        ctx.effect(() => {
+          if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return () => {};
+          const readLabel = () => {
+            try { return String(ctx.locale.bind(LOCALE_NS)('set.nav')); } catch (e) { return '洗衣机'; }
+          };
+          let scheduled = false;
+          const paint = () => {
+            const panel = document.querySelector('[data-shortcut-modal="settings"]');
+            if (!panel) return;
+            const label = readLabel();
+            const buttons = panel.querySelectorAll('nav button');
+            for (const btn of buttons) {
+              if (btn.getAttribute('data-dw-nav-icon') === '1') continue;
+              if (btn.textContent.trim() !== label) continue;
+              const gear = btn.querySelector('svg');
+              if (gear) gear.style.display = 'none';
+              const wrap = document.createElement('span');
+              wrap.setAttribute('aria-hidden', 'true');
+              wrap.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;flex:none;width:16px;height:16px;';
+              wrap.innerHTML = NAV_WASHER_SVG;
+              btn.insertBefore(wrap, btn.firstChild);
+              btn.setAttribute('data-dw-nav-icon', '1');
+            }
+          };
+          const schedule = () => {
+            if (scheduled) return;
+            scheduled = true;
+            setTimeout(() => { scheduled = false; paint(); }, 60);
+          };
+          const observer = new MutationObserver(schedule);
+          observer.observe(document.body, { childList: true, subtree: true });
+          paint();
+          return () => { try { observer.disconnect(); } catch (e) { /* noop */ } };
+        }, 'dsh-washer: settings nav icon');
 
         // mode:'overlay' → 改用 frame 级浮层，不占用输入框位置。
         if (cfg.mode === 'overlay') {
