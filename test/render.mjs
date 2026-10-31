@@ -1255,17 +1255,14 @@ await test('设置页：皮肤只有一组，同时控制主界面和悬浮窗�
   const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
   const html = render(Settings(Object.assign(propsFrom(world), { washerSetPref: world.prefSink })));
 
-  // 「像素」属于皮肤组，全局只该出现一次
+  // 像素皮肤已下架：设置页不再提供「像素」选项
   const re = /<button[^>]*data-click-idx="(\d+)"[^>]*>([\s\S]*?)<\/button>/g;
-  let m; const hits = [];
+  let m; let pixelHits = 0;
   while ((m = re.exec(html)) !== null) {
     const label = m[2].replace(/<[^>]+>/g, '').trim();
-    if (label === '像素') hits.push(Number(m[1]));
+    if (label === '像素') pixelHits++;
   }
-  assert.equal(hits.length, 1, '「像素」只该出现一次（合并成一组了），实际 ' + hits.length);
-
-  BUTTON_HANDLERS[hits[0]].handler({ stopPropagation() {} });
-  assert.deepEqual(writes, [['skin', 'pixel']], '写的必须是 skin，不是 desktopOverlaySkin');
+  assert.equal(pixelHits, 0, '像素皮肤已下架，设置页不该再出现「像素」，实际 ' + pixelHits);
 });
 
 await test('Windows 上音效开关必须隐藏，找不到 Electron 时要说明原因', () => {
@@ -1492,7 +1489,7 @@ await test('设置页：每个设置项都能双向同步（初始值读对 + �
    * 「减少动态效果」按用户要求整个删除（只跟随系统）。
    */
   const radios = [
-    { name: '皮肤', group: '外观', cfg: { skin: 'precision' }, label: '像素', key: 'skin', value: 'pixel' },
+    { name: '皮肤', group: '外观', cfg: { skin: 'precision' }, label: '精密家电', key: 'skin', value: 'precision' },
     { name: '悬浮窗大小', group: '悬浮窗大小', cfg: { desktopOverlaySize: 'tiny' }, label: '正常', key: 'desktopOverlaySize', value: 'normal' },
   ];
   for (const item of radios) {

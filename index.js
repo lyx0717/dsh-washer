@@ -37,6 +37,7 @@ import {
   SWITCH_HOLD_MS,
   toolActionOf,
   activeTool,
+  RUNNING_STATES,
 } from './src/core.js';
 
 export const name = 'dsh-washer';
@@ -162,6 +163,12 @@ function createSessionState() {
     runningCalls: [],
     /** 模型正在流式输出时的占位（非 null 即表示「在出字」） */
     partial: null,
+    /**
+     * 正在进行的上下文压缩（draining / 排水换水）。
+     * 用 compactionId 集合而非布尔：并发/嵌套压缩时一个 end 不能把另一个还在跑的也关掉。
+     * 非空即「正在压缩」。
+     */
+    compacting: new Set(),
     /** 最近的节点序列，用于判断 step 位置 */
     nodes: [],
     /** callId → { at, name }：tool/result 不带 name/起点时用来补全流水耗时 */
@@ -507,6 +514,27 @@ export function foldEvent(state, event, now) {
       });
       return state;
     }
+    /*
+     * 上下文压缩（排水换水）。
+     * 事件来自 session 事件流的 compaction/start · compaction/end（EventMap 有声明）。
+     * 按 compactionId 计数：并发/嵌套压缩时，单个 end 不能把另一个还在跑的也关掉。
+     */
+    case 'compaction/start': {
+      if (!(state.compacting instanceof Set)) state.compacting = new Set();
+      const cid = data && data.compactionId !== undefined ? String(data.compactionId) : '';
+      state.compacting.add(cid);
+      // 压缩可能在 turn 之外发生，状态流不一定有 turn/start——这里直接把 running 点着，
+      // 否则 deriveState 的 running 分支进不去，draining 永远不显示。
+      state.running = true;
+      return state;
+    }
+    case 'compaction/end': {
+      if (state.compacting instanceof Set) {
+        const cid = data && data.compactionId !== undefined ? String(data.compactionId) : '';
+        state.compacting.delete(cid);
+      }
+      return state;
+    }
     /**
      * step/start 与 step/end **故意不入 nodes**。
      * core.js 的 deriveState 用「最后一个节点是不是 OUTPUT_NODE_KINDS」判断
@@ -517,6 +545,13 @@ export function foldEvent(state, event, now) {
      */
     case 'step/start':
     case 'step/end': {
+      /*
+       * step-* 故意不入 nodes（见上）。但要顺带对齐「正在出字」这个事实：
+       * 网页端 dock 靠 useChat 的 partial（流式分片）判「洗涤中」，宿主收不到
+       * 流式分片，只有 step 边界——step/start 到 step/end 之间正是模型在产出。
+       * 不补这一步，浮窗整段生成期间会停在「启动中/待机」，和 dock 的「洗涤中」对不上。
+       */
+      state.partial = type === 'step/start' ? { generating: true } : null;
       return state;
     }
     case 'assistant/message': {
@@ -568,6 +603,7 @@ export function foldEvent(state, event, now) {
       state.runningCalls = [];
       state.callStartedAt.clear();
       state.partial = null;
+      if (state.compacting instanceof Set) state.compacting.clear();
       if (state.turnTimings.has(turn) && state.turnTimings.get(turn).endTime === undefined) {
         state.turnTimings.get(turn).endTime = now;
       }
@@ -1320,7 +1356,11 @@ export function apply(ctx, config) {
       partial: s.partial,
       nodes: s.nodes,
       outline: s.turn > 0 ? [{ turn: s.turn }] : [],
-      trajectory: undefined,
+      // 宿主侧没有 useTrajectory，但 compaction/start·end 事件能告诉我们压缩在不在跑。
+      // 造一条和 core.js compactionRunning 期望形状一致的 trajectory，就能复用同一判定。
+      trajectory: (s.compacting instanceof Set && s.compacting.size > 0)
+        ? [{ purpose: 'compaction', status: 'running' }]
+        : undefined,
       // 主界面用 React state 记这件事，桌面端没有 React，只能从会话状态里取。
       // 到期不用清：deriveState 自己比 now < until，过期自然失效。
       sticky: s.doneUntil > 0 ? { kind: 'done', turn: s.turn, until: s.doneUntil } : null,
@@ -1378,6 +1418,25 @@ export function apply(ctx, config) {
     return rows;
   }
 
+  /**
+   * 会话级计数：给浮窗底部黑条的「待/动/错」用。
+   *
+   * 「待」= 等待确认（waiting），「动」= 正在转（RUNNING_STATES），
+   * 「错」= 出错（error）。都按会话计数，不是任务队列（宿主没有任务队列信号）。
+   * 一个会话同时只会落进其中一类，所以三项相加 ≤ 会话总数。
+   */
+  function countSessions(rows) {
+    let waiting = 0;
+    let running = 0;
+    let error = 0;
+    for (const row of rows) {
+      if (row.state === 'waiting') waiting += 1;
+      else if (row.state === 'error') error += 1;
+      else if (RUNNING_STATES.has(row.state)) running += 1;
+    }
+    return { waiting, running, error };
+  }
+
   /** 把 Host 侧攒的状态映射成 deriveState 的输入，产出给渲染端的快照 */
   function snapshot() {
     const sessionId = viewSessionId();
@@ -1402,6 +1461,8 @@ export function apply(ctx, config) {
         lastEndedAt: null,
         // 即使当前没有主视图会话，后台可能还有在跑的——总览要照样给
         sessions: sessionSummaries(now),
+        // 底部黑条的「待/动/错」计数（会话级，与 sessions 同源）
+        counts: countSessions(sessionSummaries(now)),
         pinnedSessionId,
         updatedAt: now,
       };
@@ -1490,6 +1551,8 @@ export function apply(ctx, config) {
       lastEndedAt: turnEndTimeOf(s.turnTimings, turn) || null,
       // 其余会话的概览：浮窗画一排指示灯，用户才知道另外两台在干嘛
       sessions: sessionSummaries(now),
+      // 底部黑条的「待/动/错」计数（会话级，与 sessions 同源）
+      counts: countSessions(sessionSummaries(now)),
       // 非 null 表示用户钉住了某一台，浮窗据此显示/隐藏「回到跟随」
       pinnedSessionId: viewSessionId() === pinnedSessionId ? pinnedSessionId : null,
       updatedAt: now,
@@ -2223,7 +2286,7 @@ export function apply(ctx, config) {
       // 但重复投递（宿主重放、订阅重复）不该把已结束的轮又点成 running，
       // 否则状态会在 idle/done 之间抖。只有真正改变了状态的事件才翻转。
       if (event.type === 'turn/end') state.running = false;
-      else if (event.type === 'turn/start') state.running = true;
+      else if (event.type === 'turn/start' || event.type === 'step/start') state.running = true;
       else if (state.running || (state.nodesRev || 0) !== before) state.running = true;
       schedulePush();
     });

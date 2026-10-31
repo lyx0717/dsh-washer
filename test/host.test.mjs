@@ -88,6 +88,54 @@ test('tool/call 后 tool/result 必须消账（否则永远卡在 rinsing）', (
   assert.equal(s.nodes[s.nodes.length - 1].kind, 'tool-result');
 });
 
+test('step/start 到 step/end 之间判为 washing（和 dock 的 partial 口径一致）', () => {
+  const s = freshState();
+  const base = {
+    sessionId: 's', running: true, pending: undefined, runningCalls: [],
+    outline: [{ turn: 1 }], trajectory: undefined, sticky: null,
+  };
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  foldEvent(s, ev('step/start', { turn: 1, step: 0 }), NOW + 10);
+  assert.equal(
+    deriveState({ ...base, runningCalls: s.runningCalls, partial: s.partial, nodes: s.nodes, now: NOW + 20 }),
+    'washing', '模型生成中应与 dock 一样显示洗涤中，而不是启动中/待机');
+
+  foldEvent(s, ev('assistant/message', { turn: 1, message: { source: { model: 'm' } } }), NOW + 30);
+  assert.equal(s.partial, null, 'assistant/message 后 partial 必须清空');
+  assert.equal(
+    deriveState({ ...base, runningCalls: s.runningCalls, partial: s.partial, nodes: s.nodes, now: NOW + 40 }),
+    'spinning', '出完字到 turn 结束之间是收尾（spinning）');
+
+  foldEvent(s, ev('turn/end', { turn: 1, reason: 'completed' }), NOW + 50);
+  assert.equal(s.partial, null);
+});
+
+test('compaction/start 判 draining，compaction/end 恢复，且按 id 计数不吃掉并发', () => {
+  const s = freshState();
+  foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
+  const traj = () => (s.compacting && s.compacting.size > 0
+    ? [{ purpose: 'compaction', status: 'running' }] : undefined);
+  const base = {
+    sessionId: 's', running: true, pending: undefined, nodes: [],
+    outline: [{ turn: 1 }], sticky: null,
+  };
+
+  foldEvent(s, ev('compaction/start', { compactionId: 'c1', turn: 1 }), NOW + 10);
+  assert.equal(deriveState({ ...base, runningCalls: [], partial: null, trajectory: traj(), now: NOW + 20 }), 'draining',
+    '压缩中应显示排水换水');
+
+  // 并发/嵌套：再来一个 start，单个 end 不应把整个状态关掉
+  foldEvent(s, ev('compaction/start', { compactionId: 'c2', turn: 1 }), NOW + 20);
+  foldEvent(s, ev('compaction/end', { compactionId: 'c1', turn: 1 }), NOW + 30);
+  assert.equal(s.compacting.size, 1, '另一个压缩还在，集合不能清空');
+  assert.equal(deriveState({ ...base, runningCalls: [], partial: null, trajectory: traj(), now: NOW + 40 }), 'draining');
+
+  foldEvent(s, ev('compaction/end', { compactionId: 'c2', turn: 1 }), NOW + 50);
+  assert.equal(s.compacting.size, 0);
+  assert.equal(deriveState({ ...base, runningCalls: [], partial: null, trajectory: traj(), now: NOW + 60 }), 'starting',
+    '压缩结束后回落到正常（起轮还没产出=starting）');
+});
+
 test('多个工具并发时按 callId 精确消账，不乱序', () => {
   const s = freshState();
   foldEvent(s, ev('turn/start', { turn: 1 }), NOW);
@@ -1799,5 +1847,20 @@ test('/dsh-washer/stream 跑完一轮后 snapshot.history 记下该轮', async (
   assert.equal(snap.history[0].toolCount, 1);
   assert.equal(typeof snap.loadFactor, 'number');
 
+  ctx.dispose();
+});
+
+/*
+ * 浮窗底部黑条的计数区：counts 必须是「会话级」的待/动/错统计，
+ * 与 sessions 概览同源。这里验证它能随状态变化正确增减。
+ */
+test('snapshot.counts：会话级「待/动/错」计数与状态一致', () => {
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false });
+  const onEvent = ctx.handlers.get('session/event');
+  onEvent({ id: 's1' }, ev('turn/start', { turn: 1 }));
+  assert.deepEqual(api.snapshot().counts, { waiting: 0, running: 1, error: 0 }, '运行中会话计入「动」');
+  onEvent({ id: 's1' }, ev('turn/end', { turn: 1, reason: { kind: 'completed' } }));
+  assert.deepEqual(api.snapshot().counts, { waiting: 0, running: 0, error: 0 }, '收口后清空计数');
   ctx.dispose();
 });

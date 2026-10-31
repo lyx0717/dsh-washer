@@ -1,4 +1,4 @@
-.dw-pw{position:relative;width:300px;padding:15px 15px 0;
+.dw-pw{position:relative;width:300px;padding:15px 15px 11px;
   border-radius:24px;
   background:
     linear-gradient(168deg,var(--dw-body-1) 0%,var(--dw-body-2) 38%,var(--dw-body-3) 78%,var(--dw-body-4) 100%);
@@ -133,6 +133,7 @@
   animation-play-state:var(--play,paused);
   will-change:transform;}
 .dw-pw .clothes i{position:absolute;display:block;border-radius:6px;
+  opacity:1;transition:opacity .6s ease;
   box-shadow:0 3px 6px rgba(2,20,38,.42), inset 0 1px 0 rgba(255,255,255,.55);}
 .dw-pw .clothes i:nth-child(1){width:29px;height:19px;left:33%;top:27%;transform:rotate(16deg);
   background:linear-gradient(150deg,#b8e4ff,#5aa6d8 70%,#3f86b8)}
@@ -142,6 +143,19 @@
   background:linear-gradient(150deg,#c8f2d8,#71c896 70%,#4fa878)}
 .dw-pw .clothes i:nth-child(4){width:17px;height:23px;left:23%;top:47%;transform:rotate(38deg);
   background:linear-gradient(150deg,#e0d4ff,#a58ce0 70%,#8368c2)}
+.dw-pw .clothes i:nth-child(5){width:20px;height:26px;left:64%;top:56%;transform:rotate(24deg);
+  background:linear-gradient(150deg,#ffe6b8,#e8a95c 70%,#c8863c)}
+.dw-pw .clothes i:nth-child(6){width:26px;height:18px;left:48%;top:33%;transform:rotate(-14deg);
+  background:linear-gradient(150deg,#c9f0e2,#6fc9a8 70%,#4ba384)}
+/* 启动中：衣物一件件淡入；洗完了：整体淡出 */
+.dw-pw[data-state="starting"] .clothes i{opacity:0;animation:clothIn .5s ease forwards}
+.dw-pw[data-state="starting"] .clothes i:nth-child(2){animation-delay:.12s}
+.dw-pw[data-state="starting"] .clothes i:nth-child(3){animation-delay:.24s}
+.dw-pw[data-state="starting"] .clothes i:nth-child(4){animation-delay:.36s}
+.dw-pw[data-state="starting"] .clothes i:nth-child(5){animation-delay:.48s}
+.dw-pw[data-state="starting"] .clothes i:nth-child(6){animation-delay:.6s}
+.dw-pw[data-state="done"] .clothes i{opacity:0}
+@keyframes clothIn{to{opacity:1}}
 .dw-pw .bubbles{position:absolute;inset:0;z-index:4;opacity:var(--bubble,0);transition:opacity .5s}
 .dw-pw .bubbles b{position:absolute;border-radius:50%;
   background:radial-gradient(circle at 34% 30%, #fff 0 40%, rgba(255,255,255,.55) 70%, rgba(255,255,255,.15));
@@ -165,7 +179,7 @@
 .dw-pw[data-state="waiting"] .lock{background:var(--dw-sig-wait);
   box-shadow:0 0 10px var(--dw-sig-wait),0 0 20px rgba(217,154,31,.4);
   animation:blink 1.1s steps(2,end) infinite;}
-.dw-pw .panel{margin:15px 2px 15px;padding:9px 11px 10px;border-radius:9px;position:relative;overflow:hidden;
+.dw-pw .panel{margin:15px 2px 0;padding:9px 11px 10px;border-radius:9px;position:relative;overflow:hidden;
   background:linear-gradient(180deg,var(--dw-scr-1),var(--dw-scr-2));
   box-shadow:
     inset 0 5px 12px rgba(0,0,0,.55),
@@ -177,21 +191,20 @@
   background:repeating-linear-gradient(0deg,rgba(255,255,255,.028) 0 1px,transparent 1px 3px);}
 .dw-pw .panel::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
   background:radial-gradient(120% 80% at 50% 0%,rgba(142,240,198,.10),transparent 60%);}
-.dw-pw .row1{display:flex;align-items:baseline;justify-content:space-between;gap:8px;position:relative;z-index:1}
-.dw-pw .state-text{font-size:12px;font-weight:600;color:var(--dw-scr-txt);letter-spacing:.02em;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  text-shadow:0 0 8px rgba(142,240,198,.45);}
-.dw-pw .timer{font-size:11px;color:var(--dw-scr-txt-dim);font-variant-numeric:tabular-nums;letter-spacing:.04em;}
-.dw-pw .row2{display:flex;align-items:center;gap:8px;margin-top:6px;position:relative;z-index:1}
-.dw-pw .wl{font-size:9px;color:var(--dw-scr-txt-dim);letter-spacing:.04em;white-space:nowrap}
-.dw-pw .bar{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden;
-  box-shadow:inset 0 1px 2px rgba(0,0,0,.5)}
-.dw-pw .bar i{display:block;height:100%;width:var(--water-lvl,0%);border-radius:2px;
-  background:linear-gradient(90deg,#3ad2a0,#4aa3f0);
-  box-shadow:0 0 6px rgba(74,163,240,.6);
-  transition:width 1s cubic-bezier(.32,.86,.3,1);}
-.dw-pw[data-state="error"] .state-text{color:#ff9a9d;text-shadow:0 0 8px rgba(242,96,100,.5)}
-.dw-pw[data-state="waiting"] .state-text{color:#ffcf6b;text-shadow:0 0 8px rgba(240,183,58,.5)}
+.dw-pw .row1{display:flex;align-items:center;justify-content:space-between;gap:10px;position:relative;z-index:1}
+.dw-pw .state-text{font-size:15px;font-weight:600;color:var(--dw-scr-txt);letter-spacing:.02em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;
+  text-shadow:0 0 9px rgba(142,240,198,.45);}
+/* 计数区：待/动/错 三枚胶囊，0 项由 JS 不渲染。颜色沿用多会话指示灯的三色。 */
+.dw-pw .counts{display:flex;align-items:center;gap:5px;flex:0 0 auto;}
+.dw-pw .cnt{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1;
+  padding:3px 6px;border-radius:6px;letter-spacing:.02em;}
+.dw-pw .cnt[data-k="wait"]{color:#ffcf6b;background:rgba(240,183,58,.16);box-shadow:inset 0 0 0 1px rgba(240,183,58,.30)}
+.dw-pw .cnt[data-k="run"]{color:#7fe0ff;background:rgba(74,163,240,.16);box-shadow:inset 0 0 0 1px rgba(74,163,240,.30)}
+.dw-pw .cnt[data-k="err"]{color:#ff9a9d;background:rgba(242,96,100,.16);box-shadow:inset 0 0 0 1px rgba(242,96,100,.30)}
+.dw-pw .timer{font-size:13px;color:var(--dw-scr-txt-dim);font-variant-numeric:tabular-nums;letter-spacing:.06em;flex:0 0 auto;}
+.dw-pw[data-state="error"] .state-text{color:#ff9a9d;text-shadow:0 0 9px rgba(242,96,100,.55)}
+.dw-pw[data-state="waiting"] .state-text{color:#ffcf6b;text-shadow:0 0 9px rgba(240,183,58,.55)}
 .dw-pw[data-state="done"] .state-text{color:#8ef0c6}
 .dw-pw .feet{position:absolute;left:8%;right:8%;bottom:-7px;height:12px;border-radius:50%;
   background:radial-gradient(ellipse at 50% 50%,var(--dw-body-shade),transparent 70%);

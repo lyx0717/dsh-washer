@@ -19,7 +19,7 @@
         # 仅 overlay 形态有效：只在忙碌时出现。waiting 时无视此开关，一定出现。
         overlayOnlyWhenBusy: true
         # pixel（默认，像素 sprite）/ precision（精密家电）
-        skin: pixel
+        skin: precision
         hideWhenIdle: false
         doneHoldMs: 6000
         # 桌面悬浮窗的本地 HTTP+WS 服务（只绑 127.0.0.1，随机 token）。
@@ -30,6 +30,8 @@
         desktopOverlayAutoLaunch: true
         # 启动档位：normal / tiny（tiny 只留指示灯）
         desktopOverlaySize: normal
+        # 正常档的缩放：compact(0.8) / standard(1.0) / large(1.2)；极简档不受影响
+        desktopOverlayScale: standard
         # 鼠标穿透。开着时点击落到下面的应用，⌥⌘W 恢复。
         desktopOverlayClickThrough: false
         # 洗完弹系统通知：只报「完成」「故障」「等你确认」「卡住」

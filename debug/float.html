@@ -161,50 +161,88 @@
   .flash {
     position: absolute;
     left: 6px; right: 6px;
-    top: 18%;
+    /* 从机顶向上冒：bottom 由 JS 按机身高度算好（贴机身上沿），这里只是初值 */
+    bottom: 150px;
     z-index: 20;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
-    padding: 5px 8px;
-    border-radius: 10px;
-    /* 半透明深色底 + 细边，压在浅色机身上才看得清；
-       纯色底在 precision 造型的白色外壳上会显得很突兀 */
-    background: rgba(18, 22, 28, 0.88);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    gap: 2px;
+    padding: 6px 9px;
+    border-radius: 12px;
+    /* 半透明深色底 + 细边，压在浅色机身上才看得清 */
+    /* 液态玻璃：半透明填充 + 背景模糊饱和 + 上下咬边高光；不要外投影 */
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05)),
+      rgba(24, 28, 34, 0.42);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.38),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.18);
     pointer-events: none;
     opacity: 0;
-    transform: translateY(-4px) scale(.96);
-    transition: opacity 180ms ease, transform 180ms ease;
+    transform: translateY(4px) scale(.96);
+    transition: opacity 200ms ease, transform 200ms ease;
+    max-height: 68px;
+    overflow: hidden;
+  }
+  /* 朝下的小尾巴，指向机身——「洗衣机在跟你说话」的对话气泡感 */
+  .flash::after {
+    content: "";
+    position: absolute;
+    left: 50%; bottom: -6px;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid rgba(30, 34, 42, 0.55);
   }
   .flash[data-on="1"] { opacity: 1; transform: translateY(0) scale(1); }
   .flash-t {
-    font-size: 11px;
+    width: 100%;
+    text-align: center;
+    font-size: 11.5px;
     font-weight: 600;
-    line-height: 1.2;
+    line-height: 1.25;
     color: #fff;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .flash-s {
-    font-size: 9.5px;
-    line-height: 1.2;
-    color: rgba(255, 255, 255, 0.66);
+    width: 100%;
+    text-align: center;
+    font-size: 10px;
+    line-height: 1.25;
+    color: rgba(255, 255, 255, 0.7);
     font-variant-numeric: tabular-nums;
-    white-space: nowrap;
+    /* 说明文字最多两行，超出用省略号截断，不再顶出边框 */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
   }
   /* 故障用红调，和机器指示灯的 error 色一致 */
   .flash[data-kind="error"] {
-    background: rgba(58, 16, 20, 0.92);
-    border-color: rgba(229, 72, 77, 0.5);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04)),
+      rgba(70, 20, 24, 0.42);
+    border-color: rgba(229, 72, 77, 0.6);
   }
+  .flash[data-kind="error"]::after { border-top-color: rgba(70, 20, 24, 0.55); }
   /* 等确认 / 卡住用琥珀调，和 waiting 状态的指示灯同色系 */
   .flash[data-kind="waiting"],
   .flash[data-kind="stalled"] {
-    background: rgba(52, 40, 12, 0.92);
-    border-color: rgba(245, 185, 58, 0.5);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+      rgba(58, 44, 16, 0.4);
+    border-color: rgba(245, 185, 58, 0.6);
   }
+  .flash[data-kind="waiting"]::after,
+  .flash[data-kind="stalled"]::after { border-top-color: rgba(58, 44, 16, 0.55); }
   /* 极简档只有 76px 宽，放不下两行字，直接不出横幅 */
   body[data-size="tiny"] .flash { display: none; }
 
@@ -611,10 +649,27 @@
   }
 
   /* ---------- 尺寸档位 ---------- */
-  /* 正常态：132x200，机器 + 气泡 */
-  body[data-size="normal"] .wrap { width: 132px; height: 200px; }
-  /* 极简态：76x96，只剩机器和角上的指示灯，气泡整个不占位 */
-  body[data-size="tiny"] .wrap { width: 76px; height: 96px; }
+  /*
+   * 不要把窗口尺寸写死在页面里。
+   *
+   * 踩过的坑：这里曾写死 `body[data-size="normal"] .wrap{width:240px;height:308px}`，
+   * 但主进程那边还是旧窗口尺寸（132x200）时，240 宽的 .wrap 会被窗口裁掉大半，
+   * 用户看到的就是"洗衣机只剩一块儿"。
+   * 现在 .wrap 保持 100%，机器按 window.innerWidth 缩放，窗口多大都完整。
+   */
+  /* 新版把所有文字收进机身黑条，原独立气泡停用（保留 DOM 供旧 JS 读写不报错） */
+  .bubble { display: none !important; }
+  /*
+     黑条字号补偿。机身面板是按 330px 设计稿排的版，窗口只有 158px 宽时
+     整机被缩到 0.48 倍，面板里 15px 的状态字实际只有 7px——看不清。
+     这里把面板字号按缩放比反向放大，并收窄内边距，保证 158px 宽下
+     状态/待动错/计时都在 8–11px，既不溢出也读得清。只作用于浮窗。
+  */
+  #skinHost .dw-pw .panel { padding: 6px 7px; }
+  #skinHost .dw-pw .state-text { font-size: 23px; }
+  #skinHost .dw-pw .counts { gap: 4px; }
+  #skinHost .dw-pw .cnt { font-size: 18px; padding: 1px 5px; }
+  #skinHost .dw-pw .timer { font-size: 18px; }
   /*
      .wrap 底部那 8px 是给气泡投影留的，极简档气泡高度塌成 0、根本不投影，
      这 8px 全是白扔。留 2px 收边，腾出的 6px 挪到机器头顶——
@@ -802,7 +857,7 @@
    * 必须自己写：style.css 里那几条 @media 只覆盖 dock 的 sprite，
    * 浮窗是另一个页面，样式表不通。
    */
-  /* ---- 彩蛋层：打盹变暗 / 空闲轻抖 / 连续失败 / 成就贴纸 ----
+  /* ---- 彩蛋层：打盹变暗 / 空闲轻抖 ----
      纯装饰，不依赖新数据源，只在静息态触发；减弱动效时由上面的
      @media 统一关掉动画（变暗是颜色过渡不算动效，仍然保留）。 */
   body[data-doze="1"] .machine { opacity: .4; filter: saturate(.5) brightness(.85); }
@@ -812,21 +867,6 @@
     30% { transform: translateX(-1.5px); }
     70% { transform: translateX(1.5px); }
   }
-  .egg-badge {
-    position: absolute; top: 5px; z-index: 25;
-    width: 15px; height: 15px; line-height: 15px;
-    text-align: center; border-radius: 50%;
-    font-size: 9px; font-weight: 700;
-    opacity: 0; transform: scale(.6);
-    transition: opacity .3s ease, transform .3s ease;
-    pointer-events: none;
-  }
-  #eggMedal { right: 5px; background: rgba(245,185,58,.92); color: #3a2a00; box-shadow: 0 0 6px rgba(245,185,58,.8); }
-  #eggFail { left: 5px; background: rgba(229,72,77,.92); color: #fff; box-shadow: 0 0 6px rgba(229,72,77,.8); }
-  body[data-medal="1"] #eggMedal { opacity: 1; transform: scale(1); }
-  body[data-stuck-lid="1"] #eggFail { opacity: 1; transform: scale(1); }
-  body[data-size="tiny"] .egg-badge { display: none; }
-
   @media (prefers-reduced-motion: reduce) {
     /*
        `.machine[data-pop="1"]` 写的是机器自己，可 pop 动画挂在
@@ -881,9 +921,6 @@
     盖在机器上方而不是塞进气泡：气泡那行已经放着状态、计时、
     会话圆点，横向空间用满了，再挤会看不清。浮窗总共才 132×200。
   -->
-  <!-- 彩蛋小徽章：成就(奖牌) / 连续失败(感叹)。纯装饰，由 body data-* 驱动 -->
-  <span class="egg-badge" id="eggMedal" aria-hidden="true">🏅</span>
-  <span class="egg-badge egg-fail" id="eggFail" aria-hidden="true">!</span>
   <div class="flash" id="flash" role="status" data-on="0">
     <span class="flash-t" id="flashT"></span>
     <span class="flash-s" id="flashS"></span>
@@ -896,7 +933,7 @@
   var LABEL = {
     off: '未连接', idle: '待机', starting: '启动中', washing: '洗涤中',
     rinsing: '漂洗中', spinning: '脱水中', waiting: '等你确认',
-    draining: '排水换水', done: '洗完了', error: '故障',
+    draining: '排水换水中', done: '洗完了', error: '故障',
   };
   /* 错误码 → 一句话人话。浮窗只有 132px，说「能怎么办」比甩个 E-xx 有用；
      原始 code 仍由 Host 下发（详情面板对日志用），这里只负责翻译给人看。 */
@@ -945,13 +982,32 @@
     machine.style.setProperty('--led', v.led);
   }
 
+  var curPanelSig = '';
   function buildMachine(snap) {
+    var connLost = el('wrap').dataset.conn === 'lost';
     var s = snap.state || 'off';
-    if (s === curState && el('skinHost').firstChild !== null) return;
-    curState = s;
+    var c = connLost ? { waiting: 0, running: 0, error: 0 }
+      : (snap.counts || { waiting: 0, running: 0, error: 0 });
+    // 衣物=正在运行的会话数（最多 6 件），每件挂真实 sessionId
+    var runIds = [];
+    if (!connLost && snap.sessions) {
+      for (var ri = 0; ri < snap.sessions.length && runIds.length < 6; ri++) {
+        var rs = snap.sessions[ri].state;
+        if (rs === 'starting' || rs === 'washing' || rs === 'rinsing' || rs === 'spinning' || rs === 'draining') {
+          runIds.push(snap.sessions[ri].sessionId);
+        }
+      }
+    }
+    var errCode = s === 'error' && snap.errorCode ? ' · ' + snap.errorCode : '';
+    var label = connLost ? '连接断开' : (LABEL[s] || s) + errCode;
+    var sig = s + '|' + label + '|' + c.waiting + ',' + c.running + ',' + c.error + '|' + runIds.join(',');
+    if (sig === curPanelSig && el('skinHost').firstChild !== null) return;
+    curPanelSig = sig;
     var hostNode = el('skinHost');
-    var width = 112;
-    // 极简态机器小一圈，保持窗口比例
+    // 机身左右各留 10px 给投影/状态光，贴着窗口边会被直接裁掉。
+    // 正常档：窗口宽 −20（旧版就是 132 窗口里的 112 机身，比例不变）；
+    // 极简档：固定 64px。
+    var width = Math.max(40, (window.innerWidth || 132) - 20);
     if (document.body.dataset.size === 'tiny') width = 64;
     hostNode.textContent = '';
     // --dw-* 变量挂在 .washerskin 上，[data-state] 的状态色绑定也靠这个容器，
@@ -959,10 +1015,31 @@
     hostNode.setAttribute('data-state', s);
     if (window.WasherMachines) {
       hostNode.appendChild(window.WasherMachines.build(
-        curSkin, s, width, snap.durationText || '--:--', snap.state === 'waiting'));
+        curSkin, s, width, snap.durationText || '--:--', s === 'waiting', c, label, runIds));
+    }
+    // 通知气泡贴机身上沿：底边 = 机身底留白(8) + 机身高 + 6px 尾巴间隙
+    var fb = el('flash');
+    if (fb) {
+      var mh = Math.round(((window.innerWidth || 132) - 20) * (425 / 330));
+      fb.style.bottom = (mh + 14) + 'px';
     }
     curState = s;
   }
+
+  /* 计时每秒都在变，但不能每秒重建整台机器：只改机身黑条里的那一格文字。 */
+  function updatePanelTimer(snap) {
+    var hostNode = el('skinHost');
+    if (!hostNode) return;
+    var t = hostNode.querySelector('.timer');
+    if (t) t.textContent = durationOf(snap.state || 'off', snap);
+  }
+
+  /* 窗口尺寸变化（主进程 animateBounds / 换档位）后，机器要按新宽度重新缩放，
+     否则会拿旧宽度画、撑出窗口被裁掉。 */
+  window.addEventListener('resize', function () {
+    curPanelSig = '';
+    if (lastSnap) buildMachine(lastSnap);
+  });
 
   /*
    * 多会话指示灯。
@@ -1106,8 +1183,8 @@
     var stalled = typeof snap.stalledMs === 'number' && snap.stalledMs !== null;
     if (stalled && prev !== null && lastStalledTurn !== snap.turn) {
       lastStalledTurn = snap.turn;
-      var stext = (snap.activeTool && snap.activeTool.action ? '卡在' + snap.activeTool.action + ' · ' : '')
-        + fmtDur(snap.stalledMs) + ' 没进展';
+      var stext = (snap.activeTool && snap.activeTool.action ? snap.activeTool.action + ' ' : '')
+        + '好一会儿没动静';
       if (host && typeof host.notify === 'function') host.notify('stalled', stext);
       showFlash('stalled', stext);
     }
@@ -1128,7 +1205,7 @@
       if (rp === undefined || rp === rs) continue;      // 首次发现不吵
       if (rs !== 'done' && rs !== 'error' && rs !== 'waiting') continue;
       var rtext = String(row.sessionId).slice(0, 6) + ' · '
-        + (rs === 'error' ? '出故障了' : rs === 'waiting' ? '等你确认' : '洗完了');
+        + (rs === 'error' ? '罢工了' : rs === 'waiting' ? '该你啦' : '洗好啦');
       if (host && typeof host.notify === 'function') host.notify(rs, rtext);
     }
     for (var k in lastOtherStates) { if (!seen[k]) delete lastOtherStates[k]; }
@@ -1144,11 +1221,11 @@
      */
     if (s !== 'done' && s !== 'error' && s !== 'waiting') return;
     var text = s === 'error'
-      ? ((LABEL[s] || s) + (snap.errorCode ? ' · ' + (ERR_HUMAN[snap.errorCode] || snap.errorCode) : ''))
+      ? ((snap.errorCode ? snap.errorCode + ' ' : '') + (ERR_HUMAN[snap.errorCode] || '工具没跑通'))
       : (s === 'waiting'
-        ? (snap.tools && snap.tools.length > 0 ? '等待批准' : '需要选择')
-        : ('用时 ' + (snap.durationText || '--:--')
-          + (typeof snap.toolCount === 'number' && snap.toolCount > 0 ? ' · ' + snap.toolCount + ' 个工具' : '')));
+        ? '有个地方等你点一下'
+        : ((typeof snap.toolCount === 'number' && snap.toolCount > 0 ? snap.toolCount + ' 件 · ' : '')
+          + '用时 ' + (snap.durationText || '--:--')));
     if (host && typeof host.notify === 'function') host.notify(s, text);
     /*
      * 横幅和系统通知**同时**出，不是二选一。
@@ -1180,21 +1257,27 @@
      * waiting 现在也走这里，落到 else 分支会显示成"洗完了"，
      * 明明是在等你确认，横幅却说洗完了，比不显示更误导。
      */
-    t.textContent = kind === 'error' ? '出故障了'
-      : kind === 'waiting' ? '等你确认'
-      : kind === 'stalled' ? '卡住了'
-      : '洗完了';
+    t.textContent = kind === 'error' ? '咔哒…我罢工了'
+      : kind === 'waiting' ? '喂——该你啦'
+      : kind === 'stalled' ? '咕噜咕噜…转不动了'
+      : '叮——洗好啦';
     sub.textContent = text;
     box.dataset.kind = kind === 'error' ? 'error'
       : kind === 'waiting' ? 'waiting'
       : kind === 'stalled' ? 'stalled'
       : 'done';
+    // 贴机身上沿（resize 时 buildMachine 也会重算；这里兜底）
+    var mh = Math.round(((window.innerWidth || 132) - 20) * (425 / 330));
+    box.style.bottom = (mh + 14) + 'px';
     box.dataset.on = '1';
     if (flashTimer !== null) clearTimeout(flashTimer);
+    // 停留时长随字数自适应：字多看得久，1.8s~3.2s
+    var chars = (t.textContent || '').length + (text || '').length;
+    var hold = Math.max(2200, Math.min(3200, 1800 + chars * 70));
     flashTimer = setTimeout(function () {
       box.dataset.on = '0';
       flashTimer = null;
-    }, 1800);
+    }, hold);
   }
 
   /*
@@ -1257,6 +1340,7 @@
 
     paintLamp(s);
     buildMachine(snap);
+    updatePanelTimer(snap);
 
     var load = (typeof snap.loadFactor === 'number' && snap.loadFactor > 0) ? Math.min(1, snap.loadFactor) : 0;
 
@@ -1417,12 +1501,11 @@
 
   /* ---------------- 彩蛋层：全部是纯视觉、只用已有快照信号 ----------------
      规则：只在待机/静息态触发，尊重 reduced-motion（CSS 媒体查询统一关动画），
-     不新增任何宿主依赖。 */
+     不新增任何宿主依赖。注意：连续失败徽章/奖牌已按用户要求移除。 */
   var IDLE_SHAKE_AFTER_MS = 60000;    // 待机满 1 分钟，开始偶尔轻轻晃一下
   var DOZE_AFTER_MS = 5 * 60 * 1000;  // 待机满 5 分钟，进入"打盹"（整机变暗）
   var idleSince = null;
   var nextShakeAt = 0;
-  var failFlagged = false;
   function eggTick() {
     var snap = lastSnap;
     if (!snap) return;
@@ -1441,24 +1524,6 @@
         setTimeout(function () { delete machine.dataset.idleShake; }, 650);
       }
     }
-    // 连续失败 / 小成就：只看最近几轮（history[0] 是最新，顺带 aborted 不算失败）
-    var hist = Array.isArray(snap.history) ? snap.history : [];
-    var failStreak = 0;
-    for (var i = 0; i < hist.length; i++) {
-      var h = hist[i];
-      if (h.ok === true || h.aborted === true) break;
-      failStreak++;
-    }
-    var okStreak = 0;
-    for (var j = 0; j < hist.length; j++) { if (hist[j].ok === true) okStreak++; else break; }
-    var failing = failStreak >= 3;
-    document.body.dataset.stuckLid = failing ? '1' : '0';
-    document.body.dataset.medal = okStreak >= 5 ? '1' : '0';
-    if (failing && !failFlagged) {
-      failFlagged = true;
-      showFlash('error', '连续 ' + failStreak + ' 轮出错，看看详情');
-    }
-    if (!failing) failFlagged = false;
   }
   setInterval(eggTick, 1000);
 

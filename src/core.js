@@ -10,6 +10,13 @@
 /** 需要立即切换、不受最小停留时间约束的状态。 */
 export const URGENT_STATES = { off: 1, waiting: 1, error: 1, idle: 1, done: 1 };
 
+/**
+ * 「机器正在转」的状态集合。浮窗计数区（动）和衣物种类的数量都用它判定，
+ * 避免各写一套 `=== 'washing' || ...` 的平行定义。
+ * 注意：draining 虽然接近收尾，但此刻仍在排水运转，算「动」。
+ */
+export const RUNNING_STATES = new Set(['starting', 'washing', 'rinsing', 'spinning', 'draining']);
+
 /** 不参与「当前步骤位置」判断的节点类型（宿主注入，非 Agent 产出）。 */
 export const IGNORED_NODE_KINDS = new Set(['context']);
 

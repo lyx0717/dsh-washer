@@ -254,7 +254,25 @@ const out = `/**
     return frame('pixel', state, width, host);
   }
 
-  function precisionMachine(state, width, screenTime) {
+  function countsNode(counts) {
+    if (!counts) return null;
+    var box = el('span', 'counts');
+    var any = false;
+    var add = function (k, label, n) {
+      if (!(n > 0)) return;
+      var s = el('span', 'cnt');
+      s.setAttribute('data-k', k);
+      s.textContent = label + n;
+      box.appendChild(s);
+      any = true;
+    };
+    add('wait', '待', counts.waiting);
+    add('run', '动', counts.running);
+    add('err', '错', counts.error);
+    return any ? box : null;
+  }
+
+  function precisionMachine(state, width, screenTime, counts, stateText, clothes) {
     var play = SPEED[state] === '0s' ? 'paused' : 'running';
     var water = PW_WATER[state];
     var pw = el('div', 'dw-pw');
@@ -269,18 +287,26 @@ const out = `/**
     ]);
     var glass = el('div', 'glass', [
       el('div', 'drum'),
-      el('div', 'clothes', [el('i'), el('i'), el('i'), el('i')]),
+      el('div', 'clothes', (function () {
+        var out = [];
+        var ids = (clothes && clothes.length) ? clothes.slice(0, 6) : [];
+        for (var ci = 0; ci < ids.length; ci++) {
+          var it = el('i');
+          it.setAttribute('data-id', String(ids[ci]));
+          out.push(it);
+        }
+        return out;
+      })()),
       el('div', 'water'),
       el('div', 'bubbles', [el('b'), el('b'), el('b'), el('b'), el('b'), el('b')]),
     ]);
     var door = el('div', 'door', [el('div', 'handle'), el('div', 'lock'), glass]);
-    var bar = el('span', 'bar', [el('i')]);
     var panel = el('div', 'panel', [
       el('div', 'row1', [
-        text('span', 'state-text', SCREEN_WORD[state] || 'READY'),
+        text('span', 'state-text', stateText || SCREEN_WORD[state] || 'READY'),
+        countsNode(counts),
         text('span', 'timer', screenTime),
       ]),
-      el('div', 'row2', [text('span', 'wl', water + '%'), bar]),
     ]);
 
     pw.appendChild(topbar);
@@ -296,11 +322,11 @@ const out = `/**
    * width 是目标显示宽度（CSS 像素）。窗口固定 132px 时三套造型都缩到
    * 这个宽度以内——方案 B：窗口不跟着皮肤变，代价是精密家电的细节会糊。
    */
-  function build(skin, state, width, screenTime, face) {
+  function build(skin, state, width, screenTime, face, counts, stateText, clothes) {
     ensureSkinCss();
     var s = VISUAL[state] ? state : 'idle';
     var holder;
-    if (skin === 'precision') holder = precisionMachine(s, width, screenTime);
+    if (skin === 'precision') holder = precisionMachine(s, width, screenTime, counts, stateText, clothes);
     else holder = pixelMachine(s, width);
 
     // 像素造型靠外层变量驱动，精密家电是自带动画的 DOM 结构

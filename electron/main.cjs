@@ -28,18 +28,46 @@ const ENDPOINT_FILE = process.env.DSH_WASHER_ENDPOINT_FILE
  *
  * tiny 是「极简态」：只剩指示灯和一个角标，气泡整个不渲染。
  */
-const SIZES = {
-  normal: { width: 132, height: 200 },
-  tiny: { width: 76, height: 96 },
-};
+/**
+ * 尺寸档位。
+ *
+ * normal = 基准宽度 × 缩放倍数；tiny 是独立的「极简态」（只留指示灯，不是
+ * 缩放，所以不进 SCALES）。窗口高度由「机身宽 × 机身比例 + 上下留白」反算，
+ * 机身比例必须和 client.template.js 里的 NATURAL.precision 一致，否则机器
+ * 要么被窗口裁掉、要么浮在半空。
+ */
+const TINY_SIZE = { width: 76, height: 96 };
+const BASE_NORMAL_WIDTH = 132;
+/** 与 NATURAL.precision = { w: 330, h: 425 } 对齐 */
+const PRECISION_ASPECT = 425 / 330;
+/** 机身左右各留 10px 给投影/状态光，贴着窗口边会被裁掉 */
+const BODY_INSET = 10;
+const SCALES = { compact: 0.8, standard: 1, large: 1.2 };
+/**
+ * 机身上方预留的「气泡通道」高度（CSS 像素）。
+ * 通知气泡从机顶向上冒出，需要一块平时透明、不参与拖拽的顶部空间。
+ * 取 74 够放「一拟声标题 + 最多两行说明 + 小尾巴」，且不贴窗口上沿。
+ * tiny 是独立的极简态，不放横幅，不加这段。
+ */
+const BUBBLE_LANE = 74;
+
+let scalePref = 'standard';
+
+function normalSize() {
+  const k = SCALES[scalePref] === undefined ? 1 : SCALES[scalePref];
+  const width = Math.max(80, Math.round(BASE_NORMAL_WIDTH * k));
+  const height = Math.round((width - BODY_INSET * 2) * PRECISION_ASPECT + BODY_INSET * 2 + BUBBLE_LANE);
+  return { width, height };
+}
+
 /*
- * 尺寸**不能**用一组常量。窗口会切档（normal 132x200 / tiny 76x96），
+ * 尺寸**不能**用一组常量。窗口会切档（normal × 缩放 / tiny 76x96），
  * 曾经这里固定写 SIZES.normal，结果极简态下贴边、详情面板定位全按
  * normal 算：贴边差 56px，详情面板在机身右侧错开一大截。
  * 一律用 winSize() 取当前档位，别再引回常量。
  */
 function winSize() {
-  return SIZES[sizeMode] || SIZES.normal;
+  return sizeMode === 'tiny' ? TINY_SIZE : normalSize();
 }
 /** 详情面板尺寸 */
 const DETAIL_WIDTH = 260;
@@ -487,7 +515,7 @@ function updateEscapeShortcut() {
 
 function createWindow() {
   const pos = clampToVisible(readPosition() || defaultPosition());
-  const size = SIZES[sizeMode] || SIZES.normal;
+  const size = winSize();
   win = new BrowserWindow({
     width: size.width,
     height: size.height,
@@ -832,18 +860,10 @@ function animateBounds(target) {
  * 但窗口会先变、内容后变，中间那一帧会露出透明边或者裁掉一角，
  * 所以先通知页面、下一帧再调 setSize —— 实测直接调会闪一下。
  */
-function setSizeMode(mode) {
-  const next = SIZES[mode] === undefined ? 'normal' : mode;
-  if (next === sizeMode && win !== null && !win.isDestroyed()) {
-    const [w, h] = win.getSize();
-    if (w === SIZES[next].width && h === SIZES[next].height) return;
-  }
-  sizeMode = next;
-  writeFloatPrefs({ size: next });
-  notifyHost({ size: next });
+function applySizeToWindow() {
   if (win === null || win.isDestroyed()) return;
-  win.webContents.send('washer:prefs', { size: next, skin, dark: themeDark });
-  const size = SIZES[next];
+  win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark, paused, opacity });
+  const size = winSize();
   // 宽度变了，贴边的窗口要跟着挪，否则会被屏幕边缘裁掉
   const [x, y] = win.getPosition();
   const display = screen.getDisplayMatching({ x, y, width: size.width, height: size.height });
@@ -855,6 +875,40 @@ function setSizeMode(mode) {
   if (y + size.height > a.y + a.height) ny = a.y + a.height - size.height;
   if (ny < a.y) ny = a.y;
   animateBounds({ x: Math.round(nx), y: Math.round(ny), width: size.width, height: size.height });
+}
+
+function setSizeMode(mode) {
+  const next = mode === 'tiny' ? 'tiny' : 'normal';
+  if (next === sizeMode) {
+    if (win === null || win.isDestroyed()) return;
+    const [w, h] = win.getSize();
+    const size = winSize();
+    if (w === size.width && h === size.height) return;
+  }
+  sizeMode = next;
+  writeFloatPrefs({ size: next });
+  notifyHost({ size: next });
+  applySizeToWindow();
+}
+
+/**
+ * 缩放档位。只作用于 normal 档；选了缩放就从极简切回正常档。
+ * 窗口/机身/留白一起等比缩放，黑条字号写在机身坐标系里会自动跟着缩，
+ * 所以三档不需要各自再调字号。
+ */
+function setScale(name) {
+  const next = SCALES[name] === undefined ? 'standard' : name;
+  if (next === scalePref && sizeMode === 'normal') {
+    if (win === null || win.isDestroyed()) return;
+    const [w, h] = win.getSize();
+    const size = winSize();
+    if (w === size.width && h === size.height) return;
+  }
+  scalePref = next;
+  sizeMode = 'normal';
+  writeFloatPrefs({ size: 'normal', scale: next });
+  notifyHost({ size: 'normal', scale: next });
+  applySizeToWindow();
 }
 
 /** 换肤：只把 skin 名发给页面，具体颜色由页面 CSS 决定 */
@@ -1045,14 +1099,13 @@ function showMenu() {
     { label: '打开 Harness 客户端', click: () => openHarnessApp() },
     { type: 'separator' },
     {
-      label: sizeMode === 'tiny' ? '✓ 极简' : '极简',
-      click: () => setSizeMode(sizeMode === 'tiny' ? 'normal' : 'tiny'),
-    },
-    {
-      label: '造型',
+      label: '尺寸',
       submenu: [
-        { label: skin === 'precision' ? '✓ 精密家电' : '精密家电', click: () => setSkin('precision') },
-        { label: skin === 'pixel' ? '✓ 像素' : '像素', click: () => setSkin('pixel') },
+        { label: (sizeMode !== 'tiny' && scalePref === 'compact' ? '✓ ' : '') + '紧凑（80%）', click: () => setScale('compact') },
+        { label: (sizeMode !== 'tiny' && scalePref === 'standard' ? '✓ ' : '') + '标准（100%）', click: () => setScale('standard') },
+        { label: (sizeMode !== 'tiny' && scalePref === 'large' ? '✓ ' : '') + '大（120%）', click: () => setScale('large') },
+        { type: 'separator' },
+        { label: (sizeMode === 'tiny' ? '✓ ' : '') + '极简（只留指示灯）', click: () => setSizeMode('tiny') },
       ],
     },
     {
@@ -1113,7 +1166,8 @@ function watchPrefs() {
       const p = readFloatPrefs();
       if (p === null) return;
       const prefs = p === undefined ? {} : p;
-      const nextSize = SIZES[prefs.size] !== undefined ? prefs.size : sizeMode;
+      const nextSize = prefs.size === 'tiny' || prefs.size === 'normal' ? prefs.size : sizeMode;
+      const nextScale = SCALES[prefs.scale] !== undefined ? prefs.scale : scalePref;
       const nextSkin = typeof prefs.skin === 'string' ? prefs.skin : skin;
       /*
        * show 也要跟。宿主在启动时按设置决定拉不拉进程，但进程起来之后
@@ -1145,6 +1199,7 @@ function watchPrefs() {
       const nextPaused = typeof prefs.paused === 'boolean' ? prefs.paused : paused;
       const nextOpacity = typeof prefs.opacity === 'number' ? prefs.opacity : opacity;
       if (nextSize !== sizeMode) setSizeMode(nextSize);
+      if (nextScale !== scalePref) setScale(nextScale);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
       if (nextThrough !== clickThrough) setClickThrough(nextThrough);
@@ -1171,9 +1226,10 @@ app.whenReady().then(() => {
   const prefs = floatPrefsOrEmpty();
   const argSize = argValue('--size');
   const argSkin = argValue('--skin');
-  sizeMode = SIZES[argSize] !== undefined
+  sizeMode = argSize === 'tiny' || argSize === 'normal'
     ? argSize
-    : (SIZES[prefs.size] !== undefined ? prefs.size : 'normal');
+    : (prefs.size === 'tiny' || prefs.size === 'normal' ? prefs.size : 'normal');
+  scalePref = SCALES[prefs.scale] !== undefined ? prefs.scale : 'standard';
   skin = SKINS.indexOf(prefs.skin) >= 0 ? prefs.skin : 'precision';
   if (typeof argSkin === 'string' && argSkin !== '') {
     skin = SKINS.indexOf(argSkin) >= 0 ? argSkin : skin;
@@ -1245,6 +1301,7 @@ app.whenReady().then(() => {
     endpoint: await readEndpoint(),
     escapeAccelerator: ESCAPE_ACCELERATOR,
     size: sizeMode,
+    scale: scalePref,
     skin,
     dark: themeDark,
     visible,
@@ -1262,20 +1319,20 @@ app.whenReady().then(() => {
      * 两份状态迟早对不上，那就是上一轮 pending 不同步的翻版。
      */
     playSound(kind);
-    if (kind === 'done') notify('洗完了', text || '这一轮跑完了');
-    else if (kind === 'error') notify('出故障了', text || '点开看看');
+    if (kind === 'done') notify('叮——洗好啦', text || '这一轮跑完了');
+    else if (kind === 'error') notify('咔哒…我罢工了', text || '点开看看');
     /*
      * 「等你确认」是定位里最需要动手的时刻，之前只有声音、没有系统通知，
      * 用户离开座位回来才发现任务早卡在等你拍板。补上这一条：
      * 页面侧的边沿检测保证进入 waiting 只发一次 IPC，notify 自身还有
      * 前台静音 + 4 秒节流兜底，不会刷屏。
      */
-    else if (kind === 'waiting') notify('等你确认', text || '需要你拍板');
+    else if (kind === 'waiting') notify('喂——该你啦', text || '需要你拍板');
     /*
      * 卡住：定位三大时刻里唯一之前没有主动提醒的。页面侧用 stalledMs 边沿
      * 检测（一轮只发一次），这里补系统通知；没配专门音效，静音即可。
      */
-    else if (kind === 'stalled') notify('卡住了', text || '有一阵没进展了');
+    else if (kind === 'stalled') notify('咕噜咕噜…转不动了', text || '有一阵没进展了');
   });
   ipcMain.on('washer:set-size', (_event, mode) => setSizeMode(mode));
   ipcMain.on('washer:set-skin', (_event, name) => setSkin(name));
