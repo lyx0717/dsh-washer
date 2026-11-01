@@ -1102,7 +1102,14 @@ function readPrefsFile(file) {
     return null;
   }
   try {
-    const parsed = JSON.parse(raw);
+    /*
+     * 别的工具会给文件开头加 UTF-8 BOM（PowerShell 5.1 的
+     * `Set-Content -Encoding UTF8`、记事本「另存为 UTF-8」都会）。
+     * JSON.parse 不认 BOM，整份偏好会被判成"读不出来"：
+     * GET 只回 {}、POST 直接 400 —— 用户看到的就是「设置拨了没反应」。
+     */
+    const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+    const parsed = JSON.parse(text);
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     return parsed;
   } catch {

@@ -2246,8 +2246,27 @@ SKIN_BODY_FNS.capsule = capsuleBodyHtml;
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ [field]: value }),
-            }).catch(() => { /* 宿主没接这条路就算了，不影响设置本身 */ });
-          } catch { /* 同上 */ }
+            })
+              .then((res) => {
+                if (res.ok) return res;
+                /*
+                 * 宿主那边写不进去时，这里往往是唯一能看到的信号。
+                 * 早期 catch 一律静默：用户拨了开关什么都不发生，连"失败"都不知道
+                 * （真实原因可能是偏好文件被别的工具写成带 BOM 的坏 JSON，
+                 * 宿主 readPrefsFile 已经容忍 BOM，但任何其它坏文件仍会走到这里）。
+                 * 现在至少留一条 console 警告，并把 UI 拉回宿主的真相。
+                 */
+                console.warn(`[dsh-washer] 悬浮窗偏好写入失败：HTTP ${res.status}`);
+                pullOverlayPrefs();
+                return res;
+              })
+              .catch((error) => {
+                console.warn('[dsh-washer] 悬浮窗偏好写入失败：', error);
+                pullOverlayPrefs();
+              });
+          } catch (error) {
+            console.warn('[dsh-washer] 悬浮窗偏好写入失败：', error);
+          }
         };
         // 组件一律通过 washerGetConfig() 现取，而不是吃 inject 给的快照：
         // inject 回调只在注册时跑一次，重渲染不会重新求值。

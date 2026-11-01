@@ -321,7 +321,9 @@ function readFloatPrefs() {
     return null;
   }
   try {
-    const p = JSON.parse(raw);
+    // 容忍 UTF-8 BOM（PowerShell 5.1 / 记事本另存会加）；JSON.parse 不认它
+    const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+    const p = JSON.parse(text);
     return p !== null && typeof p === 'object' && !Array.isArray(p) ? p : null;
   } catch { return null; }
 }

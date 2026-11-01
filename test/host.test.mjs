@@ -917,6 +917,31 @@ test('偏好双向同步：鼠标穿透状态也要能往返（浮窗菜单 ←�
   ctx.dispose();
 });
 
+test('偏好文件带 UTF-8 BOM 时照样能读写（PowerShell 5.1 的 Set-Content 会加）', async () => {
+  /*
+   * 用户报：「设置切悬浮窗相关设置没效果」。
+   * 真实原因：偏好文件被 PowerShell 写成带 BOM 的 UTF-8，JSON.parse 直接抛，
+   * 宿主把整份文件判成"读不出来"——GET /dsh-washer/prefs 只剩 {}、
+   * POST 回来 400，设置页看上去就是开关拨不动。
+   */
+  const ctx = makeCtx();
+  const api = apply(ctx, { desktopOverlay: false, desktopOverlayPort: 0 });
+
+  writeFileSync(TEST_PREFS, '\uFEFF{"size":"tiny","show":true}');
+  const { readOverlayPrefs } = await import('../index.js');
+  assert.deepEqual(readOverlayPrefs(), { size: 'tiny', show: true }, 'BOM 不该让整份偏好读不出来');
+
+  const saved = api.syncOverlayPrefs({ show: false });
+  assert.ok(saved !== null, 'BOM 文件也要能继续写');
+  assert.equal(saved.show, false);
+  assert.equal(saved.size, 'tiny', '写回时原有字段不能丢');
+
+  // 写回去的文件是原子写（utf8 字符串），不该再带 BOM
+  assert.notEqual(readFileSync(TEST_PREFS, 'utf8').charCodeAt(0), 0xfeff);
+
+  ctx.dispose();
+});
+
 test('偏好双向同步：非法值写不进去，读回来的仍是上一个合法值', async () => {
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
