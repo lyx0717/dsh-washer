@@ -13,6 +13,18 @@ const { readFileSync, existsSync } = require('node:fs');
 const { homedir } = require('node:os');
 const { join, dirname } = require('node:path');
 
+/*
+ * Windows 分支。
+ *
+ * 这个文件在 macOS 上的行为必须**逐字不变**：所有 Windows 专属逻辑都走
+ * win32.cjs，调用点用 `if (IS_WIN)` 包住，macOS 走原来的代码。
+ * 桌面集成（托盘、通知身份、打开宿主客户端）都放那边，这里只留接线。
+ */
+const IS_WIN = process.platform === 'win32';
+const win32 = IS_WIN ? require('./win32.cjs') : null;
+/** Windows 10 的通知靠 AppUserModelID 归组；不设 toast 会没有落点 */
+if (IS_WIN) win32.prepareApp();
+
 const ENDPOINT_FILE = process.env.DSH_WASHER_ENDPOINT_FILE
   || join(homedir(), '.dsh', 'dsh-washer-overlay.json');
 
@@ -143,6 +155,11 @@ let dndPref = false;
 let paused = false;
 /** 浮窗整体不透明度（0.3~1）。太低会看不清，设置页/菜单里调。 */
 let opacity = 1;
+/**
+ * 是否正在退出。Windows 的 close 拦截要看它：
+ * 用户点关闭 → 藏进托盘；app.quit() 走流程 → close 必须放行，否则退不掉。
+ */
+let quitting = false;
 
 /**
  * 状态 → 系统音效。
@@ -470,6 +487,8 @@ function setClickThrough(on) {
    * 于是"双击没反应"。点角落退出同理。切态之后立刻同步一次，不依赖鼠标移动。
    */
   applyIgnoreRegions();
+  // Windows：托盘菜单里的"鼠标穿透"勾选态跟着变（没建托盘时是空操作）
+  if (IS_WIN) win32.refreshTrayMenu();
 }
 
 /**
@@ -530,6 +549,13 @@ function createWindow() {
     minimizable: false,
     fullscreenable: false,
     skipTaskbar: true,
+    /*
+     * Windows：光 skipTaskbar 藏任务栏，Alt+Tab 列表里还会出现——
+     * 用户切个窗口就看到一台洗衣机混在文档里。type:'toolbar' 会加上
+     * WS_EX_TOOLWINDOW，Alt+Tab 与任务栏都排除；实测和 transparent /
+     * frame:false 共存没问题（见 docs/spike-windows.md）。
+     */
+    ...(IS_WIN ? { type: 'toolbar' } : {}),
     // 置顶但不抢焦点：悬浮窗抢焦点会打断用户正在打的字
     alwaysOnTop: true,
     focusable: true,
@@ -544,8 +570,8 @@ function createWindow() {
 
   // 'floating' 比 'normal' 高，但低于系统弹窗，不会盖住密码框之类
   win.setAlwaysOnTop(true, 'floating');
-  // 切到别的 Space / 全屏应用时也能看到
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // 切到别的 Space / 全屏应用时也能看到（Windows 没有 Space 概念，不需要也不支持）
+  if (!IS_WIN) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   win.once('ready-to-show', () => {
     /*
@@ -595,6 +621,27 @@ function createWindow() {
     savePosition();
   });
   win.on('closed', () => { win = null; });
+
+  /*
+   * Windows：点关闭 = 藏进托盘，而不是退出进程。
+   *
+   * macOS 上关掉窗口等于结束这个常驻浮窗，用户从菜单栏/程序坞退出；
+   * Windows 上任务栏和 Alt+Tab 都藏了这个窗口，真关掉就再没有入口能找回来。
+   * 所以拦截 close 改成隐藏（persist=false：隐藏只是"这次没看"，不是偏好），
+   * 托盘里随时能点回来。真正退出走托盘菜单或宿主停止。
+   *
+   * 托盘文案跟着窗口显隐走：show/hide 事件比在每个调用点手工同步可靠——
+   * 设置页开关、右键菜单、快捷键、宿主重载都会经过这两个事件。
+   */
+  if (IS_WIN) {
+    win.on('close', (event) => {
+      if (quitting) return;
+      event.preventDefault();
+      setVisible(false, false);
+    });
+    win.on('show', () => win32.setTrayVisible(true));
+    win.on('hide', () => win32.setTrayVisible(false));
+  }
 
   // 拖窗外链用系统浏览器打开，不在悬浮窗里导航
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -650,7 +697,14 @@ function notify(title, body) {
   lastNotifyAt = Date.now();
   if (showElectronNotification(title, body)) return;
   /*
-   * Electron 的 Notification 可能整个不可用——这台机器就是：
+   * Windows：没有 osascript 这条退路。
+   * 但页面在同一个状态边沿已经弹了窗内横幅（float.html 的 showFlash），
+   * 通知没弹出来也不至于什么都没有，所以这里静默即可——
+   * 再开一条不可靠的第二通道只会多一处会撒谎的地方。
+   */
+  if (IS_WIN) return;
+  /*
+   * macOS：Electron 的 Notification 可能整个不可用——这台机器就是：
    * Electron.app 是 adhoc 签名、bundle id 是 com.github.Electron，
    * macOS 15 直接回 UNErrorDomain 错误 1（未授权），连权限弹窗都不给。
    *
@@ -683,6 +737,17 @@ function playSound(kind) {
   if (file === undefined) return;
   if (lastSoundAt > 0 && Date.now() - lastSoundAt < 2000) return;
   lastSoundAt = Date.now();
+  /*
+   * Windows 没有 /System/Library/Sounds，也没有 afplay。
+   * 声音改在渲染进程里用 WebAudio 合成（见 float.html 的 playChime），
+   * 主进程只负责发一句"该响了"——开关、勿扰、前台静音、节流仍然都在这里判断，
+   * 页面不碰任何策略，否则两个平台会各有一套"该不该响"的规则。
+   */
+  if (IS_WIN) {
+    if (win === null || win.isDestroyed()) return;
+    win.webContents.send('washer:play-sound', kind);
+    return;
+  }
   try {
     require('node:child_process').execFile(
       'afplay',
@@ -715,7 +780,7 @@ function showElectronNotification(title, body) {
      * 发失败（最常见就是没授权）就退到 osascript。
      * 不加这个，用户只会看到"开关开了但什么都不弹"。
      */
-    n.on('failed', () => { showScriptNotification(title, body); });
+    n.on('failed', () => { if (!IS_WIN) showScriptNotification(title, body); });
     n.show();
     return true;
   } catch {
@@ -1008,7 +1073,7 @@ function openDetail() {
     },
   });
   detailWin.setAlwaysOnTop(true, 'floating');
-  detailWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  if (!IS_WIN) detailWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   detailWin.loadFile(join(__dirname, '..', 'debug', 'detail.html'));
   detailWin.once('ready-to-show', () => detailWin.show());
   detailWin.on('closed', () => { detailWin = null; });
@@ -1089,6 +1154,15 @@ function setPaused(on) {
  * 这里只是给用户一个便利入口，不负责管理那个 App 的生命周期。
  */
 function openHarnessApp() {
+  /*
+   * Windows 没有 `open -a`：宿主拉起悬浮窗时把 process.execPath 塞进了
+   * DSH_WASHER_HOST_EXE，直接起它——那就是用户此刻正在用的客户端，
+   * 绿色版/自定义安装目录都对。拿不到就静默（只是个便利入口）。
+   */
+  if (IS_WIN) {
+    win32.openHarnessClient();
+    return;
+  }
   try {
     const { execFile } = require('node:child_process');
     execFile('open', ['-a', 'DeepSeek Harness'], () => { /* 找不到客户端就静默 */ });
@@ -1305,6 +1379,21 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  /*
+   * Windows：建托盘（显隐 / 详情 / 打开客户端 / 退出）。
+   * 没有托盘，藏起来的窗口就再也回不来了——见 createWindow 里的 close 拦截。
+   */
+  if (IS_WIN) {
+    win32.createTray({
+      toggle: () => setVisible(!visible),
+      openDetail: () => openDetail(),
+      quit: () => { setVisible(false); app.quit(); },
+      // 穿透勾选项：单击勾选时和 ⌥⌘W 快捷键走同一个 setClickThrough
+      toggleThrough: () => setClickThrough(!clickThrough),
+      throughEnabled: () => clickThrough,
+    });
+    win32.setTrayVisible(visible);
+  }
   // 启动就应用上次的不透明度（<1 才有必要 setOpacity，1 是默认值）
   if (win !== null && !win.isDestroyed() && opacity < 1) win.setOpacity(opacity);
 
@@ -1380,6 +1469,8 @@ app.whenReady().then(() => {
   ipcMain.on('washer:quit', () => { setVisible(false, false); app.quit(); });
 });
 
+app.on('before-quit', () => { quitting = true; });
+
 app.on('will-quit', () => {
   /*
    * ⌘Q / dock 右键退出 / 系统关机都会到这里，不经过菜单。
@@ -1399,5 +1490,6 @@ app.on('will-quit', () => {
   if (prefWatcher !== null) { require('node:fs').unwatchFile(PREFS_FILE); prefWatcher = null; }
   globalShortcut.unregisterAll();
   closeDetail();
+  if (IS_WIN) win32.destroyTray();
 });
 app.on('window-all-closed', () => app.quit());

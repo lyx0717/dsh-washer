@@ -550,6 +550,34 @@
 }
 
 /*
+ * Windows「下载运行时」卡片。宿主设置页会覆盖 button 的默认外观，
+ * 所以这里显式给颜色/高度/圆角，不依赖它自己的按钮样式。
+ */
+.dw-set-runtime {
+  margin: 2px 0 6px;
+}
+.dw-set-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  margin: 4px 0 8px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--dsw-alias-label-primary-inverted, #ffffff);
+  background: var(--dsw-alias-label-primary, #1f2329);
+}
+.dw-set-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/*
  * 说明文字紧跟在某一行后面时，视觉上属于那一行，整块是一节：
  *   - 行不再自己画下边框（否则线会压在说明文字上方/中间）。-10px 负 margin 会把
  *     说明往上拽，正好撞上行的 border-bottom，看起来像一条线横穿文字。

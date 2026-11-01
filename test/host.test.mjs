@@ -448,8 +448,15 @@ test('端点信息落盘：文件权限 0600，卸载后自动删除', async () 
   assert.ok(port > 0);
 
   assert.equal(existsSync(file), true, '服务起来后要落地端点文件，否则用户拿不到 token');
-  const mode = statSync(file).mode & 0o777;
-  assert.equal(mode, 0o600, `token 文件必须是 0600，实际 ${mode.toString(8)}`);
+  /*
+   * Windows 没有 POSIX 权限位：chmod 只切换只读属性，mode 永远是 666。
+   * 这不是实现漏了 0600 —— chmodSync(0o600) 照常调了，只是 NTFS 表达不出来。
+   * 权限断言只在有 POSIX 语义的平台上成立。
+   */
+  if (process.platform !== 'win32') {
+    const mode = statSync(file).mode & 0o777;
+    assert.equal(mode, 0o600, `token 文件必须是 0600，实际 ${mode.toString(8)}`);
+  }
 
   const info = JSON.parse(readFileSync(file, 'utf8'));
   assert.equal(info.port, port);
@@ -1633,16 +1640,20 @@ test('拉悬浮窗时必须真的删掉 ELECTRON_RUN_AS_NODE，不能只设成�
     '不能再出现「设成空串就算清掉」的写法');
 
   // stderr 不能被 ignore：起不来时要能拿到原因
-  assert.ok(!/stdio:\s*'ignore'/.test(host), "stderr 不能 'ignore'，否则报错全丢");
-  assert.ok(/stdio:\s*\[\s*'ignore'\s*,\s*'ignore'\s*,\s*'pipe'\s*\]/.test(host),
-    'stderr 要接到管道上，用来记失败原因');
+  // 只看 spawnOverlay 这一段——index.js 里别的 spawn（比如解压用的 runCommand）
+  // 不需要 stderr，全文件扫会把它们一起误伤。
+  const spawnSection = /function spawnOverlay\(([\s\S]*?)\n\}/.exec(host);
+  assert.ok(spawnSection !== null, '要有 spawnOverlay()');
+  assert.ok(!/stdio:\s*'ignore'/.test(spawnSection[1]), "spawnOverlay 的 stderr 不能 'ignore'，否则报错全丢");
+  assert.ok(/stdio:\s*\[\s*'ignore'\s*,\s*'ignore'\s*,\s*'pipe'\s*\]/.test(spawnSection[1]),
+    'spawnOverlay 的 stderr 要接到管道上，用来记失败原因');
 });
 
-test('能力探测端点报出平台事实（音效只有 macOS 有）', async () => {
+test('能力探测端点报出平台事实（音效 macOS 走 afplay，Windows 走页面 WebAudio）', async () => {
   /*
-   * 客户端跑在浏览器里，拿不到 process.platform。音效走的是 macOS 自带的
-   * afplay + /System/Library/Sounds，所以「这台机器能不能响」只能由宿主回答。
-   * 用户的诉求是「Windows 上音效开关直接隐藏」——判据就在这里。
+   * 客户端跑在浏览器里，拿不到 process.platform。音效在 macOS 上走系统自带的
+   * afplay + /System/Library/Sounds，在 Windows 上由悬浮窗页面用 WebAudio 合成，
+   * 两边都能响——所以 sound 是「桌面平台」而不是「macOS 专属」。
    */
   const ctx = makeCtx();
   // 能力路由挂在 webServer 上，和 HTTP 服务无关 —— desktopOverlay:false 也要能应答
@@ -1651,27 +1662,28 @@ test('能力探测端点报出平台事实（音效只有 macOS 有）', async (
   const res = await callRoute(ctx, '/dsh-washer/capabilities', 'GET');
   assert.equal(res.status, 200);
   assert.equal(res.body.platform, process.platform, '要如实报平台');
-  assert.equal(res.body.sound, process.platform === 'darwin',
-    '音效能力必须按平台算：只有 macOS 有 afplay');
+  const supportsSound = process.platform === 'darwin' || process.platform === 'win32';
+  assert.equal(res.body.sound, supportsSound,
+    '音效能力必须按平台算：macOS afplay + Windows 页面合成，其它平台没有');
   assert.equal(typeof res.body.overlay, 'boolean', '要报悬浮窗能不能起');
   /*
-   * 边界（用户定的）：**悬浮窗和音效只支持 macOS，dock 全平台**。
+   * 边界（0.10.0 起更新）：**悬浮窗支持 macOS 和 Windows**，dock 全平台。
    *
    * overlayReason 必须把两种"起不来"分开：
-   *   'platform' —— 这个平台就不支持（非 macOS），装什么运行时都没用
+   *   'platform' —— 这个平台就不支持（Linux 等），装什么运行时都没用
    *   'missing'  —— 平台支持，但这台机器没装 Electron 运行时
    * 混成一个布尔，设置页就只能二选一：要么在不支持的平台上也劝用户
    * 去装 Electron（白折腾），要么在缺运行时时啥也不显示（对着开关猜）。
    *
-   * 反例：把 overlayPlatformSupported() 写成恒 true，这条会红。
+   * 反例：把 overlayPlatformSupported() 缩回只认 darwin，这条会红。
    */
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
     assert.equal(res.body.overlayReason === 'platform', false,
-      'macOS 是支持平台，原因不可能是 platform');
+      'macOS / Windows 是支持平台，原因不可能是 platform');
   } else {
-    assert.equal(res.body.overlay, false, '非 macOS 上悬浮窗必须报不可用');
+    assert.equal(res.body.overlay, false, '不支持的平台上悬浮窗必须报不可用');
     assert.equal(res.body.overlayReason, 'platform',
-      '非 macOS 上原因必须是 platform（不是 missing——装 Electron 也没用）');
+      '不支持的平台上原因必须是 platform（不是 missing——装 Electron 也没用）');
   }
   // dock 不受平台限制：它是宿主渲染进程里的 React，任何能开 Web UI 的平台都能用
   assert.equal(res.body.dock, true, 'dock 必须全平台可用');
@@ -1682,52 +1694,74 @@ test('能力探测端点报出平台事实（音效只有 macOS 有）', async (
 
 test('平台支持但没装运行时时，overlayReason 必须是 missing', async () => {
   /*
-   * macOS 上"支持悬浮窗"和"这台机器能不能起来"是两件事：
+   * "支持悬浮窗"和"这台机器能不能起来"是两件事：
    *   overlay        = false  —— 现在确实起不来
    *   overlayReason  = 'missing' —— 因为找不到 Electron 运行时
    * 设置页照这个在开关下面给出"缺运行时"的提示，让用户装上就能用。
    *
-   * 造场景的办法：把 DSH_WASHER_ELECTRON 指到一个一定不存在的路径。
-   * 那是最高优先级的候选，命不中就不会再往下找。
+   * 造场景的办法有两层：
+   *   - DSH_WASHER_ELECTRON 指到一个不存在的路径（最高优先级候选，命不中就不往下找）
+   *   - 把 homedir 挪到一个空临时目录：Windows 的默认候选
+   *     ~/.dsh/washer-runtime/electron.exe 在开发机上通常是装好的，
+   *     不挪走这条就永远测不到 missing（假绿）。
    * 反例：把 overlayReason 写死成 null，这条会红。
    */
-  const prev = process.env.DSH_WASHER_ELECTRON;
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const prevElectron = process.env.DSH_WASHER_ELECTRON;
+  const prevProfile = process.env.USERPROFILE;
+  const prevHome = process.env.HOME;
+  const tempHome = mkdtempSync(join(tmpdir(), 'dsh-washer-missing-'));
   process.env.DSH_WASHER_ELECTRON = '/nonexistent/dsh-washer-test/electron';
+  if (process.platform === 'win32') process.env.USERPROFILE = tempHome;
+  else process.env.HOME = tempHome;
   const ctx = makeCtx();
   const api = apply(ctx, { desktopOverlay: false, desktopOverlayPort: 0 });
   try {
     const res = await callRoute(ctx, '/dsh-washer/capabilities', 'GET');
     assert.equal(res.status, 200);
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' || process.platform === 'win32') {
       assert.equal(res.body.overlay, false, '指向不存在的运行时，必须报不可用');
       assert.equal(res.body.overlayReason, 'missing',
         '平台支持但缺运行时，原因必须是 missing（不是 platform）');
     } else {
-      assert.equal(res.body.overlayReason, 'platform', '非 macOS 仍然是平台不支持');
+      assert.equal(res.body.overlayReason, 'platform', '不支持的平台仍然是平台不支持');
     }
   } finally {
-    if (prev === undefined) delete process.env.DSH_WASHER_ELECTRON;
-    else process.env.DSH_WASHER_ELECTRON = prev;
+    if (prevElectron === undefined) delete process.env.DSH_WASHER_ELECTRON;
+    else process.env.DSH_WASHER_ELECTRON = prevElectron;
+    if (process.platform === 'win32') {
+      if (prevProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevProfile;
+    } else {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+    rmSync(tempHome, { recursive: true, force: true });
     ctx.dispose();
   }
 });
 
-test('非 macOS 上不找 Electron 运行时（判平台，不判文件在不在）', () => {
+test('平台判定：macOS/Windows 支持悬浮窗，其它平台连找都不找', () => {
   /*
-   * overlayPlatformSupported() 必须真的按平台判。
+   * overlayPlatformSupported() 必须真的按平台判，而且把 0.10.0 的
+   * Windows 支持写进去了。
    *
-   * 这条读源码而不是跑行为：本机是 macOS，跑不出 Windows 的结果。
-   * 查的是那两条硬事实：
-   *   1. 函数体里是 process.platform === 'darwin'
-   *   2. electronBinary() 一开头就因为平台不符返回 null，
+   * 这条读源码而不是跑行为：一台机器只能跑出一个平台，跑不出别的平台的结果。
+   * 查的是四件硬事实：
+   *   1. 函数体里是 darwin || win32
+   *   2. electronBinaryStatus() 一开头就因为平台不符返回 null，
    *      不会走到"遍历候选路径"那一步
-   * 反例：把 return 改成 true，这条会红。
+   *   3. Windows 的候选落在 ~/.dsh/washer-runtime/electron.exe（与下载路由同一路径）
+   *   4. macOS 的候选保持原路径不动（零回归）
+   * 反例：把 return 改回只认 darwin，这条会红。
    */
   const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
-  const fn = /function overlayPlatformSupported\(\) \{([\s\S]{0,200}?)\}/.exec(src);
-  assert.ok(fn !== null, '要有 overlayPlatformSupported()');
-  assert.ok(/process\.platform === 'darwin'/.test(fn[1]),
-    '悬浮窗支持与否必须按 process.platform === \'darwin\' 判');
+  const fn = /function overlayPlatformSupported\(platform = process\.platform\) \{([\s\S]{0,200}?)\}/.exec(src);
+  assert.ok(fn !== null, '要有 overlayPlatformSupported(platform = process.platform)');
+  assert.ok(/platform === 'darwin' \|\| platform === 'win32'/.test(fn[1]),
+    '悬浮窗支持 macOS 与 Windows：darwin || win32');
   assert.ok(src.includes('function electronBinaryStatus()'), '要有 electronBinaryStatus()');
   assert.ok(/if \(!overlayPlatformSupported\(\)\) return \{ binary: null, reason: 'platform' \};/.test(src),
     'electronBinaryStatus 必须先判平台再找文件——不支持的平台连找都不找');
@@ -1735,6 +1769,49 @@ test('非 macOS 上不找 Electron 运行时（判平台，不判文件在不在
   assert.ok(wrapper !== null, '要有 electronBinary()');
   assert.ok(/electronBinaryStatus\(\)/.test(wrapper[1]),
     'electronBinary 必须复用 electronBinaryStatus（平台判断留在唯一一处）');
+  const candidates = /function electronBinaryCandidates\(\) \{([\s\S]{0,1400}?)\n\}/.exec(src);
+  assert.ok(candidates !== null, '要有 electronBinaryCandidates()');
+  assert.ok(/\.dsh', 'washer-runtime', 'electron\.exe'/.test(candidates[1]),
+    'Windows 候选必须在 ~/.dsh/washer-runtime/electron.exe（和下载路由同一目录）');
+  assert.ok(/\.dsh', 'electron', 'Electron\.app', 'Contents', 'MacOS', 'Electron'/.test(candidates[1]),
+    'macOS 候选必须保持原路径（零回归）');
+});
+
+test('Windows：拉起悬浮窗时把宿主 exe 路径带给子进程', () => {
+  /*
+   * Windows 上「打开 Harness 客户端」不能像 macOS 那样 `open -a`，
+   * 只能直接起 exe。猜安装路径不可靠（绿色版、自定义目录都可能），
+   * 所以宿主把自己此刻的 process.execPath 通过环境变量交给子进程。
+   *
+   * 反例：删掉这行，Windows 上"打开 Harness"按钮会静默失灵。
+   */
+  const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  assert.ok(/childEnv\.DSH_WASHER_HOST_EXE = process\.execPath;/.test(src),
+    'spawnOverlay 必须把宿主 exe 路径传给悬浮窗子进程');
+  // 这个变量是给子进程用的，不能被 spawnOverlay 的清理逻辑删掉
+  assert.ok(!/delete childEnv\.DSH_WASHER_HOST_EXE/.test(src), '不能把宿主路径当历史坑清掉');
+});
+
+test('Windows 运行时安装路由：只有 win32 注册，且只收 POST', async () => {
+  /*
+   * macOS 上没有这条路由（请求会 404），行为和 0.9.x 一字不差；
+   * Windows 上存在，但只收 POST——GET 会被链接预取之类的请求命中，
+   * 那种请求不该触发 110MB 下载。
+   */
+  const ctx = makeCtx();
+  apply(ctx, { desktopOverlay: false, desktopOverlayPort: 0 });
+  try {
+    const hasRoute = ctx.routes.has('/dsh-washer/electron/install');
+    if (process.platform === 'win32') {
+      assert.equal(hasRoute, true, 'Windows 上要注册运行时安装路由');
+      const res = await callRoute(ctx, '/dsh-washer/electron/install', 'GET');
+      assert.equal(res.status, 405, '安装路由只收 POST');
+    } else {
+      assert.equal(hasRoute, false, '非 Windows 上不注册安装路由（macOS 行为不变）');
+    }
+  } finally {
+    ctx.dispose();
+  }
 });
 
 test('客户端报的 waiting 和本地推断能叠加，谁高算谁', async () => {

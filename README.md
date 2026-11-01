@@ -160,6 +160,8 @@
 | 卡住了 | 咕噜咕噜…转不动了 | 卡在哪个动作 · 多久没动静 |
 - 系统通知发不出来时会自动退回 `osascript`（详见 `electron/main.cjs` 里
   `showScriptNotification` 的注释：adhoc 签名的 Electron 拿不到 macOS 通知权限）。
+- Windows 上用 Electron 的原生 toast（AUMID `com.dsh.washer.float`），点击通知会把浮窗
+  显示出来。没有第二条通道可退——页面在同一个时刻已经弹过窗内横幅，不再重复弹一次。
 
 ## 状态音效
 
@@ -180,15 +182,17 @@
 只留**用户需要行动**的三个时刻，其余交给画面本身（转速、水位、泡沫都在动，
 本来就不需要声音告诉你它还活着）。
 
-### 只有 macOS 有
+### macOS 用系统音，Windows 用页面合成
 
-用 macOS 自带的 `afplay` 播 `/System/Library/Sounds/*.aiff`：不打包音频、
+macOS 上宿主用自带的 `afplay` 播 `/System/Library/Sounds/*.aiff`：不打包音频、
 不做解码、不引入许可问题，而且**跟着你系统自己的音量和静音键走**——
 自己塞个 mp3 进来反而会出现「系统静音了它还在响」。
 
-音效和悬浮窗是同一个平台边界：**都只有 macOS 有**。宿主通过
-`/dsh-washer/capabilities` 把平台事实告诉客户端，客户端据此渲染——
-拨了没反应的开关比没有开关更糟。
+Windows 没有这套系统音，浮窗页面用 WebAudio 现场合成三个和弦（`done` 上行三音、
+`error` 下行、`waiting` 轻点），由主进程通过 IPC `washer:play-sound` 触发。
+两边的开关、节流（2 秒）、前台静音规则完全一致；宿主通过
+`/dsh-washer/capabilities` 的 `sound` 字段告诉客户端这台机器有没有音效能力——
+`sound` 覆盖 macOS 与 Windows，Linux 上整行隐藏，不留拨了没反应的开关。
 
 开关、节流、前台静音和通知共用一套判断：窗口在前台时静音（人就在看），
 2 秒内不重复响（状态抖动时不连响）。
@@ -384,35 +388,66 @@ Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌�
 - **暂停监听**只冻结实时同步、画面停在最后一帧，不影响可见性，也不改配置
 - 穿透状态下窗口收不到任何鼠标事件，用 **⌥⌘W** 恢复（不要用 ⌘⇧W，那是系统关窗口的键）
 
-**悬浮窗只支持 macOS。** dock 是全平台的（它跑在宿主渲染进程里），但悬浮窗是
-一个独立的 Electron 进程，要透明置顶、跨 Space、点击穿透、右键菜单——每一项
-在 Windows 上都有自己的差异。所以这里不承诺跨平台，非 macOS 上设置页**整节
-不出现**，而不是留一个拨了没反应的开关。
+**平台矩阵**（0.10.0 起 Windows 上线）：
 
-macOS 上宿主去 `~/.dsh/electron/` 找运行时；放在别处就用环境变量指定：
+| 平台 | 悬浮窗 | 说明 |
+|---|---|---|
+| macOS | ✅ | 独立 Electron 进程：透明置顶、跨 Space、点击穿透、右键菜单、afplay / osascript |
+| Windows | ✅ 0.10.0 起 | 独立 Electron 进程：`type: 'toolbar'` 不进 Alt+Tab；托盘常驻；关闭 = 隐藏；音效由页面合成；通知走原生 toast |
+| Linux | ❌ | 设置页整节隐藏（`overlayReason: 'platform'`），装运行时也没用 |
 
-```bash
-export DSH_WASHER_ELECTRON=/path/to/Electron.app/Contents/MacOS/Electron
-```
+dock 是全平台的（跑在宿主渲染进程里），悬浮窗则是独立 Electron 进程，必须有本机运行时。
+
+**运行时从哪来**：宿主按下面的顺序找，第一个能用的胜出。
+
+| 平台 | 顺序 |
+|---|---|
+| macOS | `DSH_WASHER_ELECTRON` → `~/.dsh/electron/Electron.app/Contents/MacOS/Electron` |
+| Windows | `DSH_WASHER_ELECTRON` → `%USERPROFILE%\.dsh\washer-runtime\electron.exe`（同目录 `version` 文件主版本 ≥ 43） |
+
+Windows 上缺运行时时，设置页的悬浮窗整节照常显示，多出一个**「下载运行时（约 110 MB）」**
+按钮：宿主从 `npmmirror.com/mirrors/electron` 拉 `electron-v43.8.6-win32-x64.zip`
+（可用 `DSH_WASHER_ELECTRON_MIRROR` / `DSH_WASHER_ELECTRON_VERSION` 覆盖版本与镜像），
+先 `tar.exe -xf`、失败退 PowerShell `Expand-Archive`，解到临时目录校验 `electron.exe`
+与 `version` 后原子替换 `%USERPROFILE%\.dsh\washer-runtime`。
+
+手动装也行——把 zip 解压到 `%USERPROFILE%\.dsh\washer-runtime`，要求目录根部同时有
+`electron.exe` 和 `version`（Electron 发行包自带），不要套一层 `electron-v43.8.6-win32-x64/`。
+
+**Windows 上的行为差异**（都是有意的）：
+
+- **关闭 = 隐藏**：点窗口关闭按钮只是 `hide()`，进程和托盘留着；退出请走托盘菜单
+  「退出悬浮窗」或右键菜单「退出悬浮窗」。
+- **鼠标穿透**：右键菜单或托盘「鼠标穿透」勾选；穿透状态用 **Ctrl+Alt+W** 恢复
+  （macOS 是 ⌥⌘W；真实加速键仍是 `Alt+CommandOrControl+W`，界面文案按平台显示）。
+  穿透时窗口收不到任何鼠标事件，托盘勾选项是快捷键之外的唯一出路。
+- **不进 Alt+Tab / 任务栏**：窗口带 `type: 'toolbar'`（`WS_EX_TOOLWINDOW`）。
+  `skipTaskbar: true` 在 Windows 上不够——它只隐藏任务栏按钮，Alt+Tab 里还在。
+- **跨 Space / 全屏**：`setVisibleOnAllWorkspaces` 是 macOS 专属，Windows 上跳过；
+  普通桌面的置顶照常生效，全屏应用前需要额外层级处理，详见 [docs/windows.md](docs/windows.md)。
+- **音效 / 通知**：Windows 没有 `afplay` / `osascript`，分别换成页面 WebAudio 合成
+  与 Electron 原生 toast（AUMID `com.dsh.washer.float`）。
 
 **两种"起不来"要分清**，设置页据此给不同处理：
 
 | `overlayReason` | 含义 | 设置页 |
 |---|---|---|
-| `platform` | 这个平台不支持（非 macOS） | 整节隐藏，装 Electron 也没用 |
-| `missing` | 平台支持，但这台机器没装运行时 | 开关照常显示 + 提示缺运行时 |
+| `platform` | 这个平台不支持（Linux） | 整节隐藏，装 Electron 也没用 |
+| `missing` | 平台支持，但这台机器没装运行时 | 开关照常显示；macOS 提示缺运行时，Windows 给下载按钮 |
 | `null` | 正常可用 | 正常显示 |
 
-> 早先 0.6.0 尝试支持过 Windows，0.6.2 撤回：右键菜单等交互在 Windows 上
-> 没有可靠验证手段，与其半可用不如说清楚不支持。
-
 ```bash
-./electron/start.sh          # 手动起（调试用）
+./electron/start.sh          # macOS 手动起（调试用）
 ELECTRON_PATH=/path/to/Electron ./electron/start.sh   # 指定 Electron 运行时
 ```
 
+```bat
+electron\start.cmd           # Windows 手动起（调试用）
+set ELECTRON_PATH=C:\path\to\electron.exe && electron\start.cmd
+```
+
 > 从 DSH 的终端里启动时，`ELECTRON_RUN_AS_NODE=1` 会被继承，Electron 会退化成纯 Node。
-> `electron/start.sh` 已经帮你清掉了。正常情况下不需要手动起——宿主会按 `desktopOverlayAutoLaunch` 自己拉。
+> `electron/start.sh` / `electron/start.cmd` 已经帮你清掉了。正常情况下不需要手动起——宿主会按 `desktopOverlayAutoLaunch` 自己拉。
 
 ### 浮窗看不到？按这个顺序查
 
@@ -426,6 +461,17 @@ ELECTRON_PATH=/path/to/Electron ./electron/start.sh   # 指定 Electron 运行�
 > 调试别靠猜窗口坐标截图——用离屏 Electron 的 `capturePage()` 直接出图。
 
 ## 版本记录
+
+### 0.10.0
+- **Windows 悬浮窗上线**：设置页可在 Windows 上开关浮窗；不进 Alt+Tab / 任务栏；托盘常驻；关闭 = 隐藏
+- 运行时：`%USERPROFILE%\.dsh\washer-runtime\electron.exe`（`version` ≥ 43）；
+  缺运行时可在设置页一键下载（npmmirror 镜像，约 110 MB，下载失败退手动放置）
+- 音效改为「macOS `afplay` / Windows 页面 WebAudio 合成」，`sound` 能力覆盖两个桌面平台
+- Windows 通知走 Electron 原生 toast（AUMID `com.dsh.washer.float`）；穿透用 Ctrl+Alt+W 或托盘恢复
+- 窗口加 `type: 'toolbar'`（不出现于 Alt+Tab），`setVisibleOnAllWorkspaces` 在 Windows 上跳过
+- **macOS 行为零变化**：透明置顶、跨 Space、afplay、osascript 兜底、快捷键 ⌥⌘W 全部保留
+- 新增 `electron/win32.cjs`、`electron/start.cmd`、`electron/tray.png`；测试按平台分层
+- 详细变更见 [CHANGELOG.md](CHANGELOG.md)
 
 ### 0.9.0
 - 新增三套皮肤：**复古奶油** / **工笔重彩** / **太空舱**，设置页「外观」与浮窗右键菜单都能切

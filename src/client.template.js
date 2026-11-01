@@ -132,6 +132,23 @@ window.__ModuleLoader__.load({
       return capabilitiesPending;
     }
 
+    /*
+     * 重新问一次能力（P3：设置页下载完运行时后要用）。
+     *
+     * 缓存是模块级的，装完运行时如果还拿旧值，设置页会一直停在"缺运行时"，
+     * 用户以为没装上。所以这里清缓存、重新拉，并把新值广播给正在显示的设置页。
+     * 只发生在用户主动点按钮之后，不会自己触发轮询。
+     */
+    const capabilityListeners = new Set();
+    function refreshCapabilities() {
+      capabilities = null;
+      capabilitiesPending = null;
+      return getCapabilities().then((value) => {
+        capabilityListeners.forEach((listener) => { listener(value); });
+        return value;
+      });
+    }
+
     const ZH = {
       'state.off': '未连接',
       'state.idle': '待机',
@@ -174,6 +191,17 @@ window.__ModuleLoader__.load({
       'set.overlayOn': '显示悬浮窗',
       'set.skinHint': '主界面和桌面悬浮窗共用这一套皮肤，改这里两边一起变。',
       'set.overlayMissing': '找不到 Electron 运行时，悬浮窗起不来。用 DSH_WASHER_ELECTRON 环境变量指定它的路径。',
+      /*
+       * Windows 专用文案（0.10.0+）：不再让用户自己找 Electron，
+       * 而是给一个下载按钮。两句提示分开写，是因为"点按钮"和
+       * "手动解压"的受众不同——前者是普通用户，后者是离线/内网。
+       */
+      'set.overlayMissingWin': '还差 Electron 运行时。点下面的按钮下载一份（约 110MB），装好就能开悬浮窗。',
+      'set.runtimeInstall': '下载运行时（约 110MB）',
+      'set.runtimeInstalling': '正在下载并解压…',
+      'set.runtimeInstallOk': '装好了，现在可以打开悬浮窗了。',
+      'set.runtimeInstallFail': '下载失败：{error}。也可以手动把 Electron 解压到 {dir}（里面要有 electron.exe）。',
+      'set.runtimeManualHint': '手动安装：把 Electron 的 win32 发行包解压到 {dir}，确保 {exe} 存在。',
       'set.overlayHint': '开启后随客户端启动，在桌面角落显示一台洗衣机；关掉会立刻收起。',
       'set.overlaySize': '悬浮窗大小',
       'ov.normal': '正常',
@@ -191,7 +219,7 @@ window.__ModuleLoader__.load({
       'set.overlayDnd': '勿扰模式',
       'set.overlayDndHint': '开会/专注时全静音：浮窗照常显示，但不弹通知、不响音效。',
       'set.overlayThrough': '鼠标穿透',
-      'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 ⌥⌘W 可以随时关掉。',
+      'set.overlayThroughHint': '开启后点击直接落到底下的应用，悬浮窗不再接收鼠标；按 {key} 可以随时关掉。',
       'tool.command': '跑命令',
       'tool.read': '读文件',
       'tool.write': '写文件',
@@ -248,6 +276,12 @@ window.__ModuleLoader__.load({
       'set.overlayOn': 'Show overlay',
       'set.skinHint': 'One skin shared by the dock bar and the desktop overlay — change it once, both update.',
       'set.overlayMissing': 'Electron runtime not found, the floating window cannot start. Set DSH_WASHER_ELECTRON to its path.',
+      'set.overlayMissingWin': 'The Electron runtime is not installed yet. Download a copy (~110MB) with the button below to enable the floating window.',
+      'set.runtimeInstall': 'Download runtime (~110MB)',
+      'set.runtimeInstalling': 'Downloading and unpacking…',
+      'set.runtimeInstallOk': 'Installed. You can turn on the overlay now.',
+      'set.runtimeInstallFail': 'Download failed: {error}. You can also unzip the win32 Electron build into {dir} (it must contain electron.exe).',
+      'set.runtimeManualHint': 'Manual install: unzip the win32 Electron build into {dir} so that {exe} exists.',
       'set.overlayHint': 'Starts with the app and shows a washer in the corner of your desktop. Turning it off removes it immediately.',
       'set.overlaySize': 'Overlay size',
       'ov.normal': 'Normal',
@@ -259,7 +293,7 @@ window.__ModuleLoader__.load({
       'set.overlayScaleHint': 'Applies to Normal only. All three steps scale the screen text too.',
       'set.overlaySizeHint': '"Minimal" keeps only the indicator light with no status text - the smallest footprint.',
       'set.overlayThrough': 'Click-through',
-      'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press Opt+Cmd+W to turn it off.',
+      'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press {key} to turn it off.',
       'tool.command': 'Running a command',
       'tool.read': 'Reading a file',
       'tool.write': 'Writing a file',
@@ -731,10 +765,11 @@ window.__ModuleLoader__.load({
     function useCapabilities() {
       const [caps, setCaps] = React.useState(capabilities);
       React.useEffect(() => {
-        if (capabilities !== null) { setCaps(capabilities); return undefined; }
+        capabilityListeners.add(setCaps);
+        if (capabilities !== null) { setCaps(capabilities); return () => { capabilityListeners.delete(setCaps); }; }
         let alive = true;
         getCapabilities().then((value) => { if (alive) setCaps(value); });
-        return () => { alive = false; };
+        return () => { alive = false; capabilityListeners.delete(setCaps); };
       }, []);
       return caps;
     }
@@ -1011,6 +1046,75 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
     /* 侧边栏导航用的洗衣机图标（16px，跟随 currentColor 主题色，纯描边） */
     const NAV_WASHER_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><rect x="3.5" y="2.5" width="17" height="19" rx="3" stroke="currentColor" stroke-width="1.7"/><rect x="6.5" y="5.3" width="6.5" height="1.7" rx="0.85" fill="currentColor"/><circle cx="17" cy="6.2" r="1.1" fill="currentColor"/><circle cx="12" cy="14" r="4.4" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/><path d="M8.4 15.2c1.2-.8 2.4-.8 3.6 0s2.4.8 3.6 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+
+    /*
+     * 「关掉鼠标穿透」的快捷键文案。
+     *
+     * 真正注册的加速键是 electron/main.cjs 的 ESCAPE_ACCELERATOR =
+     * 'Alt+CommandOrControl+W'：macOS 上 CommandOrControl 渲染成 ⌘，
+     * Windows 上渲染成 Ctrl。这里只负责把这两套写法讲对，别让 Windows
+     * 用户照着 ⌥⌘W 去按。
+     */
+    function clickThroughShortcut(caps) {
+      return caps !== null && caps.platform === 'win32' ? 'Ctrl+Alt+W' : '⌥⌘W';
+    }
+
+    /*
+     * Windows 缺 Electron 运行时时的安装卡片（P3）。
+     *
+     * 按钮 POST 到宿主的 /dsh-washer/electron/install，由宿主下载并解压，
+     * 页面只显示状态（下载在 110MB 量级，前端拿不到进度事件，就先说"正在下载"）。
+     * 成功之后 refreshCapabilities()：设置页的开关会从"缺运行时"恢复成可拨，
+     * 否则用户会以为按钮没生效、再去点第二次。
+     */
+    function OverlayRuntimeInstaller(props) {
+      const { tr } = props;
+      const [phase, setPhase] = React.useState('idle');
+      const [errorText, setErrorText] = React.useState('');
+      const install = () => {
+        if (phase === 'installing') return;
+        setPhase('installing');
+        setErrorText('');
+        fetch('/dsh-washer/electron/install', {
+          method: 'POST',
+          headers: { accept: 'application/json' },
+        })
+          .then(async (res) => {
+            let body = null;
+            try { body = await res.json(); } catch { body = null; }
+            if (!res.ok || body === null || body.ok !== true) {
+              throw new Error((body && body.error) || ('HTTP ' + res.status));
+            }
+            setPhase('done');
+            refreshCapabilities();
+          })
+          .catch((error) => {
+            setPhase('failed');
+            setErrorText(error instanceof Error ? error.message : String(error));
+          });
+      };
+      // 宿主和主进程都按这两个路径找运行时，提示文案必须和代码一致
+      const dir = '~/.dsh/washer-runtime';
+      const exe = '%USERPROFILE%\\.dsh\\washer-runtime\\electron.exe';
+      return h('div', { className: 'dw-set-runtime' },
+        h('p', { className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissingWin')),
+        h('button', {
+          type: 'button',
+          className: 'dw-set-action',
+          disabled: phase === 'installing',
+          onClick: install,
+        }, phase === 'installing' ? tr('set.runtimeInstalling') : tr('set.runtimeInstall')),
+        phase === 'done'
+          ? h('p', { className: 'dw-set-hint' }, tr('set.runtimeInstallOk'))
+          : null,
+        phase === 'failed'
+          ? h('p', { className: 'dw-set-hint dw-set-warn' },
+            fill(tr('set.runtimeInstallFail'), { error: errorText, dir }))
+          : null,
+        h('p', { className: 'dw-set-hint' }, fill(tr('set.runtimeManualHint'), { dir, exe })),
+      );
+    }
+
     function WasherSettings(props) {
       const { t, tr } = useTr(props);
       const cfg = readConfig(props);
@@ -1140,7 +1244,8 @@ window.__ModuleLoader__.load({
           h('p', { key: 'ov-scale-hint', className: 'dw-set-hint' }, tr('set.overlayScaleHint')),
           row('set.overlayThrough',
             sw('desktopOverlayClickThrough', cfg.desktopOverlayClickThrough === true, tr('set.overlayThrough'))),
-          h('p', { key: 'ov-through-hint', className: 'dw-set-hint' }, tr('set.overlayThroughHint')),
+          h('p', { key: 'ov-through-hint', className: 'dw-set-hint' },
+            fill(tr('set.overlayThroughHint'), { key: clickThroughShortcut(caps) })),
           row('set.overlayNotify',
             sw('desktopOverlayNotify', cfg.desktopOverlayNotify === true, tr('set.overlayNotify'))),
           h('p', { key: 'ov-notify-hint', className: 'dw-set-hint' }, tr('set.overlayNotifyHint')),
@@ -1165,9 +1270,15 @@ window.__ModuleLoader__.load({
           /*
            * 平台支持、但找不到 Electron：这时候才说"缺运行时"。
            * 与上面"不支持这个平台"是两种不同的原因，不能混成一句话。
+           *
+           * Windows 上（0.10.0+）不再让用户自己找 Electron，直接给下载按钮；
+           * macOS 保持原来的环境变量提示——那边已经有既定的安装路径
+           * （homebrew / 官方 dmg），自动下载反而多一层维护面。
            */
           caps.overlay === false
-            ? h('p', { key: 'ov-missing', className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissing'))
+            ? (caps.platform === 'win32'
+              ? h(OverlayRuntimeInstaller, { key: 'ov-install', tr })
+              : h('p', { key: 'ov-missing', className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissing')))
             : null,
         ] : null,
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));

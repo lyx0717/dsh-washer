@@ -1282,14 +1282,17 @@ await test('Windows 上音效开关必须隐藏，找不到 Electron 时要说�
   // 宿主：能力端点存在，且 sound / overlay 都按平台算
   assert.ok(host.includes("'/dsh-washer/capabilities'"), '宿主要有能力探测端点');
   assert.ok(/const isMac = process\.platform === 'darwin';/.test(host), '宿主要按平台算 isMac');
-  assert.ok(/sound: isMac,/.test(host), 'sound 能力挂在 isMac 上');
+  assert.ok(/const isWin = process\.platform === 'win32';/.test(host), '宿主要按平台算 isWin');
+  assert.ok(/sound: isMac \|\| isWin,/.test(host),
+    'sound 能力挂在桌面平台上（macOS afplay / Windows 页面 WebAudio）');
   /*
-   * 悬浮窗**只支持 macOS**（用户决定：浮窗不兼容 Windows，dock 兼容）。
-   * 所以 overlay 不能只看"找不找得到 Electron"——非 macOS 上就算用户
+   * 悬浮窗支持 macOS 与 Windows（0.10.0 起；用户此前定的"浮窗不兼容
+   * Windows"边界已明确放开），dock 仍然全平台。
+   * overlay 不能只看"找不找得到 Electron"——不支持的平台上就算用户
    * 自己装了 Electron 也必须判 false，否则设置页会把整节显示出来让他去拨。
    */
-  assert.ok(/function overlayPlatformSupported\(\) \{\s*return process\.platform === 'darwin';/.test(host),
-    '悬浮窗必须有独立的平台判据，不能只靠碰运气找不到 Electron');
+  assert.ok(/function overlayPlatformSupported\(platform = process\.platform\) \{\s*return platform === 'darwin' \|\| platform === 'win32';/.test(host),
+    '悬浮窗必须有独立的平台判据（darwin || win32），不能只靠碰运气找不到 Electron');
   assert.ok(/overlay: overlaySupported && overlayBinary !== null/.test(host),
     'overlay 能力要把"平台支持"和"有二进制"两个条件一起算');
 
@@ -1346,11 +1349,11 @@ await test('详情面板：状态灯必须覆盖状态机全部十态（不能�
     '"running" 不是状态名，这条选择器永远不会命中，属于误导');
 });
 
-await test('设置页：悬浮窗整节只在平台支持时渲染（非 macOS 全隐藏）', async () => {
+await test('设置页：悬浮窗整节只在平台支持时渲染（Linux 全隐藏）', async () => {
   /*
-   * 边界（用户定的）：dock 全平台可用，悬浮窗和音效只支持 macOS。
+   * 边界：dock 全平台可用，悬浮窗支持 macOS 与 Windows，其它平台不支持。
    *
-   * 所以非 macOS 上不该出现任何一个"拨了没反应"的开关：
+   * 所以不支持的平台上不该出现任何一个"拨了没反应"的开关：
    *   - 没有"显示悬浮窗"
    *   - 没有"悬浮窗大小"
    *   - 没有"鼠标穿透"
@@ -1363,7 +1366,7 @@ await test('设置页：悬浮窗整节只在平台支持时渲染（非 macOS �
    */
   const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
   const savedCaps = globalThis.__caps();
-  globalThis.__setCapabilities({ platform: 'win32', dock: true, sound: false, overlay: false, overlayReason: 'platform', overlayError: null });
+  globalThis.__setCapabilities({ platform: 'linux', dock: true, sound: false, overlay: false, overlayReason: 'platform', overlayError: null });
   try {
     /*
      * 必须先 reload 再取组件：getCapabilities 把结果缓存在模块级变量里，
@@ -1375,10 +1378,10 @@ await test('设置页：悬浮窗整节只在平台支持时渲染（非 macOS �
     const Settings = registrations.filter((r) => r.entry.name === 'settings.section')[0].Component;
     const html = render(Settings(propsFrom(world)));
     for (const label of ['显示悬浮窗', '悬浮窗大小', '鼠标穿透', '洗完通知', '状态音效']) {
-      assert.ok(!html.includes(label), 'Windows 上不该出现「' + label + '」');
+      assert.ok(!html.includes(label), '不支持的平台上不该出现「' + label + '」');
     }
     // 但 dock 的开关必须还在——dock 是全平台功能
-    assert.ok(html.includes('空闲时隐藏'), 'dock 的空闲隐藏开关在 Windows 上必须保留');
+    assert.ok(html.includes('空闲时隐藏'), 'dock 的空闲隐藏开关在不支持的平台上必须保留');
     assert.ok(html.includes('外观'), '外观（皮肤）与平台无关，必须保留');
     // 平台不支持时不该说"缺 Electron"——那是另一回事
     assert.ok(!html.includes('找不到 Electron'), '平台不支持时不能说缺运行时，两件事');
@@ -1398,6 +1401,34 @@ await test('设置页：macOS 上缺 Electron 才提示缺运行时（与平台�
     const html = render(Settings(propsFrom(world)));
     assert.ok(html.includes('显示悬浮窗'), 'macOS 上缺运行时时开关仍然要显示（用户可以装上运行时）');
     assert.ok(html.includes('找不到 Electron'), '缺运行时要说出来，不能让用户对着开关猜');
+  } finally {
+    globalThis.__setCapabilities(savedCaps);
+    reloadClient();
+  }
+});
+
+await test('设置页：Windows 上缺运行时给出下载按钮（不是让用户自己找 Electron）', async () => {
+  /*
+   * Windows 0.10.0+ 与 macOS 的差异：没有"安装 Electron"的系统级约定，
+   * 让用户去翻环境变量不现实。所以缺运行时的时候给一个下载按钮，
+   * 由宿主 /dsh-washer/electron/install 去拉官方镜像并解压。
+   *
+   * 同时守住两件事：
+   *   - 开关整节照常显示（装上运行时就能用，不是平台不支持）
+   *   - 按钮文案和手动安装提示都在；macOS 那句"找不到 Electron"不该出现
+   */
+  const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
+  const savedCaps = globalThis.__caps();
+  globalThis.__setCapabilities({ platform: 'win32', dock: true, sound: true, overlay: false, overlayReason: 'missing', overlayError: null });
+  try {
+    reloadClient();
+    const Settings = await settleCapabilities();
+    const html = render(Settings(propsFrom(world)));
+    assert.ok(html.includes('显示悬浮窗'), 'Windows 缺运行时时开关仍然要显示（装上就能用）');
+    assert.ok(html.includes('下载运行时'), 'Windows 缺运行时要给下载按钮');
+    assert.ok(html.includes('~/.dsh/washer-runtime'), '要给出手动安装的落盘目录');
+    assert.ok(html.includes('Ctrl+Alt+W'), '穿透提示的快捷键在 Windows 上要写 Ctrl+Alt+W');
+    assert.ok(!html.includes('找不到 Electron'), 'Windows 上不走 mac 的环境变量提示');
   } finally {
     globalThis.__setCapabilities(savedCaps);
     reloadClient();
@@ -2433,23 +2464,36 @@ await test('状态音效：开关、节流、前台静音三件套都得有', ()
   assert.ok(body.includes('lastSoundAt'), '必须有节流，否则抖动会连响');
 });
 
-await test('状态音效：三个音必须真的存在，且音色区分得开', () => {
+await test('状态音效：macOS 三个音真的存在，Windows 用页面合成音', () => {
   /*
    * 写死 /System/Library/Sounds 里的文件是有代价的：系统升级、精简系统
    * 都可能删掉某一个。文件不在，afplay 返回非零、用户什么都听不到，
    * 而且失败是静的（execFile 回调里我们不报错），最难查。
    *
-   * 所以直接把三个路径拿出来 stat 一遍：本机没有就当场红。
+   * 所以 macOS 上直接把三个路径拿出来 stat 一遍：本机没有就当场红。
+   * Windows 没有这套系统音：音效由页面 WebAudio 合成（D5），
+   * 那条链路要单独查——main 转发 IPC → preload 暴露 onPlaySound →
+   * float.html 的 playChime 挂上去，断一环就静音。
    */
   const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
   const files = [...mainSrc.matchAll(/'\/System\/Library\/Sounds\/([A-Za-z]+)\.aiff'/g)].map((m) => m[1]);
   assert.equal(files.length, 3, 'done / error / waiting 各一个音，实际 ' + files.length);
   assert.equal(new Set(files).size, 3, '三个音不能重复，否则听不出是哪种状态');
 
-  for (const name of files) {
-    const full = '/System/Library/Sounds/' + name + '.aiff';
-    assert.ok(existsSync(full), '音效文件不存在：' + full + '（afplay 会静默失败）');
+  if (process.platform === 'darwin') {
+    for (const name of files) {
+      const full = '/System/Library/Sounds/' + name + '.aiff';
+      assert.ok(existsSync(full), '音效文件不存在：' + full + '（afplay 会静默失败）');
+    }
   }
+
+  // Windows 链路：host 转发 → preload 暴露 → 页面合成
+  assert.ok(/'washer:play-sound'/.test(mainSrc), 'Windows 上主进程要把音效转发给页面');
+  const preloadSrc = readFileSync(join(root, 'electron', 'preload.cjs'), 'utf8');
+  assert.ok(/onPlaySound/.test(preloadSrc), 'preload 要暴露 onPlaySound');
+  const floatSrc = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(/function playChime\(/.test(floatSrc), '浮窗页面要用 WebAudio 合成音效（Windows 没有 afplay）');
+  assert.ok(/host\.onPlaySound\(playChime\)/.test(floatSrc), '页面要把 playChime 挂到 onPlaySound 上');
 });
 
 await test('状态音效：设置页开关真的接上了偏好链路', () => {

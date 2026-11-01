@@ -16,10 +16,14 @@
  * `?token=` 或 `Authorization: Bearer`，防止本机其它程序偷看会话状态。
  */
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, renameSync } from 'node:fs';
+import {
+  existsSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, renameSync, createWriteStream,
+} from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
@@ -98,6 +102,11 @@ const WEB_PENDING_PATH = '/dsh-washer/pending';
 const WEB_CAPABILITIES_PATH = '/dsh-washer/capabilities';
 /** 客户端问「这一轮是不是被用户按停的」——它拿不到 turn/end 的 reason */
 const WEB_STOP_PATH = '/dsh-washer/stop';
+/**
+ * Windows 专用：让宿主去下载悬浮窗要用的 Electron 运行时。
+ * 只在 win32 注册；macOS 从来没有这条路由（请求会落到 404，行为一字不变）。
+ */
+const WEB_ELECTRON_INSTALL_PATH = '/dsh-washer/electron/install';
 /** 上报体上限。就两个字段，1KB 已经非常宽松。 */
 const PENDING_BODY_LIMIT = 1024;
 
@@ -822,33 +831,42 @@ function persistEndpoint(port, token) {
 let lastChildStderr = '';
 
 /**
- * 悬浮窗依赖的平台是不是 macOS。
+ * 悬浮窗支持的平台：macOS 与 Windows。
  *
- * **悬浮窗只支持 macOS，dock 不限平台。**
+ * **dock 不限平台**（它跑在宿主渲染进程里），悬浮窗是独立 Electron 进程，
+ * 支持哪几个平台由这里决定：
  *
- * dock 走的是宿主渲染进程里的 React + CSS，任何能开 Web UI 的平台都能用；
- * 悬浮窗是一个独立的 Electron 进程，要透明置顶、跨 Space、点击穿透、
- * 双击切态、右键菜单——每一项在 Windows 上都有各自的差异，逐个实测的
- * 成本远超收益。所以这里划一条明确的线：非 macOS 直接判定"不支持"，
- * 而不是"碰巧找不到 Electron 所以起不来"。
+ *   darwin  —— 0.6 起就支持，行为不变。
+ *   win32   —— 0.10 起支持（Windows 10/11，Electron 43+）。透明置顶、
+ *              点击穿透、边缘吸附都用平台无关的 API；差异项（音效、
+ *              通知、唤起宿主、托盘）在 electron/win32.cjs 里单独实现。
+ *   其他    —— 明确"不支持"，而不是"碰巧找不到 Electron 所以起不来"。
  *
- * 这个区别对用户是实打实的：前者设置页根本不该出现悬浮窗选项，
- * 后者会让用户以为装上 Electron 就能用，然后一直试。
+ * 参数默认值让生产行为不变，同时让测试能注入平台断言三态语义。
  */
-function overlayPlatformSupported() {
-  return process.platform === 'darwin';
+function overlayPlatformSupported(platform = process.platform) {
+  return platform === 'darwin' || platform === 'win32';
 }
 
 /**
  * 候选的 Electron 可执行文件路径。
  *
- * 只有 macOS 会走到这里——非 macOS 在 overlayPlatformSupported() 就返回了。
+ * 只有支持的平台会走到这里——不支持的平台在 overlayPlatformSupported() 就返回了。
  * 仍然保留 DSH_WASHER_ELECTRON 覆盖：用户可能把运行时放在别处
  * （多版本共存、自己编译的、brew 装的）。
  */
 function electronBinaryCandidates() {
   const fromEnv = process.env.DSH_WASHER_ELECTRON;
   if (typeof fromEnv === 'string' && fromEnv !== '') return [fromEnv];
+
+  if (process.platform === 'win32') {
+    /*
+     * Windows：受管目录，electron.exe 与 version 文件都放在根
+     * （解压官方 zip 就是这个形状）。宿主的一键下载也落在这里，
+     * 与手动放置共用同一条解析路径。
+     */
+    return [join(homedir(), '.dsh', 'washer-runtime', 'electron.exe')];
+  }
 
   // macOS：Electron.app bundle 里的主可执行文件
   return [join(homedir(), '.dsh', 'electron', 'Electron.app', 'Contents', 'MacOS', 'Electron')];
@@ -865,9 +883,16 @@ const MIN_ELECTRON_MAJOR = 43;
  * 自编译/其他来源可能没有这个文件 → 返回 null，表示"版本未知，放行"。
  */
 function electronRuntimeMajor(candidate) {
-  // 候选路径 → 发行包根目录：Mac 上是 .../Electron.app/Contents/MacOS/Electron
-  // 往上四层；另外兜底试 ~/.dsh/electron/version。
-  const roots = [dirname(dirname(dirname(dirname(candidate)))), join(homedir(), '.dsh', 'electron')];
+  // 候选路径 → 发行包根目录：
+  //   Windows：electron.exe 就在发行包根，取 dirname 即可
+  //   macOS：.../Electron.app/Contents/MacOS/Electron，往上四层
+  // 再兜底两个受管目录下的 version。
+  const roots = [
+    dirname(candidate),
+    dirname(dirname(dirname(dirname(candidate)))),
+    join(homedir(), '.dsh', 'electron'),
+    join(homedir(), '.dsh', 'washer-runtime'),
+  ];
   for (const root of roots) {
     try {
       const m = /^(\d+)\./.exec(readFileSync(join(root, 'version'), 'utf8').trim());
@@ -908,6 +933,113 @@ function electronBinaryStatus() {
  */
 function electronBinary() {
   return electronBinaryStatus().binary;
+}
+
+/**
+ * Windows 的 Electron 运行时下载（P3）。
+ *
+ * 为什么不跟着 npm 包一起发：Electron 的 Windows 发行包约 110MB，而插件包
+ * 本身只有几百 KB；绝大多数 Windows 用户根本不用悬浮窗，没必要让所有人
+ * 都下载一遍。所以做成「用户点一下，宿主去官方镜像拉一份」。
+ *
+ * 存到 ~/.dsh/washer-runtime/（和 macOS 的 ~/.dsh/electron/ 并列，互不干扰），
+ * electronBinaryCandidates() 里 win32 分支正好查这个路径。
+ *
+ * 下载用 Node 自带 fetch（>=18 稳定）流式落盘，不引入依赖；解压优先用
+ * Windows 10 自带的 tar.exe（bsdtar 认 zip），失败再退 PowerShell 的
+ * Expand-Archive——两条路都是系统自带的，不用装 7zip。
+ */
+const ELECTRON_MIRROR_DEFAULT = 'https://npmmirror.com/mirrors/electron';
+const ELECTRON_INSTALL_VERSION = '43.8.6';
+/** 同一时刻只允许一个下载在跑，避免用户连点两下把磁盘写花。 */
+let electronInstallRunning = false;
+
+/** 运行时落盘目录；和 electronBinaryCandidates() 的 win32 分支必须一致。 */
+function electronRuntimeDir() {
+  return join(homedir(), '.dsh', 'washer-runtime');
+}
+
+/** 跑一个外部命令，返回退出码（起不来给 -1）。输出丢掉，只看成败。 */
+function runCommand(command, args) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(command, args, { windowsHide: true, stdio: 'ignore' });
+    } catch {
+      resolve(-1);
+      return;
+    }
+    child.on('error', () => resolve(-1));
+    child.on('exit', (code) => resolve(code === null ? -1 : code));
+  });
+}
+
+/** 从镜像把 electron-v<version>-win32-<arch>.zip 流式下载到 zipPath。 */
+async function downloadElectronArchive(zipPath) {
+  const version = process.env.DSH_WASHER_ELECTRON_VERSION || ELECTRON_INSTALL_VERSION;
+  const mirror = (process.env.DSH_WASHER_ELECTRON_MIRROR || ELECTRON_MIRROR_DEFAULT).replace(/\/+$/, '');
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const url = `${mirror}/${version}/electron-v${version}-win32-${arch}.zip`;
+  const res = await fetch(url, { redirect: 'follow' });
+  if (!res.ok || res.body === null) throw new Error(`下载失败：HTTP ${res.status}`);
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(zipPath));
+  // 兜底校验：镜像偶尔返回一个 200 的 HTML 错误页，解压会失败得很晚
+  if (!existsSync(zipPath)) throw new Error('下载失败：文件没有落盘');
+  return { version, url };
+}
+
+/** 解 zip：先用系统 tar.exe（Win10 1803+ 自带），失败退 PowerShell。 */
+async function extractElectronArchive(zipPath, destDir) {
+  const withTar = await runCommand('tar', ['-xf', zipPath, '-C', destDir]);
+  if (withTar === 0) return;
+  const script = `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${destDir}' -Force`;
+  const withPowerShell = await runCommand('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+  if (withPowerShell !== 0) throw new Error('解压失败：tar 与 PowerShell Expand-Archive 都不可用');
+}
+
+/**
+ * 下载并安装 Windows 运行时，返回 { binary, version }。
+ *
+ * 安装过程是「解压到临时目录 → 整体 rename 换上去」：rename 在同一卷内
+ * 是原子的，中途失败最多留下一个临时目录，~/.dsh/washer-runtime 要么是
+ * 旧的完整运行时、要么是新的完整运行时，不会出现半个包。
+ */
+async function installElectronRuntime() {
+  if (process.platform !== 'win32') throw new Error('这个安装入口只对 Windows 开放');
+  if (electronInstallRunning) throw new Error('正在下载，请稍候');
+  electronInstallRunning = true;
+  const tmpRoot = join(homedir(), '.dsh', 'washer-runtime-download');
+  const unpackDir = join(tmpRoot, 'unpack');
+  const zipPath = join(tmpRoot, 'electron.zip');
+  try {
+    rmSync(tmpRoot, { recursive: true, force: true }); // 上次中断的残骸
+    mkdirSync(unpackDir, { recursive: true });
+    const { version } = await downloadElectronArchive(zipPath);
+    await extractElectronArchive(zipPath, unpackDir);
+    if (!existsSync(join(unpackDir, 'electron.exe'))) throw new Error('解压后没有 electron.exe，镜像内容不对');
+    // 版本文件是 Electron 发行包自带的；缺了就补一份，供 electronRuntimeMajor 判断
+    const versionFile = join(unpackDir, 'version');
+    if (!existsSync(versionFile)) writeFileSync(versionFile, version);
+    const target = electronRuntimeDir();
+    const backup = join(tmpRoot, 'previous');
+    if (existsSync(target)) {
+      renameSync(target, backup);
+      try {
+        renameSync(unpackDir, target);
+      } catch (error) {
+        renameSync(backup, target); // 换不上去就把旧的放回来
+        throw error;
+      }
+      rmSync(backup, { recursive: true, force: true });
+    } else {
+      mkdirSync(dirname(target), { recursive: true });
+      renameSync(unpackDir, target);
+    }
+    return { ok: true, binary: join(target, 'electron.exe'), version };
+  } finally {
+    electronInstallRunning = false;
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -1065,6 +1197,14 @@ function spawnOverlay(ctx, opts) {
     const childEnv = Object.assign({}, process.env);
     delete childEnv.ELECTRON_RUN_AS_NODE;
     delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
+    /*
+     * 宿主自己的可执行文件路径，交给浮窗进程做「打开 Harness 客户端」。
+     *
+     * macOS 上是 `open -a "DeepSeek Harness"` 按应用名找，Windows 没有这套
+     * 名字解析，只能按 exe 路径拉起。由宿主注入比自己猜可靠：安装版、便携版、
+     * 开发版的位置各不相同。macOS 上这个变量不消费，设了也无副作用。
+     */
+    childEnv.DSH_WASHER_HOST_EXE = process.execPath;
     child = spawn(binary, args, {
       detached: false,
       /*
@@ -2192,19 +2332,22 @@ export function apply(ctx, config) {
         /*
          * 三个字段各答各的问题，别混：
          *   dock      —— 永远可用。它是宿主渲染进程里的 React，不看平台。
-         *   sound     —— 只有 macOS 有（afplay + /System/Library/Sounds）。
-         *   overlay   —— 只有 macOS 支持，**且**要找到 Electron 运行时。
+         *   sound     —— macOS 走 afplay + /System/Library/Sounds；
+         *                Windows 由浮窗页面用 WebAudio 合成（0.10 起），
+         *                两端都有声音能力，只是实现路径不同。
+         *   overlay   —— darwin / win32 支持，**且**要找到 Electron 运行时。
          *                前者是平台事实，后者是环境事实，两件事。
          *   overlayReason —— 不可用时说清是哪一种，设置页照它出文案。
          */
         const isMac = process.platform === 'darwin';
+        const isWin = process.platform === 'win32';
         const overlaySupported = overlayPlatformSupported();
         const overlayStatus = overlaySupported ? electronBinaryStatus() : { binary: null, reason: 'platform' };
         const overlayBinary = overlayStatus.binary;
         const payload = {
           platform: process.platform,
           dock: true,
-          sound: isMac,
+          sound: isMac || isWin,
           overlay: overlaySupported && overlayBinary !== null,
           overlayReason: !overlaySupported
             ? 'platform'
@@ -2243,6 +2386,35 @@ export function apply(ctx, config) {
         res.end(JSON.stringify({ stoppedTurn: s === undefined ? -1 : s.stoppedTurn }));
       },
     }), 'dsh-washer: stop query route');
+
+    /*
+     * Windows 专用：下载悬浮窗运行时（Electron 的 win32 发行包）。
+     *
+     * 只在 win32 注册：macOS 上这条路径不存在，行为和 0.9.x 完全一致。
+     * 客户端只在 capabilities 说「平台支持、但二进制缺失」时才显示按钮，
+     * 所以正常人不会碰到这条路由；真去 curl 也只是往 ~/.dsh 里装一份运行时。
+     */
+    if (process.platform === 'win32') {
+      ctx.effect(() => ctx.webServer.register({
+        kind: 'exact',
+        path: WEB_ELECTRON_INSTALL_PATH,
+        handler: async (req, res) => {
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'content-type': 'application/json', allow: 'POST' });
+            res.end(JSON.stringify({ error: 'method not allowed' }));
+            return;
+          }
+          try {
+            const result = await installElectronRuntime();
+            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            res.end(JSON.stringify(result));
+          } catch (error) {
+            res.writeHead(500, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+          }
+        },
+      }), 'dsh-washer: windows runtime install route');
+    }
 
   }
 

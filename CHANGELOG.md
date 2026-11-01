@@ -3,6 +3,37 @@
 本项目的版本语义：`0.x` 期间每个 minor 都可能有破坏性配置变化，patch 只做修复。
 发布到插件市场的是固定 commit，所以线上版本可复现。
 
+## 0.10.0
+
+**新增：Windows 悬浮窗**
+- 悬浮窗从 macOS 专属扩展到 Windows：`overlayPlatformSupported()` 认 `darwin` 与 `win32` 两个平台
+- 运行时发现：`DSH_WASHER_ELECTRON` → `%USERPROFILE%\.dsh\washer-runtime\electron.exe`（要求同目录 `version` 主版本 ≥ 43）
+- 设置页缺少运行时时显示「下载运行时（约 110 MB）」按钮，走宿主新增的 `POST /dsh-washer/electron/install`：
+  从 npmmirror 镜像拉 `electron-v43.8.6-win32-x64.zip`，`tar.exe` 解压（失败退 PowerShell `Expand-Archive`），
+  校验 `electron.exe` + `version` 后原子替换受管目录；镜像/版本可用
+  `DSH_WASHER_ELECTRON_MIRROR` / `DSH_WASHER_ELECTRON_VERSION` 覆盖
+- Windows 窗口用 `type: 'toolbar'`（`WS_EX_TOOLWINDOW`，不进 Alt+Tab / 任务栏）；关闭 = 隐藏，托盘可恢复与退出
+- 托盘菜单新增「鼠标穿透」勾选；穿透恢复快捷键文案按平台显示（Windows `Ctrl+Alt+W` / macOS `⌥⌘W`，
+  真实加速键仍是 `Alt+CommandOrControl+W`）
+- 音效：Windows 由浮窗页面 WebAudio 合成（IPC `washer:play-sound`），macOS 继续 `afplay`
+- 通知：Windows 走 Electron 原生 toast（AUMID `com.dsh.washer.float`），不设 osascript 第二通道
+- 新增 `electron/win32.cjs`、`electron/start.cmd`、`electron/tray.png`（图标由 `tools/gen-tray-icon.mjs` 生成）
+
+**兼容性**
+- macOS 行为零变化：透明置顶、跨 Space、afplay、osascript 兜底、⌥⌘W 全部保留；
+  `setVisibleOnAllWorkspaces` 只在非 Windows 调用
+- Linux 仍不支持悬浮窗（`overlayReason: 'platform'`，设置页整节隐藏）
+- `sound` 能力从「仅 macOS」改为「macOS 或 Windows」；`overlayReason: 'missing'` 在 Windows 上表示缺运行时，
+  可通过下载按钮修复，不再只提示"找不到 Electron"
+- `spawnOverlay` 额外注入 `DSH_WASHER_HOST_EXE`（宿主可执行文件），Windows 上「打开 Harness 客户端」用它拉起
+
+**测试 / CI**
+- host / render 测试按平台分层：Windows 断言缺运行时下载入口、运行时候选路径、安装路由、音效链路；
+  macOS 断言保持原样
+- 新增断言：安装路由仅 win32 注册、`spawnOverlay` 清掉 `ELECTRON_RUN_AS_NODE` 后注入宿主路径、
+  Windows 音效链路（main IPC → preload `onPlaySound` → 页面 `playChime`）
+- 新增 `.github/workflows/test.yml`：ubuntu / macos / windows 三平台矩阵跑 `npm run build && npm test`
+
 ## 0.9.1
 
 - 文档同步：README 更新四套皮肤表、皮肤清单、液态玻璃通知气泡、右键「皮肤」菜单与 `desktopOverlayDnd`

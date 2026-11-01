@@ -65,4 +65,17 @@ contextBridge.exposeInMainWorld('washerHost', {
     ipcRenderer.on('washer:click-through', handler);
     return () => ipcRenderer.removeListener('washer:click-through', handler);
   },
+  /**
+   * 主进程要求播一声状态音效。
+   *
+   * macOS 上主进程直接 afplay 系统音；Windows 没有那套系统音效文件，
+   * 改由页面用 WebAudio 合成（见 float.html 的 playChime）。
+   * 开关 / 勿扰 / 前台静音 / 节流仍然全部在主进程判断，
+   * 页面只管"响这一声"，不碰任何策略。
+   */
+  onPlaySound: (fn) => {
+    const handler = (_event, kind) => fn(kind);
+    ipcRenderer.on('washer:play-sound', handler);
+    return () => ipcRenderer.removeListener('washer:play-sound', handler);
+  },
 });
