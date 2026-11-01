@@ -7,13 +7,13 @@
 其余时间它安静地转，你去做别的事。
 
 <p>
-<img src="docs/float-washing.png" width="112" alt="洗涤中：模型在出字">
-<img src="docs/float-rinsing.png" width="112" alt="漂洗中：工具在跑">
-<img src="docs/float-waiting.png" width="112" alt="等你确认：在等你批准或回答">
-<img src="docs/float-done.png" width="112" alt="洗完了：本轮结束">
+<img src="docs/float-washing.png" width="132" alt="精密家电 · 洗涤中：模型在出字">
+<img src="docs/float-rinsing.png" width="132" alt="复古奶油 · 漂洗中：工具在跑">
+<img src="docs/float-waiting.png" width="132" alt="工笔重彩 · 等你确认：在等你批准或回答">
+<img src="docs/float-done.png" width="132" alt="太空舱 · 洗完了：本轮结束">
 </p>
 
-<sub>洗涤中 · 漂洗中 · 等你确认 · 洗完了</sub>
+<sub>四套皮肤（依次）：精密家电 · 洗涤中 ｜ 复古奶油 · 漂洗中 ｜ 工笔重彩 · 等你确认 ｜ 太空舱 · 洗完了（带液态玻璃气泡）</sub>
 
 ## 为什么值得装
 
