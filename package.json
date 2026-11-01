@@ -1,6 +1,6 @@
 {
   "name": "@lyx0717/dsh-washer",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "滚筒洗衣机 · 用一台洗衣机的运转状态显示 Agent 的工作状态（四套皮肤 / 多会话 / 桌面悬浮窗）",
   "type": "module",
   "icon": "./icon.svg",
