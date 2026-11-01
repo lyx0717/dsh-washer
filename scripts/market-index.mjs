@@ -35,8 +35,8 @@ export const COPY = {
   title: { en: 'Dogdan plugins', zh: '狗蛋儿的插件' },
   pluginTitle: { en: 'Washer · Agent status machine', zh: '滚筒洗衣机' },
   description: {
-    en: 'Watch the Agent work from anywhere: a floating washing machine that pings you when it is done or stuck. Multi-session, pinned view, done/error/stuck alerts.',
-    zh: '不用盯着屏幕也知道 Agent 跑到哪了：桌面悬浮窗实时显示，洗完 / 卡住 / 等你确认会主动提醒。支持多会话与钉住。',
+    en: 'An always-on-top washing machine that mirrors the agent: four skins, multi-session counters, proactive done / stuck / approval alerts, and a detail panel with recent turns and timings.',
+    zh: '一台常驻桌面的洗衣机，实时显示 Agent 跑到哪了。四套皮肤（精密家电 / 复古奶油 / 工笔重彩 / 太空舱）、多会话计数、洗完 / 卡住 / 等你确认主动提醒，还能看最近几轮与耗时明细。',
   },
   /*
    * keywords 参与模糊搜索，权重仅次于包名和标题（见 dsh-plugin-market 的
@@ -48,8 +48,9 @@ export const COPY = {
   keywords: [
     'washer', 'washing machine', 'status', 'agent status', 'progress',
     'overlay', 'always on top', 'floating window', 'multi-session',
-    'notification', 'sound', 'alert', 'stuck', 'eta',
+    'notification', 'sound', 'alert', 'stuck', 'skin', 'theme', 'detail',
     '洗衣机', '状态', '悬浮窗', '进度', '多会话', '通知', '提醒', '卡住',
+    '皮肤', '主题', '详情', '皮肤切换',
   ],
   author: '李永轩',
   homepage: 'https://github.com/lyx0717/dsh-washer#readme',
