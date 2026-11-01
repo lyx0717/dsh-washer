@@ -34,6 +34,13 @@
   Windows 音效链路（main IPC → preload `onPlaySound` → 页面 `playChime`）
 - 新增 `.github/workflows/test.yml`：ubuntu / macos / windows 三平台矩阵跑 `npm run build && npm test`
 
+**修复**
+- 设置页悬浮窗开关拨了没反应：偏好文件被 PowerShell 5.1 `Set-Content -Encoding UTF8`（或记事本另存）
+  写入 UTF-8 BOM 后，宿主 `readPrefsFile` 的 `JSON.parse` 直接抛错，整份偏好被判成"读不出来"——
+  `GET /dsh-washer/prefs` 只剩 `{}`、`POST` 回 400。现在宿主与浮窗两侧解析前都会剥掉 BOM
+- 客户端写入偏好失败不再完全静默：`console.warn` 出一条 `[dsh-washer] 悬浮窗偏好写入失败：HTTP xxx`，
+  并重新拉取宿主偏好把 UI 拉回真相
+
 ## 0.9.1
 
 - 文档同步：README 更新四套皮肤表、皮肤清单、液态玻璃通知气泡、右键「皮肤」菜单与 `desktopOverlayDnd`
