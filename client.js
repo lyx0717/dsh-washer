@@ -948,11 +948,17 @@ SKIN_BODY_FNS.capsule = capsuleBodyHtml;
       'set.skinHint': '主界面和桌面悬浮窗共用这一套皮肤，改这里两边一起变。',
       'set.overlayMissing': '找不到 Electron 运行时，悬浮窗起不来。用 DSH_WASHER_ELECTRON 环境变量指定它的路径。',
       /*
+       * 找到了但版本太旧，是另一种坏法：提示必须说"旧"而不是"没有"，
+       * 否则用户会照旧文案去配环境变量，怎么配都没用。
+       */
+      'set.overlayOld': 'Electron 运行时版本过旧，悬浮窗起不来。需要 43 以上——升级或重装 ~/.dsh/electron 即可。',
+      /*
        * Windows 专用文案（0.10.0+）：不再让用户自己找 Electron，
        * 而是给一个下载按钮。两句提示分开写，是因为"点按钮"和
        * "手动解压"的受众不同——前者是普通用户，后者是离线/内网。
        */
       'set.overlayMissingWin': '还差 Electron 运行时。点下面的按钮下载一份（约 110MB），装好就能开悬浮窗。',
+      'set.overlayOldWin': '检测到旧版 Electron 运行时（需要 43 以上）。点下面的按钮下载一份新的覆盖安装。',
       'set.runtimeInstall': '下载运行时（约 110MB）',
       'set.runtimeInstalling': '正在下载并解压…',
       'set.runtimeInstallOk': '装好了，现在可以打开悬浮窗了。',
@@ -1032,7 +1038,9 @@ SKIN_BODY_FNS.capsule = capsuleBodyHtml;
       'set.overlayOn': 'Show overlay',
       'set.skinHint': 'One skin shared by the dock bar and the desktop overlay — change it once, both update.',
       'set.overlayMissing': 'Electron runtime not found, the floating window cannot start. Set DSH_WASHER_ELECTRON to its path.',
+      'set.overlayOld': 'The Electron runtime is too old, the floating window cannot start. Version 43+ is required — upgrade or reinstall ~/.dsh/electron.',
       'set.overlayMissingWin': 'The Electron runtime is not installed yet. Download a copy (~110MB) with the button below to enable the floating window.',
+      'set.overlayOldWin': 'An outdated Electron runtime was found (43+ required). Use the button below to download and replace it.',
       'set.runtimeInstall': 'Download runtime (~110MB)',
       'set.runtimeInstalling': 'Downloading and unpacking…',
       'set.runtimeInstallOk': 'Installed. You can turn on the overlay now.',
@@ -1852,14 +1860,25 @@ SKIN_BODY_FNS.capsule = capsuleBodyHtml;
       // 宿主和主进程都按这两个路径找运行时，提示文案必须和代码一致
       const dir = '~/.dsh/washer-runtime';
       const exe = '%USERPROFILE%\\.dsh\\washer-runtime\\electron.exe';
+      /*
+       * "没有"和"太旧"是两种坏法：旧运行时占着路径，用户点过去只会继续
+       * 看到"缺运行时"，以为按钮没生效。按 caps.overlayReason 分流文案。
+       */
+      const hintKey = props.reason === 'old' ? 'set.overlayOldWin' : 'set.overlayMissingWin';
       return h('div', { className: 'dw-set-runtime' },
-        h('p', { className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissingWin')),
-        h('button', {
-          type: 'button',
-          className: 'dw-set-action',
-          disabled: phase === 'installing',
-          onClick: install,
-        }, phase === 'installing' ? tr('set.runtimeInstalling') : tr('set.runtimeInstall')),
+        h('p', { className: 'dw-set-hint dw-set-warn' }, tr(hintKey)),
+        /*
+         * 装完就把按钮收起来：done 态还留着"下载运行时"，
+         * 用户会以为没装好，再点一次又下一遍 110MB。
+         */
+        phase === 'done'
+          ? null
+          : h('button', {
+            type: 'button',
+            className: 'dw-set-action',
+            disabled: phase === 'installing',
+            onClick: install,
+          }, phase === 'installing' ? tr('set.runtimeInstalling') : tr('set.runtimeInstall')),
         phase === 'done'
           ? h('p', { className: 'dw-set-hint' }, tr('set.runtimeInstallOk'))
           : null,
@@ -2033,8 +2052,9 @@ SKIN_BODY_FNS.capsule = capsuleBodyHtml;
            */
           caps.overlay === false
             ? (caps.platform === 'win32'
-              ? h(OverlayRuntimeInstaller, { key: 'ov-install', tr })
-              : h('p', { key: 'ov-missing', className: 'dw-set-hint dw-set-warn' }, tr('set.overlayMissing')))
+              ? h(OverlayRuntimeInstaller, { key: 'ov-install', tr, reason: caps.overlayReason })
+              : h('p', { key: 'ov-missing', className: 'dw-set-hint dw-set-warn' },
+                tr(caps.overlayReason === 'old' ? 'set.overlayOld' : 'set.overlayMissing')))
             : null,
         ] : null,
         h('p', { className: 'dw-set-hint' }, tr('set.restartHint')));

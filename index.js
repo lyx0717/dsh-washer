@@ -974,6 +974,9 @@ function runCommand(command, args) {
   });
 }
 
+/** 下载卡住多久算失败：镜像抽风时不能一直挂着，否则按钮永远停在「正在下载」。 */
+const ELECTRON_DOWNLOAD_STALL_MS = 60_000;
+
 /** 从镜像把 electron-v<version>-win32-<arch>.zip 流式下载到 zipPath。 */
 async function downloadElectronArchive(zipPath) {
   const version = process.env.DSH_WASHER_ELECTRON_VERSION || ELECTRON_INSTALL_VERSION;
@@ -982,7 +985,26 @@ async function downloadElectronArchive(zipPath) {
   const url = `${mirror}/${version}/electron-v${version}-win32-${arch}.zip`;
   const res = await fetch(url, { redirect: 'follow' });
   if (!res.ok || res.body === null) throw new Error(`下载失败：HTTP ${res.status}`);
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(zipPath));
+  /*
+   * 卡住检测：fetch 返回只代表响应头到了，真正往里灌字节的是 res.body。
+   * 网断了、镜像挂起、代理吞连接时 pipeline 会一直等下去——前端按钮
+   * 永远停在「正在下载」，electronInstallRunning 也一直是 true，连重试都点不了。
+   * 盯「最后一次收到数据的时间」，60 秒没有新字节就掐掉这条流。
+   */
+  const source = Readable.fromWeb(res.body);
+  let lastDataAt = Date.now();
+  source.on('data', () => { lastDataAt = Date.now(); });
+  const stallTimer = setInterval(() => {
+    if (Date.now() - lastDataAt >= ELECTRON_DOWNLOAD_STALL_MS) {
+      source.destroy(new Error('下载卡住了：60 秒没有收到数据，请重试'));
+    }
+  }, 5_000);
+  stallTimer.unref?.();
+  try {
+    await pipeline(source, createWriteStream(zipPath));
+  } finally {
+    clearInterval(stallTimer);
+  }
   // 兜底校验：镜像偶尔返回一个 200 的 HTML 错误页，解压会失败得很晚
   if (!existsSync(zipPath)) throw new Error('下载失败：文件没有落盘');
   return { version, url };
@@ -1179,7 +1201,8 @@ export function writeOverlayPrefs(patch) {
  */
 function spawnOverlay(ctx, opts) {
   const binary = electronBinary();
-  if (!existsSync(binary)) return null;
+  // 先判 null：existsSync(null) 在 Node 24 上会打 DEP0187 弃用警告（每次都刷一条日志）
+  if (binary === null || !existsSync(binary)) return null;
   const appDir = join(dirname(fileURLToPath(import.meta.url)), 'electron');
   if (!existsSync(join(appDir, 'main.cjs'))) return null;
   const args = [appDir];
@@ -1386,9 +1409,14 @@ export function apply(ctx, config) {
        */
       const candidates = electronBinaryCandidates().join(' / ');
       const status = electronBinaryStatus();
+      /*
+       * 提示里的目录必须按平台给对：Windows 的运行时在 ~/.dsh/washer-runtime，
+       * 写死 ~/.dsh/electron 会让用户跑去一个根本不存在的目录里折腾。
+       */
+      const runtimeDir = process.platform === 'win32' ? '~/.dsh/washer-runtime' : '~/.dsh/electron';
       const why = status.binary === null
         ? (status.reason === 'old'
-            ? `Electron 运行时版本过旧（${status.major}.x），至少需要 ${MIN_ELECTRON_MAJOR}，请升级 ~/.dsh/electron`
+            ? `Electron 运行时版本过旧（${status.major}.x），至少需要 ${MIN_ELECTRON_MAJOR}，请升级 ${runtimeDir}`
             : `找不到 Electron 运行时，试过：${candidates}`)
         : '找不到 electron/main.cjs';
       ctx.logger?.warn?.(`[dsh-washer] 悬浮窗没起来：${why}`);
@@ -1421,6 +1449,25 @@ export function apply(ctx, config) {
     if (overlayChild === null) return;
     try { overlayChild.kill(); } catch { /* 已经退出就算了 */ }
     overlayChild = null;
+  }
+
+  /**
+   * 关掉悬浮窗并等它真的退出（安装 Windows 运行时时用）。
+   *
+   * 只 kill 不够：Windows 上 electron.exe 要几十到几百毫秒才真正退出，
+   * 这期间目录还被进程占着，紧接着 installElectronRuntime 的
+   * renameSync(target, backup) 会 EPERM/EBUSY——运行时其实能装好，
+   * 用户看到的却是 500 和一句「安装失败」。
+   */
+  function shutdownOverlayAndWait(timeoutMs = 4000) {
+    const child = overlayChild;
+    shutdownOverlay();
+    if (child === null || child.exitCode !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+      child.once('exit', () => { clearTimeout(timer); resolve(); });
+    });
   }
 
   function resolveSessionId(subject) {
@@ -2411,13 +2458,21 @@ export function apply(ctx, config) {
             res.end(JSON.stringify({ error: 'method not allowed' }));
             return;
           }
+          /*
+           * 悬浮窗可能在跑（旧运行时又点了重装）：Windows 会锁住 electron.exe，
+           * 不先放它走，后面的目录替换必然失败。装完把它原样拉回来。
+           */
+          const wasRunning = overlayChild !== null;
           try {
+            if (wasRunning) await shutdownOverlayAndWait();
             const result = await installElectronRuntime();
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             res.end(JSON.stringify(result));
           } catch (error) {
             res.writeHead(500, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+          } finally {
+            if (wasRunning) launchOverlay();
           }
         },
       }), 'dsh-washer: windows runtime install route');

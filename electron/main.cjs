@@ -90,6 +90,14 @@ const POS_FILE = join(homedir(), '.dsh', 'dsh-washer-window.json');
 let win = null;
 /** 详情面板窗口；null 表示没打开 */
 let detailWin = null;
+/**
+ * Windows：托盘是不是真的建起来了。
+ *
+ * 只有它 true，「点关闭 = 藏进托盘」才成立——托盘没建成功还把窗口藏了，
+ * 任务栏、Alt+Tab、托盘三处都没有入口，用户只能重启宿主。
+ * 所以这个值由 createTray() 的真实返回值决定，而不是"我们在 win32 上"。
+ */
+let trayReady = false;
 /** 鼠标穿透状态：true 时点击直接穿到底下的应用 */
 /** 角落按钮的矩形（窗口内 CSS 像素）；穿透模式下只有这块接收鼠标 */
 let clickThrough = false;
@@ -637,7 +645,12 @@ function createWindow() {
    */
   if (IS_WIN) {
     win.on('close', (event) => {
-      if (quitting) return;
+      /*
+       * 托盘没建起来时不能藏：藏了就是一个既不在任务栏、也不在 Alt+Tab、
+       * 托盘里还没有图标的窗口，等于把悬浮窗弄丢了。这种情况让 close 照常
+       * 走完（窗口销毁 → window-all-closed → 退出），用户下次还能从宿主重新拉起。
+       */
+      if (quitting || !trayReady) return;
       event.preventDefault();
       setVisible(false, false);
     });
@@ -1384,17 +1397,23 @@ app.whenReady().then(() => {
   /*
    * Windows：建托盘（显隐 / 详情 / 打开客户端 / 退出）。
    * 没有托盘，藏起来的窗口就再也回不来了——见 createWindow 里的 close 拦截。
+   * trayReady 必须取真实返回值：图标读不出、Tray 构造失败时 createTray() 返回 null，
+   * 那种情况下 close 拦截会自动放行（宁可退出，也不留一个叫不回来的窗口）。
    */
   if (IS_WIN) {
-    win32.createTray({
-      toggle: () => setVisible(!visible),
-      openDetail: () => openDetail(),
-      quit: () => { setVisible(false); app.quit(); },
-      // 穿透勾选项：单击勾选时和 ⌥⌘W 快捷键走同一个 setClickThrough
-      toggleThrough: () => setClickThrough(!clickThrough),
-      throughEnabled: () => clickThrough,
-    });
-    win32.setTrayVisible(visible);
+    try {
+      trayReady = win32.createTray({
+        toggle: () => setVisible(!visible),
+        openDetail: () => openDetail(),
+        quit: () => { setVisible(false); app.quit(); },
+        // 穿透勾选项：单击勾选时和 ⌥⌘W 快捷键走同一个 setClickThrough
+        toggleThrough: () => setClickThrough(!clickThrough),
+        throughEnabled: () => clickThrough,
+      }) !== null;
+    } catch {
+      trayReady = false;
+    }
+    if (trayReady) win32.setTrayVisible(visible);
   }
   // 启动就应用上次的不透明度（<1 才有必要 setOpacity，1 是默认值）
   if (win !== null && !win.isDestroyed() && opacity < 1) win.setOpacity(opacity);

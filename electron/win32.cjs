@@ -38,10 +38,14 @@ function prepareApp() {
 }
 
 function trayIcon() {
-  const icon = nativeImage.createFromPath(join(__dirname, 'tray.png'));
-  // 图标读不出来时别让托盘变成空图（空图在某些系统上是"不可见但可点"的白点）
-  if (icon.isEmpty()) return null;
-  return icon.resize({ width: 16, height: 16 });
+  try {
+    const icon = nativeImage.createFromPath(join(__dirname, 'tray.png'));
+    // 图标读不出来时别让托盘变成空图（空图在某些系统上是"不可见但可点"的白点）
+    if (icon.isEmpty()) return null;
+    return icon.resize({ width: 16, height: 16 });
+  } catch {
+    return null;
+  }
 }
 
 function buildTrayMenu() {
@@ -89,15 +93,26 @@ function createTray(handlers) {
    * 而一个空图标托盘只会让用户对着任务栏角落发懵。
    */
   if (icon === null) return null;
-  tray = new Tray(icon);
-  tray.setToolTip('DSH 洗衣机');
-  refreshTray();
   /*
-   * 左键单击切换显隐：Windows 用户对托盘图标的默认期待就是"点一下把窗口叫出来"，
-   * 右键才是菜单。macOS 菜单栏应用是反过来的，所以这条只在 win32 分支里。
+   * 构造本身也可能失败（资源管理器没就绪、安全软件拦图标、图标格式被改坏）。
+   * 失败必须返回 null 而不是抛：main.cjs 会据此决定「关闭窗口能不能藏进托盘」——
+   * 托盘没建起来还把窗口藏了，用户就再也找不回来，只能重启宿主。
    */
-  tray.on('click', () => (trayHandlers && trayHandlers.toggle()));
-  return tray;
+  try {
+    tray = new Tray(icon);
+    tray.setToolTip('DSH 洗衣机');
+    refreshTray();
+    /*
+     * 左键单击切换显隐：Windows 用户对托盘图标的默认期待就是"点一下把窗口叫出来"，
+     * 右键才是菜单。macOS 菜单栏应用是反过来的，所以这条只在 win32 分支里。
+     */
+    tray.on('click', () => (trayHandlers && trayHandlers.toggle()));
+    return tray;
+  } catch {
+    tray = null;
+    trayHandlers = null;
+    return null;
+  }
 }
 
 /** 窗口显隐变化后同步托盘文案（"显示/隐藏悬浮窗"） */

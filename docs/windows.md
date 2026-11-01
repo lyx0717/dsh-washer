@@ -29,15 +29,18 @@ dock（宿主渲染进程里的那块）**全平台**，与本文无关。悬浮
 
 ### 自动下载（Windows）
 
-设置页在 `overlayReason === 'missing'` 且平台为 Windows 时显示「下载运行时（约 110 MB）」。
+设置页在 Windows 上且 `overlayReason` 为 `'missing'` 或 `'old'` 时显示「下载运行时（约 110 MB）」。
+两种原因文案不同：`missing` 是没装过，`old` 是装了但主版本 < 43，按钮都走同一条覆盖安装。
 点击后：客户端 `POST /dsh-washer/electron/install` → 宿主：
 
-1. 从 `https://npmmirror.com/mirrors/electron/<version>/electron-v<version>-win32-<arch>.zip` 流式下载；
-   `arch` 为 `arm64` 或 `x64`；版本缺省 `43.8.6`
-2. 先试 `tar.exe -xf`（Windows 10 1803 起自带 bsdtar），失败退 PowerShell `Expand-Archive`
-3. 校验解压目录根部有 `electron.exe`，缺 `version` 就补写
-4. 原子替换 `%USERPROFILE%\.dsh\washer-runtime`（旧目录先 rename 走，换失败放回）
-5. 同一时刻只允许一个下载（进程内锁），结束后清理临时目录
+1. 悬浮窗正在运行时先关掉它并等进程退出（最多 4 秒），避免 Windows 锁住 `electron.exe` 导致替换失败；
+   装完（无论成败）再把它拉回来
+2. 从 `https://npmmirror.com/mirrors/electron/<version>/electron-v<version>-win32-<arch>.zip` 流式下载；
+   `arch` 为 `arm64` 或 `x64`；版本缺省 `43.8.6`；**连续 60 秒没有新数据即中止**并提示重试
+3. 先试 `tar.exe -xf`（Windows 10 1803 起自带 bsdtar），失败退 PowerShell `Expand-Archive`
+4. 校验解压目录根部有 `electron.exe`，缺 `version` 就补写
+5. 原子替换 `%USERPROFILE%\.dsh\washer-runtime`（旧目录先 rename 走，换失败放回）
+6. 同一时刻只允许一个下载（进程内锁），结束后清理临时目录
 
 可覆盖：
 
@@ -71,7 +74,7 @@ set ELECTRON_PATH=C:\path\to\electron.exe && electron\start.cmd
 
 | 行为 | macOS | Windows |
 |---|---|---|
-| 关闭窗口 | 隐藏，Dock 图标还在 | 隐藏，**托盘**可恢复 / 退出 |
+| 关闭窗口 | 隐藏，Dock 图标还在 | 隐藏，**托盘**可恢复 / 退出；托盘建不起来时改为直接退出（不留下叫不回来的窗口） |
 | 不进 Alt+Tab | 天然（Accessory 应用） | `type: 'toolbar'` → `WS_EX_TOOLWINDOW`；`skipTaskbar` 不够 |
 | 全 Space 可见 | `setVisibleOnAllWorkspaces(true)` | 跳过（API 无意义）；全屏应用前需额外层级，见下 |
 | 音效 | `afplay /System/Library/Sounds/*.aiff` | 页面 WebAudio 合成，IPC `washer:play-sound` |

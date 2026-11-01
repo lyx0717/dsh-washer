@@ -1435,6 +1435,81 @@ await test('设置页：Windows 上缺运行时给出下载按钮（不是让用
   }
 });
 
+await test('设置页：旧版运行时不是"缺运行时"（按 overlayReason 分流）', async () => {
+  /*
+   * 找到了但版本太旧，用户看到的路径、坏法、该做的事都不一样：
+   * "没有"是去装，"太旧"是去换。混成一句「还差运行时」，
+   * 用户会把已经存在的目录解压进去，然后依然开不了悬浮窗。
+   */
+  const world = makeWorld({ sessionId: 's1', config: baseConfig({ hideWhenIdle: true }) });
+  const savedCaps = globalThis.__caps();
+  globalThis.__setCapabilities({ platform: 'win32', dock: true, sound: true, overlay: false, overlayReason: 'old', overlayError: null });
+  try {
+    reloadClient();
+    const Settings = await settleCapabilities();
+    const html = render(Settings(propsFrom(world)));
+    assert.ok(html.includes('旧版 Electron 运行时'), 'Windows 上旧版要明说"旧版"，不能只说缺');
+    assert.ok(html.includes('下载运行时'), '旧版也给覆盖安装按钮');
+    assert.ok(!html.includes('还差 Electron 运行时'), '旧版不能复用"还差"文案，否则用户以为没装过');
+  } finally {
+    globalThis.__setCapabilities(savedCaps);
+    reloadClient();
+  }
+
+  globalThis.__setCapabilities({ platform: 'darwin', dock: true, sound: true, overlay: false, overlayReason: 'old', overlayError: null });
+  try {
+    reloadClient();
+    const SettingsMac = await settleCapabilities();
+    const html = render(SettingsMac(propsFrom(world)));
+    assert.ok(html.includes('版本过旧'), 'macOS 旧版要有"版本过旧"的提示');
+    assert.ok(!html.includes('找不到 Electron'), 'macOS 旧版不能伪装成"找不到"');
+  } finally {
+    globalThis.__setCapabilities(savedCaps);
+    reloadClient();
+  }
+});
+
+await test('Windows 托盘建不起来时不许藏窗口（否则叫不回来）', () => {
+  /*
+   * 这条守的是一次真实的"窗口消失"：close 拦截无条件隐藏，
+   * 而托盘图标读不出 / Tray 构造失败时窗口根本没有托盘入口——
+   * 任务栏、Alt+Tab、托盘三处都找不到，只能重启宿主。
+   * 所以 close 拦不拦必须由 createTray() 的真实返回值决定。
+   */
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+  const win32Src = readFileSync(join(root, 'electron', 'win32.cjs'), 'utf8');
+
+  assert.ok(/trayReady\s*=\s*win32\.createTray\(\{[\s\S]*?\}\)\s*!==\s*null/.test(mainSrc),
+    'trayReady 必须取 createTray() 的真实返回值，不能写死 true');
+
+  const closeStart = mainSrc.indexOf("win.on('close'");
+  assert.ok(closeStart > 0, 'Windows 的 close 拦截还在');
+  const closeBody = mainSrc.slice(closeStart, mainSrc.indexOf('});', closeStart));
+  assert.ok(/!trayReady/.test(closeBody), 'close 拦截必须先看 trayReady：托盘没建好就不许藏窗口');
+  assert.ok(/event\.preventDefault\(\)/.test(closeBody), '托盘可用时仍然拦截 close 改成隐藏');
+
+  // 构造失败返回 null（而不是抛出），否则整个浮窗进程直接挂掉
+  assert.ok(/try\s*\{[\s\S]*?tray = new Tray\(icon\)[\s\S]*?\}\s*catch\s*\{[\s\S]*?tray = null/.test(win32Src),
+    'new Tray 要包 try/catch，失败时返回 null 交给 main 决定 close 行为');
+});
+
+await test('Windows 通知 AUMID 与文档一致（改代码不改文档等于没文档）', () => {
+  /*
+   * Windows toast 能不能可靠弹出看 AUMID，用户排查"通知不响"时
+   * 会照 docs/windows.md 去系统设置里找这个应用名。两处不一致，
+   * 文档就变成误导。这里把「代码常量」和「文档里的字符串」绑在一起。
+   */
+  const win32Src = readFileSync(join(root, 'electron', 'win32.cjs'), 'utf8');
+  const matched = /const APP_USER_MODEL_ID = '([^']+)'/.exec(win32Src);
+  assert.ok(matched, 'win32.cjs 要有 APP_USER_MODEL_ID 常量');
+  assert.equal(matched[1], 'com.dsh.washer.float');
+  const docs = readFileSync(join(root, 'docs', 'windows.md'), 'utf8');
+  assert.ok(docs.includes(matched[1]), 'docs/windows.md 必须写出同一个 AUMID：' + matched[1]);
+
+  const mainSrc = readFileSync(join(root, 'electron', 'main.cjs'), 'utf8');
+  assert.ok(/win32\.prepareApp\(\)/.test(mainSrc), 'setAppUserModelId 要在任何窗口/通知创建之前调用');
+});
+
 await test('设置页的开关是 role=switch 且带内联样式（不靠 class 命中）', async () => {
   /*
    * 悬浮窗整节只有在平台支持时才渲染，所以要先把 capabilities 等到位。

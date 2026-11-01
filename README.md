@@ -462,6 +462,12 @@ set ELECTRON_PATH=C:\path\to\electron.exe && electron\start.cmd
 
 ## 版本记录
 
+### 0.10.1
+- 修复 Windows 上几处边界问题：托盘建不起来时关闭窗口不再「藏起来叫不回来」
+- 运行时下载 60 秒无数据即中止并提示重试；安装前自动关浮窗、装完拉回（避开 exe 占目录导致覆盖安装失败）
+- 「版本过旧」与「没有运行时」分开提示，旧版提示按平台给正确目录；装好后隐藏下载按钮
+- 详细变更见 [CHANGELOG.md](CHANGELOG.md)
+
 ### 0.10.0
 - **Windows 悬浮窗上线**：设置页可在 Windows 上开关浮窗；不进 Alt+Tab / 任务栏；托盘常驻；关闭 = 隐藏
 - 运行时：`%USERPROFILE%\.dsh\washer-runtime\electron.exe`（`version` ≥ 43）；
