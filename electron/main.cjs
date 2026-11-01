@@ -912,7 +912,29 @@ function setScale(name) {
 }
 
 /** 换肤：只把 skin 名发给页面，具体颜色由页面 CSS 决定 */
-const SKINS = ['precision', 'pixel'];
+/*
+ * 认得的造型集合。新增皮肤必须同步加到这里——否则设置页选了新皮肤，
+ * 本进程 setSkin() 会把它当未知值回落成 precision 并 writeFloatPrefs 写回
+ * 偏好文件，宿主再经 SSE 回灌，表现就是「切过去闪一下又跳回精密家电」。
+ */
+const SKIN_MANIFEST = (() => {
+  try {
+    const list = JSON.parse(readFileSync(join(__dirname, '..', 'src', 'skins.json'), 'utf8')).skins;
+    if (Array.isArray(list) && list.length > 0) return list;
+  } catch (err) {
+    /* 插件包要是漏打包了清单，退回内置列表，浮窗不该整块失效 */
+  }
+  return [
+    { name: 'precision', label: { zh: '精密家电' } },
+    { name: 'cream', label: { zh: '复古奶油' } },
+    { name: 'gongbi', label: { zh: '工笔重彩' } },
+    { name: 'capsule', label: { zh: '太空舱' } },
+  ];
+})();
+const SKINS = ['precision', 'pixel', ...SKIN_MANIFEST.map((s) => s.name)];
+
+/** 右键菜单「皮肤」里可切换的项（pixel 已下架，不列） */
+const MENU_SKINS = SKIN_MANIFEST.map((s) => [s.name, s.label.zh]);
 
 function setSkin(next) {
   // 老版本存的是 classic/mono/warm/cool 这几套调色皮肤，现在已经换成
@@ -1098,6 +1120,13 @@ function showMenu() {
     },
     { label: '打开 Harness 客户端', click: () => openHarnessApp() },
     { type: 'separator' },
+    {
+      label: '皮肤',
+      submenu: MENU_SKINS.map(([value, label]) => ({
+        label: (skin === value ? '✓ ' : '') + label,
+        click: () => setSkin(value),
+      })),
+    },
     {
       label: '尺寸',
       submenu: [

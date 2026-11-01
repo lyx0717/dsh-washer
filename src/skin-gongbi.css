@@ -1,0 +1,585 @@
+/* ============================================================
+   工笔重彩 · 熟宣（dsh-washer skin: gongbi）
+   熟宣纸底（暖米白＋细纤维斑点）＋铁线描细墨勾边＋淡赭石（边缘分染）
+   与花青（门圈/水位）雅致罩染；屏为熟宣浅屏、墨字题签，朱砂小印。
+   全部选择器以 .dw-gb 开头；动画 gb- 前缀；无 id / 无全局规则。
+   同一页面可多台共存，只靠 class 选择器。
+   ============================================================ */
+.dw-gb, .dw-gb * { box-sizing: border-box; }
+
+.dw-gb {
+  /* 熟宣纸纤维噪声（供 ::before 使用） */
+  --gb-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
+  /* 工笔滚筒：铁线勾边三叶拨水桨＋排水孔圈（内联 data URI，避免外部请求） */
+  --gb-paddle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200' width='200' height='200'%3E%3Cg fill='none' stroke='%234a3f33' stroke-linecap='round'%3E%3Ccircle cx='100' cy='100' r='97' stroke-width='0.9' opacity='0.35'/%3E%3Ccircle cx='100' cy='100' r='84' stroke-width='4.4' stroke-dasharray='1.3 6.6' opacity='0.42'/%3E%3Ccircle cx='100' cy='100' r='72' stroke-width='0.7' opacity='0.22'/%3E%3C/g%3E%3Cg fill='%23ccd7d7' fill-opacity='0.92' stroke='%234a3f33' stroke-width='1.05' stroke-linejoin='round'%3E%3Cpath d='M100,100 C84,80 80,48 84,26 Q100,20 116,26 C120,48 116,80 100,100 Z' transform='rotate(0 100 100)'/%3E%3Cpath d='M100,100 C84,80 80,48 84,26 Q100,20 116,26 C120,48 116,80 100,100 Z' transform='rotate(120 100 100)'/%3E%3Cpath d='M100,100 C84,80 80,48 84,26 Q100,20 116,26 C120,48 116,80 100,100 Z' transform='rotate(240 100 100)'/%3E%3C/g%3E%3Cg fill='none' stroke='%234a3f33' stroke-width='0.6' opacity='0.35' stroke-linejoin='round'%3E%3Cpath d='M100,100 C88,82 86,54 90,34 Q100,30 110,34 C114,54 112,82 100,100 Z' transform='rotate(0 100 100)'/%3E%3Cpath d='M100,100 C88,82 86,54 90,34 Q100,30 110,34 C114,54 112,82 100,100 Z' transform='rotate(120 100 100)'/%3E%3Cpath d='M100,100 C88,82 86,54 90,34 Q100,30 110,34 C114,54 112,82 100,100 Z' transform='rotate(240 100 100)'/%3E%3C/g%3E%3Ccircle cx='100' cy='100' r='18' fill='%23f0efe4' stroke='%234a3f33' stroke-width='1.05'/%3E%3Ccircle cx='100' cy='100' r='9' fill='%23e3dfcc' stroke='%234a3f33' stroke-width='0.8'/%3E%3Ccircle cx='100' cy='100' r='3.2' fill='%234a3f33' opacity='0.55'/%3E%3C/svg%3E");
+
+  position: relative;
+  width: 330px;
+  height: 425px;
+  overflow: hidden;
+  padding: 15px 15px 11px;
+  border-radius: 9px;
+  border: 1.2px solid rgba(74, 63, 47, .74);
+  background:
+    radial-gradient(118% 104% at 50% 40%, rgba(255, 253, 245, .72) 0%, rgba(255, 253, 245, 0) 46%, rgba(193, 138, 82, .14) 78%, rgba(176, 120, 66, .26) 100%),
+    radial-gradient(72% 52% at 24% 84%, rgba(208, 144, 96, .12), transparent 68%),
+    radial-gradient(60% 46% at 82% 72%, rgba(120, 148, 156, .07), transparent 70%),
+    linear-gradient(180deg, #f8f1e0 0%, #f5edd9 56%, #efe3ca 82%, #e6d6b6 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 252, 243, .85),
+    inset 0 0 40px rgba(178, 124, 66, .10),
+    0 16px 34px -22px rgba(92, 68, 38, .46),
+    0 2px 1px -1px rgba(255, 252, 243, .7);
+  font-family: "Songti SC", "STSong", "Kaiti SC", "KaiTi", serif;
+  line-height: 1.2;
+  /* 状态变量默认值（inline style 会覆盖；此处为独立预览兜底） */
+  --water-h: 42%;
+  --spin: 5.2s;
+  --play: running;
+  --stc: #8a5a2b;
+  --tmc: #6b5535;
+}
+/* 纸纤维＋晕斑（乘算，压在最底层） */
+.dw-gb::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    var(--gb-noise),
+    radial-gradient(60% 40% at 34% 22%, rgba(176, 126, 72, .05), transparent 70%),
+    radial-gradient(50% 38% at 72% 74%, rgba(120, 148, 156, .05), transparent 70%);
+  background-size: 112px 112px, auto, auto;
+  mix-blend-mode: multiply;
+  opacity: .6;
+}
+/* 册页式内细框（双线） */
+.dw-gb::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 5px;
+  pointer-events: none;
+  z-index: 0;
+  border: 1px solid rgba(74, 63, 47, .20);
+}
+
+/* ============ 顶部：盖板缝 ============ */
+.dw-gb .gb-woodtop {
+  height: 15px;
+  border-radius: 5px 5px 2px 2px;
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+  background: linear-gradient(180deg, #f8f1e1 0%, #f0e5cf 58%, #e7d8bb 100%);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .40), inset 0 -1px 0 rgba(74, 63, 47, .22);
+}
+.dw-gb .gb-woodtop::before {
+  content: "";
+  position: absolute;
+  left: 7px; right: 7px; top: 5px; height: 0;
+  pointer-events: none;
+  border-top: 1px solid rgba(74, 63, 47, .32);
+  box-shadow: 0 1.5px 0 rgba(255, 252, 243, .6);
+}
+.dw-gb .gb-woodtop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(120, 150, 158, .14) 0%, transparent 22%, transparent 78%, rgba(120, 150, 158, .11) 100%);
+}
+
+/* ============ 控制带：左抽屉 / 细刻线＋小旋钮 / 右显示窗 ============ */
+.dw-gb .gb-ctrl {
+  margin-top: 7px;
+  height: 56px;
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+  background: linear-gradient(180deg, #f7f0e0 0%, #f0e5ce 68%, #e9dabc 100%);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .48);
+  display: flex;
+  align-items: stretch;
+}
+.dw-gb .gb-drawer {
+  position: relative;
+  width: 96px;
+  margin: 9px 0 9px 10px;
+  border-radius: 2px;
+  z-index: 2;
+  background: linear-gradient(180deg, #f8f1e1, #ece0c6);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .5);
+}
+.dw-gb .gb-drawer::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgba(74, 63, 47, .15);
+  border-radius: 1px;
+}
+.dw-gb .gb-drawer::after {
+  content: "";
+  position: absolute;
+  left: 15px; right: 15px; top: 50%; height: 9px; margin-top: -4.5px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #ddccab, #f3e8d1);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .42), inset 0 1px 2px rgba(120, 90, 50, .28);
+}
+.dw-gb .gb-grille {
+  position: relative;
+  flex: 1;
+  margin: 9px 0;
+  z-index: 1;
+  border-left: 1px solid rgba(74, 63, 47, .18);
+  border-right: 1px solid rgba(74, 63, 47, .18);
+  background: repeating-linear-gradient(0deg, rgba(74, 63, 47, .16) 0 1px, transparent 1px 4.5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dw-gb .gb-knob {
+  position: relative;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 43% 38%, #f5eedd 0%, #ebdfc5 68%, #e2d3b6 100%);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .66), inset 0 0 0 4px rgba(247, 241, 227, .55), inset 0 0 0 5px rgba(74, 63, 47, .30);
+}
+.dw-gb .gb-knob::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(70, 95, 110, .5);
+  background: radial-gradient(circle at 40% 34%, #eef3f1, #cfd9d7 72%, #bccac8);
+}
+.dw-gb .gb-knob::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 4px; width: 1.3px; height: 8px; margin-left: -.65px;
+  background: #3f362a;
+  border-radius: 1px;
+}
+.dw-gb .gb-display {
+  width: 76px;
+  margin: 9px 10px 9px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  z-index: 2;
+}
+.dw-gb .gb-win {
+  width: 58px; height: 18px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #b9bcb2, #9da095);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .5), inset 0 1px 3px rgba(60, 62, 55, .3);
+  transition: background .4s, box-shadow .4s;
+}
+.dw-gb .gb-seg { display: flex; gap: 4px; }
+.dw-gb .gb-seg i {
+  width: 14px; height: 6px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #f6efdf, #e6d8bc);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .32);
+}
+.dw-gb .gb-ctrl::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 3px; height: 0;
+  pointer-events: none;
+  border-bottom: 1px solid rgba(74, 63, 47, .22);
+  box-shadow: 0 2px 0 rgba(74, 63, 47, .12);
+}
+/* 朱文落款小印「澄怀」 */
+.dw-gb .gb-seal {
+  position: absolute;
+  right: 20px; bottom: 66px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 18px;
+  padding: 3px 0;
+  background: #b5432f;
+  border-radius: 1px;
+  transform: rotate(-3deg);
+  opacity: .82;
+  box-shadow: inset 0 0 0 1.5px rgba(247, 240, 224, .7);
+}
+.dw-gb .gb-seal b {
+  font-size: 9px;
+  line-height: 1;
+  color: #f7f0e4;
+  font-weight: 600;
+  font-family: "Songti SC", serif;
+}
+
+/* ============ 门区 ============ */
+.dw-gb .gb-doorwrap {
+  position: relative;
+  margin-top: 9px;
+  height: 250px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dw-gb .gb-doorwrap::after {
+  content: "";
+  position: absolute;
+  left: 50%; bottom: 6px;
+  width: 200px; height: 20px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  z-index: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(150, 116, 68, .22), transparent 70%);
+  filter: blur(7px);
+}
+.dw-gb .gb-handle {
+  position: absolute;
+  left: 6px; top: 50%;
+  transform: translateY(-50%);
+  width: 10px; height: 66px;
+  border-radius: 5px;
+  z-index: 5;
+  background: linear-gradient(90deg, #f3e8d0 0%, #eaddc2 60%, #e2d2b3 100%);
+  box-shadow: inset 1px 0 0 rgba(74, 63, 47, .30), inset -1px 0 0 rgba(74, 63, 47, .18), inset 0 0 7px rgba(150, 110, 60, .12);
+}
+.dw-gb .gb-hinge {
+  position: absolute;
+  right: 6px; top: 50%;
+  transform: translateY(-50%);
+  width: 8px; height: 34px;
+  border-radius: 4px;
+  z-index: 5;
+  background: linear-gradient(90deg, #f3e8d0, #e2d2b3);
+  box-shadow: inset 1px 0 0 rgba(74, 63, 47, .28), inset -1px 0 0 rgba(74, 63, 47, .16);
+}
+/* 门圈：多层同心细环 + 花青分染 */
+.dw-gb .gb-door {
+  position: relative;
+  width: 236px; height: 236px;
+  border-radius: 50%;
+  padding: 30px;
+  border: 1.2px solid rgba(74, 63, 47, .74);
+  background:
+    radial-gradient(90% 70% at 50% 96%, rgba(104, 140, 150, .20), transparent 62%),
+    radial-gradient(circle at 50% 50%,
+      transparent 0 72.5%,
+      rgba(74, 63, 47, .55) 72.5% 73.3%,
+      #f6efdd 73.3% 79%,
+      rgba(74, 63, 47, .28) 77% 77.8%,
+      rgba(120, 158, 170, .58) 77.8% 93%,
+      rgba(74, 63, 47, .30) 91% 91.8%,
+      #f7f0de 91.8% 96.4%,
+      rgba(74, 63, 47, .20) 96.4% 97.1%,
+      #f3e9d4 97.1% 100%),
+    linear-gradient(180deg, #f8f1e1, #e9dcc2);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 252, 243, .7),
+    0 10px 24px -16px rgba(92, 68, 38, .45);
+}
+.dw-gb .gb-door::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 2;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 0 84.6%, rgba(74, 63, 47, .18) 84.6% 85.4%, transparent 85.4%),
+    radial-gradient(60% 26% at 50% 12%, rgba(255, 252, 243, .5), transparent 70%);
+}
+.dw-gb .gb-door::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 2;
+  opacity: .5;
+  background: repeating-conic-gradient(from 0deg, rgba(74, 63, 47, .4) 0deg 1.1deg, transparent 1.1deg 6deg);
+  -webkit-mask: radial-gradient(circle, transparent 87%, #000 87.5%, #000 90.5%, transparent 91%);
+          mask: radial-gradient(circle, transparent 87%, #000 87.5%, #000 90.5%, transparent 91%);
+}
+/* 玻璃：淡花青平染 */
+.dw-gb .gb-glass {
+  position: relative;
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid rgba(74, 63, 47, .5);
+  background:
+    radial-gradient(circle at 38% 28%, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 46%),
+    radial-gradient(circle at 50% 58%, #e2eae8 0%, #c8d6d6 46%, #adc1c3 76%, #95afb2 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 252, 243, .5),
+    inset 0 7px 16px rgba(255, 255, 255, .28),
+    inset 0 -12px 20px rgba(84, 116, 126, .18);
+}
+.dw-gb .gb-glass::before {
+  content: "";
+  position: absolute;
+  left: 12%; top: 6%;
+  width: 46%; height: 30%;
+  border-radius: 50%;
+  z-index: 5;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 42% 38%, rgba(255, 255, 255, .55), rgba(255, 255, 255, .12) 50%, transparent 72%);
+  transform: rotate(-10deg);
+}
+/* 滚筒：分染底 + 工笔三叶桨（内联 SVG） */
+.dw-gb .gb-drum {
+  position: absolute;
+  left: 6%; top: 6%; right: 6%; bottom: 6%;
+  border-radius: 50%;
+  background:
+    var(--gb-paddle) center / 100% 100% no-repeat,
+    radial-gradient(circle at 46% 40%, #e8efed 0%, #cfdada 48%, #b0c3c5 80%, #96adb1 100%);
+  border: 1px solid rgba(74, 63, 47, .45);
+  box-shadow: inset 0 0 18px rgba(80, 110, 120, .22);
+}
+/* 共享衣物 SVG：整块布料随滚筒旋转（略带绢帛低饱和） */
+.dw-gb .gb-clothes {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  filter: saturate(.90) contrast(.98);
+  opacity: 1;
+  transition: opacity .6s ease;
+  animation: gb-cspin var(--spin, 5.2s) linear infinite;
+  animation-play-state: var(--play, running);
+  will-change: transform;
+}
+.dw-gb .gb-clothes svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* 水位：淡花青＋细浪线 */
+.dw-gb .gb-water {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: var(--water-h);
+  z-index: 2;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(150, 182, 186, .45), rgba(84, 124, 138, .58));
+  border-top: 1px solid rgba(74, 63, 47, .38);
+  animation: gb-wave 3.6s ease-in-out infinite alternate;
+  transition: height 1s cubic-bezier(.32, .86, .3, 1);
+}
+.dw-gb .gb-water::before {
+  content: "";
+  position: absolute;
+  left: -6%; right: -6%; top: -1px; height: 8px;
+  pointer-events: none;
+  background: repeating-radial-gradient(circle at 9px 7px, rgba(74, 63, 47, .16) 0 1px, transparent 1px 15px);
+  opacity: .85;
+}
+.dw-gb .gb-water::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 10px; height: 0;
+  pointer-events: none;
+  border-top: 1px solid rgba(74, 63, 47, .09);
+}
+/* 气泡：细墨线圈 */
+.dw-gb .gb-bubbles {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.dw-gb .gb-bubbles b {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, .7), rgba(210, 225, 225, .12) 72%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .26);
+  animation: gb-float 2.8s ease-in-out infinite;
+}
+.dw-gb .gb-bubbles b:nth-child(1) { width: 11px; height: 11px; left: 34%; bottom: 20%; animation-delay: 0s; }
+.dw-gb .gb-bubbles b:nth-child(2) { width: 7px; height: 7px; left: 52%; bottom: 28%; animation-delay: .5s; }
+.dw-gb .gb-bubbles b:nth-child(3) { width: 9px; height: 9px; left: 62%; bottom: 18%; animation-delay: .9s; }
+
+/* ============ 底部：熟宣浅屏 + 墨字题签（状态 / 计数 / 计时） ============ */
+.dw-gb .gb-panel {
+  position: absolute;
+  left: 15px; right: 15px; bottom: 20px;
+  height: 38px;
+  border-radius: 3px;
+  z-index: 2;
+  overflow: hidden;
+  background: linear-gradient(180deg, #f9f2e1 0%, #f2e7d0 62%, #ebdcbf 100%);
+  border: 1.1px solid rgba(74, 63, 47, .60);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 252, 243, .6),
+    inset 0 1px 5px rgba(150, 110, 60, .14),
+    0 1px 1px rgba(90, 66, 36, .18);
+  font-family: "Songti SC", "STSong", "KaiTi", serif;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 10px;
+}
+.dw-gb .gb-panel::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 1px solid rgba(74, 63, 47, .16);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.dw-gb .gb-st {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  color: var(--stc);
+  text-shadow: 0 1px 0 rgba(255, 251, 240, .55);
+  white-space: nowrap;
+}
+.dw-gb .gb-counts {
+  display: flex;
+  gap: 6px;
+  position: relative;
+  z-index: 1;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.dw-gb .gb-cnt {
+  font-style: normal;
+  font-size: 11px;
+  letter-spacing: .04em;
+  padding: 1px 6px 2px;
+  border-radius: 1px;
+  border: 1px solid currentColor;
+  background: rgba(255, 252, 243, .35);
+  white-space: nowrap;
+}
+.dw-gb .gb-cnt[data-k="run"]  { color: #8a5a2b; }
+.dw-gb .gb-cnt[data-k="wait"] { color: #4e7a5f; }
+.dw-gb .gb-cnt[data-k="err"]  { color: #a8402e; }
+.dw-gb .gb-tm {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  text-align: right;
+  font-size: 15px;
+  letter-spacing: .14em;
+  color: var(--tmc);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 0 rgba(255, 251, 240, .55);
+  white-space: nowrap;
+}
+
+/* ============ 踢脚 + 脚影 ============ */
+.dw-gb .gb-plinth {
+  position: absolute;
+  left: 14px; right: 14px; bottom: 6px;
+  height: 10px;
+  border-radius: 2px;
+  z-index: 1;
+  background: linear-gradient(180deg, #ece0c6 0%, #dbc8a4 60%, #cbb691 100%);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .48), 0 1px 0 rgba(255, 252, 243, .4);
+}
+.dw-gb .gb-feet {
+  position: absolute;
+  left: 9%; right: 9%; bottom: 0;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 50%, rgba(120, 90, 50, .38), transparent 70%);
+  filter: blur(4px);
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ============ 动画（全部 gb- 前缀） ============ */
+@keyframes gb-cspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes gb-wave { from { transform: translateX(-3px); } to { transform: translateX(3px); } }
+@keyframes gb-float {
+  0% { transform: translateY(0); opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateY(-18px); opacity: 0; }
+}
+@keyframes gb-softblink { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+@keyframes gb-clothin { to { opacity: 1; } }
+
+/* ============ 十态：水位/转速默认值 + 衣物可见度/拖影 + 屏色 ============ */
+/* 兜底默认（inline style 的 --water-h/--spin 优先级更高，实际以宿主为准） */
+.dw-gb[data-state="off"]      { --water-h: 0%;  --spin: 0s;   --play: paused; }
+.dw-gb[data-state="idle"]     { --water-h: 12%; --spin: 0s;   --play: paused; }
+.dw-gb[data-state="starting"] { --water-h: 15%; --spin: 2.2s; }
+.dw-gb[data-state="washing"]  { --water-h: 48%; --spin: 1.7s; }
+.dw-gb[data-state="rinsing"]  { --water-h: 42%; --spin: 2.6s; }
+.dw-gb[data-state="spinning"] { --water-h: 18%; --spin: .55s; }
+.dw-gb[data-state="draining"] { --water-h: 4%;  --spin: 3.4s; }
+.dw-gb[data-state="waiting"]  { --water-h: 35%; --spin: 0s;   --play: paused; }
+.dw-gb[data-state="done"]     { --water-h: 0%;  --spin: 0s;   --play: paused; }
+.dw-gb[data-state="error"]    { --water-h: 26%; --spin: 0s;   --play: paused; }
+
+/* 墨字/计时色（矿物色） */
+.dw-gb[data-state="off"]     { --stc: rgba(140, 125, 100, .30); --tmc: rgba(140, 125, 100, .24); }
+.dw-gb[data-state="idle"]    { --stc: #8d7c5c; --tmc: #8b7a58; }
+.dw-gb[data-state="done"]    { --stc: #4e7a5f; --tmc: #4e7a5f; }
+.dw-gb[data-state="error"]   { --stc: #a8402e; --tmc: #a8402e; }
+.dw-gb[data-state="waiting"] { --stc: #9c7418; --tmc: #9c7418; }
+
+/* 衣物可见度 / 拖影 */
+.dw-gb[data-state="off"] .gb-clothes,
+.dw-gb[data-state="done"] .gb-clothes { opacity: 0; }
+.dw-gb[data-state="off"] .gb-bubbles,
+.dw-gb[data-state="done"] .gb-bubbles { opacity: 0; }
+.dw-gb[data-state="idle"] .gb-clothes { opacity: .20; }
+.dw-gb[data-state="starting"] .gb-clothes {
+  opacity: 0;
+  animation: gb-cspin var(--spin, 14s) linear infinite, gb-clothin .9s ease forwards;
+}
+.dw-gb[data-state="spinning"] .gb-clothes { filter: blur(1.5px) saturate(.9) contrast(.98); }
+.dw-gb[data-state="draining"] .gb-clothes { opacity: .80; }
+
+/* 等待/故障：状态字闪烁 */
+.dw-gb[data-state="waiting"] .gb-st { animation: gb-softblink 1.7s ease-in-out infinite; }
+.dw-gb[data-state="error"] .gb-st { animation: gb-softblink 1s ease-in-out infinite; }
+
+/* 显示窗兼作状态指示灯（矿物色微光） */
+.dw-gb[data-state="idle"] .gb-win,
+.dw-gb[data-state="done"] .gb-win {
+  background: linear-gradient(180deg, #c6d6c9, #a2bca9);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .5), 0 0 7px rgba(93, 138, 108, .55);
+}
+.dw-gb[data-state="starting"] .gb-win,
+.dw-gb[data-state="washing"] .gb-win,
+.dw-gb[data-state="rinsing"] .gb-win,
+.dw-gb[data-state="spinning"] .gb-win,
+.dw-gb[data-state="draining"] .gb-win {
+  background: linear-gradient(180deg, #bcd0d6, #98b4be);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .5), 0 0 7px rgba(82, 128, 143, .6);
+}
+.dw-gb[data-state="waiting"] .gb-win {
+  background: linear-gradient(180deg, #e6d3a6, #cdb072);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .5), 0 0 9px rgba(195, 154, 63, .7);
+  animation: gb-softblink 1.2s steps(2, end) infinite;
+}
+.dw-gb[data-state="error"] .gb-win {
+  background: linear-gradient(180deg, #dcb0a6, #c07a6a);
+  box-shadow: inset 0 0 0 1px rgba(74, 63, 47, .5), 0 0 9px rgba(181, 67, 47, .75);
+  animation: gb-softblink .8s steps(2, end) infinite;
+}
+
+/* ============ 减少动态偏好：关装饰动画，保留静态状态 ============ */
+@media (prefers-reduced-motion: reduce) {
+  .dw-gb .gb-water,
+  .dw-gb .gb-bubbles b,
+  .dw-gb .gb-clothes,
+  .dw-gb .gb-st,
+  .dw-gb .gb-win { animation: none !important; }
+}

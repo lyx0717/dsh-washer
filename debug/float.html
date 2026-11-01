@@ -1030,8 +1030,11 @@
   function updatePanelTimer(snap) {
     var hostNode = el('skinHost');
     if (!hostNode) return;
-    var t = hostNode.querySelector('.timer');
-    if (t) t.textContent = durationOf(snap.state || 'off', snap);
+    var txt = durationOf(snap.state || 'off', snap);
+    var t = hostNode.querySelector('.timer');   // 精密家电
+    if (t) t.textContent = txt;
+    var tc = hostNode.querySelector('.tm');      // 复古奶油
+    if (tc) tc.textContent = txt;
   }
 
   /* 窗口尺寸变化（主进程 animateBounds / 换档位）后，机器要按新宽度重新缩放，
@@ -1460,6 +1463,11 @@
     }
     if (skinChanged) {
       curState = null;
+      // 关键：皮肤/档位变了必须让 buildMachine 重建机身。
+      // 它用 curPanelSig（状态+文案+计数+衣物）做缓存，光把 curState 清空没用——
+      // 快照没变时 sig 还是旧的，buildMachine 会直接 early-return，
+      // 表现就是「停靠条换了肤、悬浮窗纹丝不动」。
+      curPanelSig = null;
       if (lastSnap !== null) { buildMachine(lastSnap); paintLamp(lastSnap.state || 'off'); }
     }
     /*

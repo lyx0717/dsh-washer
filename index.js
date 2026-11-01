@@ -1224,7 +1224,10 @@ export function apply(ctx, config) {
        * 概念（它只有一个固定尺寸）。这里落成具体造型，避免把 'auto'
        * 传给浮窗后它不认识、回落到 precision 而和设置页显示的不一致。
        */
-      skin: cfg.skin === 'precision' || cfg.skin === 'pixel'
+      // 透传任意合法 skin 名，别在这里写死列表——每加一套皮肤都得改，
+      // 漏改就会把新皮肤回落成 precision，和设置页显示的不一致。
+      // 只挡掉 'auto' 和非法值；真正不认识的造型由 Electron 侧兜底。
+      skin: typeof cfg.skin === 'string' && cfg.skin !== 'auto' && /^[a-z]{3,12}$/.test(cfg.skin)
         ? cfg.skin
         : 'precision',
     });

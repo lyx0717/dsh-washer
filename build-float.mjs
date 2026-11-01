@@ -19,6 +19,10 @@ import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = (name) => readFileSync(join(here, 'src', name), 'utf8');
+/* 皮肤清单：和主界面、悬浮窗主进程共用同一份事实源 */
+const MANIFEST = JSON.parse(src('skins.json')).skins;
+const SKIN_CSS_FILES = MANIFEST.map((s) => s.css);
+const SKIN_NAMES = MANIFEST.map((s) => s.name);
 
 /**
  * 从 client.template.js 里抠出配色表。
@@ -37,11 +41,9 @@ function grabTable(name) {
 const PW_WATER = grabTable('PW_WATER');
 const SPEED = grabTable('SPEED');
 const BUBBLE = grabTable('BUBBLE');
-const SCREEN_WORD = (() => {
-  const m = src('client.template.js').match(/const SCREEN_WORD = (\{[\s\S]*?\});/);
-  if (m === null) throw new Error('找不到 SCREEN_WORD');
-  return m[1];
-})();
+const SKIN_BODIES = MANIFEST.map(
+  (s) => src(s.body).trimEnd() + '\n  SKIN_BODY_FNS.' + s.name + ' = ' + s.name + 'BodyHtml;',
+).join('\n');
 /**
  * 从源码里抠一个对象字面量，靠**括号配平**找结尾。
  *
@@ -84,13 +86,15 @@ function grabObject(body, marker, label) {
  * 所以在构建期就把 getter 求值成本常量再输出：浮窗要的是尺寸，不是
  * 可扩展性。注册表仍是主界面的事，两边只有尺寸这一个事实来源。
  */
-const NATURAL = (() => {
-  const literal = grabObject(src('client.template.js'), 'const NATURAL =', 'NATURAL');
-  const skinNames = [...literal.matchAll(/get\s+(\w+)\s*\(\s*\)\s*\{[\s\S]*?\{`?\s*w\s*:\s*(\d+)\s*,\s*h\s*:\s*(\d+)\s*`?\s*\}/g)];
-  if (skinNames.length === 0) throw new Error('NATURAL 里找不到尺寸兜底值');
-  const entries = skinNames.map(([, name, w, h]) => `    ${name}: { w: ${w}, h: ${h} },`);
-  return `{\n${entries.join('\n')}\n  }`;
-})();
+/*
+ * 尺寸直接来自清单，不再从 client.template.js 抠 getter。
+ * 以前抠 getter 是为了「单一事实源」，现在事实源换成了 skins.json，
+ * 比正则解析源码稳得多（getter 方法体曾被非贪婪正则截断过）。
+ */
+const NATURAL = `{
+    pixel: { w: 256, h: 312 },
+${MANIFEST.map((s) => `    ${s.name}: { w: ${s.w}, h: ${s.h} },`).join('\n')}
+  }`;
 
 /** 直接从 core.js 抠 VISUAL（浮窗只需要 water/foam/led/blink/spin 四个量） */
 function grabVisual() {
@@ -163,8 +167,7 @@ function skinCss() {
     '/* 像素 sprite 的可动图层：直接搬主界面那段（.dw-px 作用域），不另写一套 */',
     grabPxBlock(),
     '',
-    '/* dsh-washer · skin-precision.css */',
-    src('skin-precision.css'),
+    ...SKIN_CSS_FILES.flatMap((name) => ['/* dsh-washer · ' + name + ' */', src(name)]),
     '',
   ].join('\n');
 }
@@ -182,9 +185,13 @@ const out = `/**
   var PW_WATER = ${PW_WATER};
   var SPEED = ${SPEED};
   var BUBBLE = ${BUBBLE};
-  var SCREEN_WORD = ${SCREEN_WORD};
   var NATURAL = ${NATURAL};
   var MACHINE_SVG = ${JSON.stringify(MACHINE_SVG)};
+  var CLOTHES_SVG = ${JSON.stringify(src('clothes-precision.svg').trim())};
+  var SKIN_NAMES = ${JSON.stringify(SKIN_NAMES)};
+  var SKIN_BODY_FNS = {};
+
+  /*__SKIN_BODIES__*/
 
   var SKIN_CSS = ${JSON.stringify(skinCss())};
 
@@ -254,70 +261,24 @@ const out = `/**
     return frame('pixel', state, width, host);
   }
 
-  function countsNode(counts) {
-    if (!counts) return null;
-    var box = el('span', 'counts');
-    var any = false;
-    var add = function (k, label, n) {
-      if (!(n > 0)) return;
-      var s = el('span', 'cnt');
-      s.setAttribute('data-k', k);
-      s.textContent = label + n;
-      box.appendChild(s);
-      any = true;
-    };
-    add('wait', '待', counts.waiting);
-    add('run', '动', counts.running);
-    add('err', '错', counts.error);
-    return any ? box : null;
-  }
-
-  function precisionMachine(state, width, screenTime, counts, stateText, clothes) {
-    var play = SPEED[state] === '0s' ? 'paused' : 'running';
-    var water = PW_WATER[state];
-    var pw = el('div', 'dw-pw');
-    pw.setAttribute('data-state', state);
-    pw.style.setProperty('--water-lvl', water + '%');
-    pw.style.setProperty('--bubble', String(BUBBLE[state]));
-    pw.style.setProperty('--speed', SPEED[state]);
-    pw.style.setProperty('--play', play);
-
-    var topbar = el('div', 'topbar', [
-      el('div', 'drawer'), el('div', 'knob'), el('div', 'led'),
-    ]);
-    var glass = el('div', 'glass', [
-      el('div', 'drum'),
-      el('div', 'clothes', (function () {
-        var out = [];
-        var ids = (clothes && clothes.length) ? clothes.slice(0, 6) : [];
-        for (var ci = 0; ci < ids.length; ci++) {
-          var it = el('i');
-          it.setAttribute('data-id', String(ids[ci]));
-          out.push(it);
-        }
-        return out;
-      })()),
-      el('div', 'water'),
-      el('div', 'bubbles', [el('b'), el('b'), el('b'), el('b'), el('b'), el('b')]),
-    ]);
-    var door = el('div', 'door', [el('div', 'handle'), el('div', 'lock'), glass]);
-    var panel = el('div', 'panel', [
-      el('div', 'row1', [
-        text('span', 'state-text', stateText || SCREEN_WORD[state] || 'READY'),
-        countsNode(counts),
-        text('span', 'timer', screenTime),
-      ]),
-    ]);
-
-    pw.appendChild(topbar);
-    pw.appendChild(door);
-    pw.appendChild(panel);
-    pw.appendChild(el('div', 'feet'));
-    return frame('precision', state, width, pw);
+  /* 所有皮肤：机身是一份 HTML 字符串，直接灌进容器再套缩放框 */
+  function htmlSkinMachine(skin, state, width, screenTime, counts, stateText, clothesIds) {
+    var builder = SKIN_BODY_FNS[skin];
+    var host = el('div', 'dw-skin-wrap');
+    host.innerHTML = builder(state, screenTime, counts, {
+      water: PW_WATER[state] || 0,
+      speed: SPEED[state],
+      play: SPEED[state] === '0s' ? 'paused' : 'running',
+      bubble: String(BUBBLE[state]),
+      clothes: CLOTHES_SVG,
+      clothesCount: Array.isArray(clothesIds) && clothesIds.length > 0 ? clothesIds.length : undefined,
+      stateText: stateText,
+    });
+    return frame(skin, state, width, host);
   }
 
   /**
-   * 造一台机器。两种造型共用同一份状态，只是长得不一样。
+   * 造一台机器。三种造型共用同一份状态，只是长得不一样。
    *
    * width 是目标显示宽度（CSS 像素）。窗口固定 132px 时三套造型都缩到
    * 这个宽度以内——方案 B：窗口不跟着皮肤变，代价是精密家电的细节会糊。
@@ -326,7 +287,7 @@ const out = `/**
     ensureSkinCss();
     var s = VISUAL[state] ? state : 'idle';
     var holder;
-    if (skin === 'precision') holder = precisionMachine(s, width, screenTime, counts, stateText, clothes);
+    if (skin !== 'pixel' && SKIN_NAMES.indexOf(skin) >= 0) holder = htmlSkinMachine(skin, s, width, screenTime, counts, stateText, clothes);
     else holder = pixelMachine(s, width);
 
     // 像素造型靠外层变量驱动，精密家电是自带动画的 DOM 结构
@@ -346,7 +307,7 @@ const out = `/**
 
   window.WasherMachines = {
     build: build,
-    shapes: ['precision', 'pixel'],
+    shapes: ${JSON.stringify([...SKIN_NAMES, 'pixel'])},
     ledColor: function (state) {
       var v = VISUAL[state];
       return v ? v.led : VISUAL.idle.led;
@@ -355,5 +316,6 @@ const out = `/**
 })();
 `;
 
-writeFileSync(join(here, 'debug', 'float.machines.js'), out);
-console.log('debug/float.machines.js written:', Buffer.byteLength(out, 'utf8'), 'bytes');
+const finalOut = out.replace('/*__SKIN_BODIES__*/', () => SKIN_BODIES);
+writeFileSync(join(here, 'debug', 'float.machines.js'), finalOut);
+console.log('debug/float.machines.js written:', Buffer.byteLength(finalOut, 'utf8'), 'bytes');

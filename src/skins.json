@@ -1,0 +1,48 @@
+{
+  "skins": [
+    {
+      "name": "precision",
+      "w": 330,
+      "h": 425,
+      "css": "skin-precision.css",
+      "body": "skin-precision.body.js",
+      "label": {
+        "zh": "精密家电",
+        "en": "Precision"
+      }
+    },
+    {
+      "name": "cream",
+      "w": 330,
+      "h": 425,
+      "css": "skin-cream.css",
+      "body": "skin-cream.body.js",
+      "label": {
+        "zh": "复古奶油",
+        "en": "Cream"
+      }
+    },
+    {
+      "name": "gongbi",
+      "w": 330,
+      "h": 425,
+      "css": "skin-gongbi.css",
+      "body": "skin-gongbi.body.js",
+      "label": {
+        "zh": "工笔重彩",
+        "en": "Gongbi"
+      }
+    },
+    {
+      "name": "capsule",
+      "w": 330,
+      "h": 425,
+      "css": "skin-capsule.css",
+      "body": "skin-capsule.body.js",
+      "label": {
+        "zh": "太空舱",
+        "en": "Capsule"
+      }
+    }
+  ]
+}

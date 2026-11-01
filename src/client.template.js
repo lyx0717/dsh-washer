@@ -22,6 +22,11 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
     const SPRITE_SVG = __SPRITE__;
     const MACHINE_SVG = __MACHINE__;
+    const CLOTHES_SVG = __CLOTHES__;
+    /* 皮肤清单：新增一套皮肤只改 src/skins.json，构建时注入这里 */
+    const SKIN_MANIFEST = __SKINS_JSON__;
+    const SKIN_BODY_FNS = {};
+    /*__SKIN_BODIES__*/
     const CSS = __CSS__;
 
     const LOCALE_NS = 'washer';
@@ -157,6 +162,9 @@ window.__ModuleLoader__.load({
       'label.skin': '外观',
       'skin.precision': '精密家电',
       'skin.pixel': '像素',
+      'skin.cream': '复古奶油',
+      'skin.gongbi': '工笔重彩',
+      'skin.capsule': '太空舱',
       'set.title': '洗衣机',
       'set.intro': 'Agent 干活时的状态指示。改完立即生效。',
       'set.nav': '洗衣机',
@@ -228,6 +236,9 @@ window.__ModuleLoader__.load({
       'label.skin': 'Skin',
       'skin.precision': 'Precision',
       'skin.pixel': 'Pixel',
+      'skin.cream': 'Cream',
+      'skin.gongbi': 'Gongbi',
+      'skin.capsule': 'Capsule',
       'set.title': 'Washer',
       'set.intro': 'Live status while the agent works. Changes take effect immediately.',
       'set.nav': 'Washer',
@@ -272,7 +283,13 @@ window.__ModuleLoader__.load({
     /* 每状态：水位 / 转速 / 泡沫。机型自己的表，和文案解耦 */
     const PW_WATER = { off: 0, idle: 0, starting: 15, washing: 48, rinsing: 42, spinning: 18, waiting: 35, draining: 4, done: 0, error: 26 };
     const SPEED = { off: '0s', idle: '0s', starting: '2.2s', washing: '1.7s', rinsing: '2.6s', spinning: '0.55s', waiting: '0s', draining: '3.4s', done: '0s', error: '0s' };
-    const BUBBLE = { off: 0, idle: 0, starting: 0.2, washing: 1, rinsing: 0.5, spinning: 0, waiting: 0.25, draining: 0, done: 0, error: 0 };
+    /*
+     * 精密家电的泡沫浓度（其它三套皮肤不用这个表，它们的气泡是常显的）。
+     * 以前 idle/spinning/draining/done/error 都是 0，用户看到的是「待机时
+     * 滚筒里一个泡都没有」，和另外三套不一致。改成待机和运行态都留一点泡沫：
+     * 待机是刚放好衣服的静水、运行态按动作强弱给不同浓度。
+     */
+    const BUBBLE = { off: 0, idle: 0.45, starting: 0.6, washing: 1, rinsing: 0.7, spinning: 0.35, waiting: 0.5, draining: 0.4, done: 0.25, error: 0.5 };
 
     // 机型的自然尺寸（headless Chrome 实测，1:1 下的像素盒）。
     // h 必须把伸出机身的部件算进去：底脚、电源线之类的部件在 bottom/right 负偏移里，
@@ -307,8 +324,17 @@ window.__ModuleLoader__.load({
     }
     const NATURAL = {
       get pixel() { return SKIN_REGISTRY.get('pixel') || { w: 256, h: 312 }; },
-      get precision() { return SKIN_REGISTRY.get('precision') || { w: 330, h: 425 }; },
     };
+    /*
+     * 其余皮肤的原始尺寸一律来自 src/skins.json。这里用 getter 而不是直接
+     * 取值：外部一旦 SKIN_REGISTRY.set() 覆盖了尺寸，显示仍然跟着注册表走。
+     */
+    for (const skinSpec of SKIN_MANIFEST) {
+      Object.defineProperty(NATURAL, skinSpec.name, {
+        enumerable: true,
+        get: () => SKIN_REGISTRY.get(skinSpec.name) || { w: skinSpec.w, h: skinSpec.h },
+      });
+    }
 
     /*
      * 停靠条里那台机器的显示宽度。和 .dw-sprite 的 32px 对齐——
@@ -621,60 +647,6 @@ window.__ModuleLoader__.load({
       return MachineFrame('pixel', state, width, SKIN_REGISTRY.get('pixel').render({ state }));
     }
 
-    /* 精密家电：机身小屏只说机器自己的话（WASH / SPIN / ERR…），不重复 UI 文案 */
-    const SCREEN_WORD = {
-      off: 'OFF', idle: 'READY', starting: 'START', washing: 'WASH', rinsing: 'RINSE',
-      spinning: 'SPIN', waiting: 'HOLD', draining: 'DRAIN', done: 'DONE', error: 'ERR',
-    };
-
-    function PrecisionMachine(state, width, screenTime, counts) {
-      return MachineFrame('precision', state, width, _precisionBody(state, screenTime, counts));
-    }
-
-    /* 计数区：待/动/错 三枚胶囊，0 项不渲染。只在大尺寸浮窗里看得见。 */
-    function CountsNode(counts) {
-      if (!counts) return null;
-      const items = [];
-      if (counts.waiting > 0) items.push(h('span', { key: 'w', className: 'cnt', 'data-k': 'wait' }, '待' + counts.waiting));
-      if (counts.running > 0) items.push(h('span', { key: 'r', className: 'cnt', 'data-k': 'run' }, '动' + counts.running));
-      if (counts.error > 0) items.push(h('span', { key: 'e', className: 'cnt', 'data-k': 'err' }, '错' + counts.error));
-      return items.length === 0 ? null : h('span', { className: 'counts' }, items);
-    }
-
-    /** 精密家电的机身本体，不含缩放框（MachineFrame 统一套）。 */
-    function _precisionBody(state, screenTime, counts) {
-      const play = SPEED[state] === '0s' ? 'paused' : 'running';
-      const water = PW_WATER[state];
-      return h('div', {
-          className: 'dw-pw',
-          'data-state': state,
-          style: {
-            '--water-lvl': water + '%',
-            '--bubble': String(BUBBLE[state]),
-            '--speed': SPEED[state],
-            '--play': play,
-          },
-        },
-        h('div', { className: 'topbar' },
-          h('div', { className: 'drawer' }),
-          h('div', { className: 'knob' }),
-          h('div', { className: 'led' })),
-        h('div', { className: 'door' },
-          h('div', { className: 'handle' }),
-          h('div', { className: 'lock' }),
-          h('div', { className: 'glass' },
-            h('div', { className: 'drum' }),
-            h('div', { className: 'clothes' }, h('i'), h('i'), h('i'), h('i')),
-            h('div', { className: 'water' }),
-            h('div', { className: 'bubbles' }, h('b'), h('b'), h('b'), h('b'), h('b'), h('b')))),
-        h('div', { className: 'panel' },
-          h('div', { className: 'row1' },
-            h('span', { className: 'state-text' }, SCREEN_WORD[state] || 'READY'),
-            CountsNode(counts),
-            h('span', { className: 'timer' }, screenTime))),
-        h('div', { className: 'feet' }));
-    }
-
     function BigMachine(skin, state, width, screenTime) {
       const resolved = resolveSkin(skin);
       if (resolved === null) return null;
@@ -695,10 +667,40 @@ window.__ModuleLoader__.load({
         style: { lineHeight: 0 },
       }),
     });
-    defineSkin('precision', {
-      w: 330, h: 425,
-      render: ({ state, screenTime, counts }) => _precisionBody(state, screenTime, counts),
-    });
+    /*
+     * 除像素外，所有皮肤的机身都用「一份 HTML 字符串」表达：同一份造型要同时
+     * 喂给 React 主界面和 float 浮窗，手写两遍 DOM 必然漂移。字符串实现在
+     * src/skin-<name>.body.js，构建时内联，两边共用同一份。
+     */
+    function _htmlSkinBody(state, screenTime, counts, bodyFn, stateText) {
+      const ctx = {
+        water: PW_WATER[state] || 0,
+        speed: SPEED[state],
+        play: SPEED[state] === '0s' ? 'paused' : 'running',
+        bubble: String(BUBBLE[state]),
+        clothes: CLOTHES_SVG,
+        /* 衣物件数：有会话概览就按运行会话数，拿不到时由皮肤自己兜底 */
+        clothesCount: counts && typeof counts.running === 'number' ? counts.running : undefined,
+        /* 浮窗会把「状态词 + 错误码」传进来，机身小屏跟着它走 */
+        stateText: stateText,
+      };
+      return h('div', {
+        className: 'dw-skin-host',
+        dangerouslySetInnerHTML: { __html: bodyFn(state, screenTime, counts, ctx) },
+      });
+    }
+    /*
+     * 清单里除 pixel 外每一套都按同一份契约注册：尺寸来自清单，机身来自
+     * 对应 body 文件（构建时内联并登记到 SKIN_BODY_FNS）。
+     */
+    for (const skinSpec of SKIN_MANIFEST) {
+      defineSkin(skinSpec.name, {
+        w: skinSpec.w,
+        h: skinSpec.h,
+        render: ({ state, screenTime, counts }) =>
+          _htmlSkinBody(state, screenTime, counts, SKIN_BODY_FNS[skinSpec.name]),
+      });
+    }
 
     /* ------------------------------------------------------------------ *
      * 组件
@@ -1089,7 +1091,7 @@ window.__ModuleLoader__.load({
         row('set.hideIdle', sw('hideWhenIdle', cfg.hideWhenIdle === true, tr('set.hideIdle'))),
 
         row('label.skin', seg(tr('label.skin'), [
-          ['precision', tr('skin.precision')],
+          ...SKIN_MANIFEST.map((skinSpec) => [skinSpec.name, tr('skin.' + skinSpec.name)]),
         ], cfg.skin, (value) => setPref('skin', value))),
         h('p', { className: 'dw-set-hint' }, tr('set.skinHint')),
 

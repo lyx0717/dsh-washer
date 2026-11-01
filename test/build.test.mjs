@@ -81,7 +81,8 @@ test('每套皮肤都能画出来', () => {
   const { window } = runInFakeBrowser(FLOAT_JS);
   const machines = window.WasherMachines;
   // NATURAL 里声明的皮肤都要能 build，任何一个抛错浮窗就是白框
-  for (const skin of ['pixel', 'precision']) {
+  const SKIN_NAMES = ['pixel', ...JSON.parse(readFileSync(new URL('../src/skins.json', import.meta.url), 'utf8')).skins.map((s) => s.name)];
+  for (const skin of SKIN_NAMES) {
     const node = machines.build(skin, 'washing', 112, '00:12', false);
     assert.ok(node !== undefined && node !== null, `${skin} 应该画出节点`);
   }

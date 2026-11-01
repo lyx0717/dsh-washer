@@ -158,15 +158,17 @@
 @keyframes clothIn{to{opacity:1}}
 .dw-pw .bubbles{position:absolute;inset:0;z-index:4;opacity:var(--bubble,0);transition:opacity .5s}
 .dw-pw .bubbles b{position:absolute;border-radius:50%;
-  background:radial-gradient(circle at 34% 30%, #fff 0 40%, rgba(255,255,255,.55) 70%, rgba(255,255,255,.15));
-  box-shadow:0 0 5px rgba(255,255,255,.55), inset 0 -1px 2px rgba(120,180,220,.4);
+  /* 白色泡沫压在浅色玻璃上看不见，补一圈冷色描边 + 内高光，待机浅底也能读出来 */
+  background:radial-gradient(circle at 34% 30%, #fff 0 36%, rgba(214,238,255,.78) 66%, rgba(120,180,220,.34) 100%);
+  box-shadow:0 0 0 1px rgba(120,180,225,.45), 0 0 6px rgba(255,255,255,.6),
+    inset -1px -2px 3px rgba(90,150,200,.45), inset 1px 1px 2px rgba(255,255,255,.9);
   animation:float 2.6s ease-in-out infinite;}
-.dw-pw .bubbles b:nth-child(1){width:12px;height:12px;left:29%;top:70%;animation-delay:0s}
-.dw-pw .bubbles b:nth-child(2){width:8px;height:8px;left:43%;top:78%;animation-delay:.35s}
-.dw-pw .bubbles b:nth-child(3){width:15px;height:15px;left:57%;top:66%;animation-delay:.7s}
-.dw-pw .bubbles b:nth-child(4){width:7px;height:7px;left:65%;top:74%;animation-delay:1.05s}
-.dw-pw .bubbles b:nth-child(5){width:10px;height:10px;left:51%;top:58%;animation-delay:1.4s}
-.dw-pw .bubbles b:nth-child(6){width:6px;height:6px;left:37%;top:60%;animation-delay:1.75s}
+.dw-pw .bubbles b:nth-child(1){width:15px;height:15px;left:29%;top:70%;animation-delay:0s}
+.dw-pw .bubbles b:nth-child(2){width:10px;height:10px;left:43%;top:78%;animation-delay:.35s}
+.dw-pw .bubbles b:nth-child(3){width:18px;height:18px;left:57%;top:66%;animation-delay:.7s}
+.dw-pw .bubbles b:nth-child(4){width:9px;height:9px;left:65%;top:74%;animation-delay:1.05s}
+.dw-pw .bubbles b:nth-child(5){width:12px;height:12px;left:51%;top:58%;animation-delay:1.4s}
+.dw-pw .bubbles b:nth-child(6){width:8px;height:8px;left:37%;top:60%;animation-delay:1.75s}
 .dw-pw .handle{position:absolute;left:-6px;top:50%;transform:translateY(-50%);z-index:6;
   width:6px;height:44px;border-radius:4px;
   background:linear-gradient(90deg,#ffffff,#c9d3dd 40%,#8e9baa 70%,#6b7885);
@@ -229,10 +231,10 @@
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes wave{from{background-position:0 0}to{background-position:46px 0}}
 @keyframes float{
-  0%{transform:translateY(0) scale(1);opacity:0}
+  0%{transform:translateY(0) scale(1);opacity:.28}
   20%{opacity:1}
   80%{opacity:1}
-  100%{transform:translateY(-18px) scale(.82);opacity:0}}
+  100%{transform:translateY(-18px) scale(.82);opacity:.28}}
 @keyframes breathe{
   0%,100%{box-shadow:0 0 0 1px rgba(70,92,116,.2),0 0 5px var(--dw-sig-ok)}
   50%{box-shadow:0 0 0 1px rgba(70,92,116,.2),0 0 11px var(--dw-sig-ok)}}

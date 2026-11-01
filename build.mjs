@@ -27,20 +27,36 @@ function inlineCore() {
 const JS_STRING = (value) => JSON.stringify(value);
 
 const template = src('client.template.js');
+/* 皮肤清单是唯一事实源：加一套皮肤只改 src/skins.json */
+const MANIFEST = JSON.parse(src('skins.json')).skins;
+/* body 文件只负责定义 `<name>BodyHtml`，登记到查表这件事由构建统一做：
+ * 少一处手工同步，加皮肤就不会漏注册。 */
+const SKIN_BODIES = MANIFEST.map(
+  (s) => src(s.body).trimEnd() + '\nSKIN_BODY_FNS.' + s.name + ' = ' + s.name + 'BodyHtml;',
+).join('\n');
 const css = [
   '/* dsh-washer · style.css */',
   src('style.css'),
-  '/* dsh-washer · skin-precision.css */',
-  src('skin-precision.css'),
+  ...MANIFEST.flatMap((s) => ['/* dsh-washer · ' + s.css + ' */', src(s.css)]),
 ].join('\n');
+
+/* 清单和界面文案必须对得上：漏了一条 label，设置页就会显示裸 key。 */
+for (const s of MANIFEST) {
+  if (!template.includes("'skin." + s.name + "':")) {
+    throw new Error('skins.json 有 ' + s.name + '，但 client.template.js 的 ZH/EN 里没有 skin.' + s.name);
+  }
+}
 
 const out = template
   .replace('/*__CORE__*/', () => inlineCore())
   .replace('__SPRITE__', () => JS_STRING(src('sprite.svg').trim()))
   .replace('__MACHINE__', () => JS_STRING(src('machine.svg').trim()))
+  .replace('__CLOTHES__', () => JS_STRING(src('clothes-precision.svg').trim()))
+  .replace('__SKINS_JSON__', () => JSON.stringify(MANIFEST))
+  .replace('/*__SKIN_BODIES__*/', () => SKIN_BODIES)
   .replace('__CSS__', () => JS_STRING(css));
 
-for (const token of ['/*__CORE__*/', '__SPRITE__', '__MACHINE__', '__CSS__']) {
+for (const token of ['/*__CORE__*/', '__SPRITE__', '__MACHINE__', '__CSS__', '__CLOTHES__', '/*__SKIN_BODIES__*/', '__SKINS_JSON__']) {
   if (out.includes(token)) throw new Error('unreplaced build token: ' + token);
 }
 
