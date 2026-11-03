@@ -358,6 +358,17 @@ node scripts/refresh-market.mjs && git add docs/index.json && \
 
 pre-push 钩子会在"代码变了但索引没刷"时拦下并自动重写 `docs/index.json`。
 
+**市场和搜索是两套索引，改文案要对准地方：**
+
+| 索引 | 由谁决定 | 搜索吃什么 |
+|---|---|---|
+| 自建索引 `docs/index.json` | 本仓库 `scripts/market-index.mjs` 的 `COPY`（title / description / keywords） | name、title、description、keywords |
+| 官方市场 `awesome-dsh-plugin` | 它仓库里的 `data/plugins/lyx0717__dsh-washer.yml`，**只有 `description` 可写**，没有 keywords 字段 | name、npm、owner、description、category |
+
+所以「搜桌宠搜不到」这类问题：自建索引改 `COPY.keywords`（已含 桌宠 / 桌面宠物 / 挂件 / desktop pet）；
+官方市场只能把词写进那条 yml 的 `description`（`桌面宠物` 这样的词含「桌宠」两个字但不是连续子串，
+要单独把 `桌宠` 写出来，搜索按子串匹配）。
+
 ### 宿主半（`index.js`）与客户端的数据通道
 
 Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌面窗口（Electron）拿不到那些东西。所以宿主半在 Node 侧监听同一批事件、喂给**同一个** `src/core.js`，再通过本地 HTTP+WS 把快照推出去——两边判定只有一份实现，不会各写一套然后对不上。
