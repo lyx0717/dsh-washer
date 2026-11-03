@@ -33,24 +33,27 @@ export const REPO_URL = 'https://github.com/lyx0717/dsh-washer';
  */
 export const COPY = {
   title: { en: 'Dogdan plugins', zh: '狗蛋儿的插件' },
-  pluginTitle: { en: 'Washer · Agent status machine', zh: '滚筒洗衣机' },
+  pluginTitle: { en: 'Washer · Agent status desktop pet', zh: '滚筒洗衣机 · 桌面宠物' },
   description: {
-    en: 'An always-on-top washing machine that mirrors the agent: four skins, multi-session counters, proactive done / stuck / approval alerts, and a detail panel with recent turns and timings.',
-    zh: '一台常驻桌面的洗衣机，实时显示 Agent 跑到哪了。四套皮肤（精密家电 / 复古奶油 / 工笔重彩 / 太空舱）、多会话计数、洗完 / 卡住 / 等你确认主动提醒，还能看最近几轮与耗时明细。',
+    en: 'An always-on-top desktop pet: a washing machine that mirrors the agent — four skins, multi-session counters, proactive done / stuck / approval alerts, and a detail panel with recent turns and timings.',
+    zh: '常驻桌面的桌面宠物：一台会转、会叫、会打盹的洗衣机，实时显示 Agent 跑到哪了。四套皮肤（精密家电 / 复古奶油 / 工笔重彩 / 太空舱）、多会话计数、洗完 / 卡住 / 等你确认主动提醒，还能看最近几轮与耗时明细。',
   },
   /*
    * keywords 参与模糊搜索，权重仅次于包名和标题（见 dsh-plugin-market 的
    * MiniSearch 配置：boost name/title 3、keywords 2）。一个词都不填，
    * 就等于搜「悬浮窗」「状态」「通知」都找不到这个插件——白丢的曝光。
    *
-   * 中英混填是刻意的：用户可能用任何一种语言搜。
+   * 中英混填是刻意的：用户可能用任何一种语言搜。桌宠 / 桌面宠物 / 挂件是
+   * 用户对这个东西最常见的叫法，必须能搜到，否则只能靠「洗衣机」找过来。
    */
   keywords: [
     'washer', 'washing machine', 'status', 'agent status', 'progress',
     'overlay', 'always on top', 'floating window', 'multi-session',
     'notification', 'sound', 'alert', 'stuck', 'skin', 'theme', 'detail',
+    'desktop pet', 'pet', 'mascot', 'widget', 'desktop widget',
     '洗衣机', '状态', '悬浮窗', '进度', '多会话', '通知', '提醒', '卡住',
     '皮肤', '主题', '详情', '皮肤切换',
+    '桌宠', '桌面宠物', '挂件', '桌面挂件', '宠物',
   ],
   author: '李永轩',
   homepage: 'https://github.com/lyx0717/dsh-washer#readme',

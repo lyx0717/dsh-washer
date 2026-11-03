@@ -3,6 +3,7 @@
 **不用盯着屏幕，也知道 Agent 跑到哪了。**
 
 一台永远置顶的桌面悬浮窗，把 Agent 的运转状态显示成滚筒洗衣机的动作。
+也可以把它当**桌宠**（桌面宠物）用：它会转、会叫、会打盹，你忙你的，它替你盯着。
 洗完、卡住、等你确认——三个你真需要抬头的时刻，它会主动叫你。
 其余时间它安静地转，你去做别的事。
 
@@ -211,6 +212,9 @@ dsh plugin --profile desktop add /path/to/dsh-washer
 ```
 
 装完在 profile 的 `package.json` 里会多出一条依赖。改完重启 Harness（替换已装包需要重启，新装包由 HMR 接管）。
+
+> 在插件市场里搜「**桌宠**」「**桌面宠物**」「**挂件**」「**悬浮窗**」「洗衣机」，都能找到它。
+> 搜不到通常是市场索引没刷新到最新版本：索引在 <https://lyx0717.github.io/dsh-washer/index.json>。
 
 **卸载**：
 
@@ -461,6 +465,11 @@ set ELECTRON_PATH=C:\path\to\electron.exe && electron\start.cmd
 > 调试别靠猜窗口坐标截图——用离屏 Electron 的 `capturePage()` 直接出图。
 
 ## 版本记录
+
+### 0.10.2
+- 市场标题 / 描述 / 关键词补上「桌宠」「桌面宠物」「挂件」，搜这些词也能找到；npm `keywords` 同步
+- README 开篇与安装段补桌宠说法；纯文案改动，功能零变化
+- 详细变更见 [CHANGELOG.md](CHANGELOG.md)
 
 ### 0.10.1
 - 修复 Windows 上几处边界问题：托盘建不起来时关闭窗口不再「藏起来叫不回来」
