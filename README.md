@@ -363,11 +363,13 @@ pre-push 钩子会在"代码变了但索引没刷"时拦下并自动重写 `docs
 | 索引 | 由谁决定 | 搜索吃什么 |
 |---|---|---|
 | 自建索引 `docs/index.json` | 本仓库 `scripts/market-index.mjs` 的 `COPY`（title / description / keywords） | name、title、description、keywords |
-| 官方市场 `awesome-dsh-plugin` | 它仓库里的 `data/plugins/lyx0717__dsh-washer.yml`，**只有 `description` 可写**，没有 keywords 字段 | name、npm、owner、description、category |
+| 官方市场 `awesome-dsh-plugin` | 它仓库里的 `data/plugins/lyx0717__dsh-washer.yml`：**`description` 可写**，另有可选 `icon`（GitHub 图床的位图，这里指向本仓库 `docs/market-icon.png`），没有 keywords 字段 | name、npm、owner、description、category |
 
 所以「搜桌宠搜不到」这类问题：自建索引改 `COPY.keywords`（已含 桌宠 / 桌面宠物 / 挂件 / desktop pet）；
 官方市场只能把词写进那条 yml 的 `description`（`桌面宠物` 这样的词含「桌宠」两个字但不是连续子串，
 要单独把 `桌宠` 写出来，搜索按子串匹配）。
+
+市场卡片图标是 `docs/market-icon.png`（180×180 @2x，由 `icon.svg` 用 Playwright 渲染；改图标改 `icon.svg` 后重出这张）。
 
 ### 宿主半（`index.js`）与客户端的数据通道
 
