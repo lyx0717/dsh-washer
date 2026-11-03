@@ -1,0 +1,12 @@
+# 源码统一按 LF 检出：测试里按 "\n" 切片源码（test/render.mjs 取函数体、build 时比对产物），
+# Windows 上 git 默认 core.autocrlf=true 会把工作树换成 CRLF，切片找不到结束标记就退化成整文件，
+# 负面断言随即误命中——CI 的 windows 腿因此一路红。
+* text=auto eol=lf
+
+# 二进制资源不要被当文本转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
