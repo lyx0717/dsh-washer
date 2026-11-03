@@ -1227,9 +1227,9 @@ function showMenu() {
     {
       label: '尺寸',
       submenu: [
-        { label: (sizeMode === 'tiny' ? '✓ ' : '') + '极简（只留指示灯）', click: () => setSize('tiny') },
-        { label: (sizeMode === 'standard' ? '✓ ' : '') + '标准（100%）', click: () => setSize('standard') },
-        { label: (sizeMode === 'large' ? '✓ ' : '') + '大（130%）', click: () => setSize('large') },
+        { label: (sizeMode === 'tiny' ? '✓ ' : '') + '极简', click: () => setSize('tiny') },
+        { label: (sizeMode === 'standard' ? '✓ ' : '') + '标准', click: () => setSize('standard') },
+        { label: (sizeMode === 'large' ? '✓ ' : '') + '大', click: () => setSize('large') },
       ],
     },
     {

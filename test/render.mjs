@@ -1596,8 +1596,8 @@ await test('设置页：每个设置项都能双向同步（初始值读对 + �
    */
   const radios = [
     { name: '皮肤', group: '外观', cfg: { skin: 'precision' }, label: '精密家电', key: 'skin', value: 'precision' },
-    { name: '悬浮窗尺寸', group: '尺寸', cfg: { desktopOverlaySize: 'tiny' }, label: '标准 · 100%', key: 'desktopOverlaySize', value: 'standard' },
-    { name: '悬浮窗尺寸（选大）', group: '尺寸', cfg: { desktopOverlaySize: 'standard' }, label: '大 · 130%', key: 'desktopOverlaySize', value: 'large' },
+    { name: '悬浮窗尺寸', group: '尺寸', cfg: { desktopOverlaySize: 'tiny' }, label: '标准', key: 'desktopOverlaySize', value: 'standard' },
+    { name: '悬浮窗尺寸（选大）', group: '尺寸', cfg: { desktopOverlaySize: 'standard' }, label: '大', key: 'desktopOverlaySize', value: 'large' },
   ];
   for (const item of radios) {
     const writes = [];
