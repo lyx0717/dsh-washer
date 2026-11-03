@@ -1590,13 +1590,14 @@ await test('设置页：每个设置项都能双向同步（初始值读对 + �
 
   // 三组单选：初始选中项必须跟着配置走，点别的项要写出对应 key
   /*
-   * 只剩两组单选：皮肤（主界面+悬浮窗共用）和悬浮窗大小。
-   * 「默认档位」随 M/L 档一起删除，「悬浮窗造型」并进皮肤，
-   * 「减少动态效果」按用户要求整个删除（只跟随系统）。
+   * 只剩两组单选：皮肤（主界面+悬浮窗共用）和悬浮窗尺寸。
+   * 尺寸是三档（极简 / 标准 100% / 大 130%），和浮窗右键菜单同一组值；
+   * 原来独立的「缩放」一行已合并进来（宿主从没写过 scale，那行本来就是死的）。
    */
   const radios = [
     { name: '皮肤', group: '外观', cfg: { skin: 'precision' }, label: '精密家电', key: 'skin', value: 'precision' },
-    { name: '悬浮窗大小', group: '悬浮窗大小', cfg: { desktopOverlaySize: 'tiny' }, label: '正常', key: 'desktopOverlaySize', value: 'normal' },
+    { name: '悬浮窗尺寸', group: '尺寸', cfg: { desktopOverlaySize: 'tiny' }, label: '标准 · 100%', key: 'desktopOverlaySize', value: 'standard' },
+    { name: '悬浮窗尺寸（选大）', group: '尺寸', cfg: { desktopOverlaySize: 'standard' }, label: '大 · 130%', key: 'desktopOverlaySize', value: 'large' },
   ];
   for (const item of radios) {
     const writes = [];

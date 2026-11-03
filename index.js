@@ -1164,7 +1164,9 @@ export function writeOverlayPrefs(patch) {
   if (current === undefined) current = {};
   const next = Object.assign({}, current);
   // 只接受认识且类型对的字段，防止页面传脏数据把窗口搞成 0 宽
-  if (patch.size === 'normal' || patch.size === 'tiny') next.size = patch.size;
+  // 尺寸就三档（和设置页、浮窗右键菜单同一组值）；'normal' 是旧客户端的写法，收进来落成 standard
+  if (patch.size === 'tiny' || patch.size === 'standard' || patch.size === 'large') next.size = patch.size;
+  else if (patch.size === 'normal') next.size = 'standard';
   if (typeof patch.skin === 'string' && /^[a-z]{3,12}$/.test(patch.skin)) next.skin = patch.skin;
   if (patch.show === true || patch.show === false) next.show = patch.show;
   /*
@@ -1310,7 +1312,12 @@ export function apply(ctx, config) {
   setDoneHoldMs(Number(cfg.doneHoldMs));
 
   const savedPrefs = readOverlayPrefs();
-  if (savedPrefs.size === 'normal' || savedPrefs.size === 'tiny') cfg.desktopOverlaySize = savedPrefs.size;
+  // 三档尺寸；旧偏好文件写的是 size:'normal' + scale:'compact|standard|large'，这里迁一次
+  if (savedPrefs.size === 'tiny' || savedPrefs.size === 'standard' || savedPrefs.size === 'large') {
+    cfg.desktopOverlaySize = savedPrefs.size;
+  } else if (savedPrefs.size === 'normal') {
+    cfg.desktopOverlaySize = savedPrefs.scale === 'large' ? 'large' : 'standard';
+  }
   if (typeof savedPrefs.skin === 'string' && /^[a-z]{3,12}$/.test(savedPrefs.skin)) cfg.skin = savedPrefs.skin;
 
   /*
@@ -1388,7 +1395,10 @@ export function apply(ctx, config) {
     if (overlayChild !== null) return true;
     if (cfg.desktopOverlayAutoLaunch === false) return false;
     overlayChild = spawnOverlay(ctx, {
-      size: cfg.desktopOverlaySize,
+      // 三档尺寸；旧配置里可能是 'normal'（0.10.2 及以前），落成 standard
+      size: cfg.desktopOverlaySize === 'tiny' || cfg.desktopOverlaySize === 'large'
+        ? cfg.desktopOverlaySize
+        : 'standard',
       /*
        * skin 可能是 'auto'——那是主界面的"按尺寸自动挑"策略，浮窗没有这个
        * 概念（它只有一个固定尺寸）。这里落成具体造型，避免把 'auto'

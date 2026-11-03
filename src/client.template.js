@@ -209,15 +209,11 @@ window.__ModuleLoader__.load({
       'set.runtimeInstallFail': '下载失败：{error}。也可以手动把 Electron 解压到 {dir}（里面要有 electron.exe）。',
       'set.runtimeManualHint': '手动安装：把 Electron 的 win32 发行包解压到 {dir}，确保 {exe} 存在。',
       'set.overlayHint': '开启后随客户端启动，在桌面角落显示一台洗衣机；关掉会立刻收起。',
-      'set.overlaySize': '悬浮窗大小',
-      'ov.normal': '正常',
+      'set.overlaySize': '尺寸',
       'ov.tiny': '极简',
-      'set.overlayScale': '缩放',
-      'ov.compact': '紧凑',
-      'ov.standard': '标准',
-      'ov.large': '大',
-      'set.overlayScaleHint': '只作用于「正常」，三档等比缩放，黑条字号自动跟着缩。',
-      'set.overlaySizeHint': '「极简」只留指示灯，不显示状态文字，占桌面空间最小。',
+      'ov.standard': '标准 · 100%',
+      'ov.large': '大 · 130%',
+      'set.overlaySizeHint': '和浮窗右键菜单的「尺寸」是同一组档位；「极简」只留指示灯，占桌面最小。',
       'set.overlayNotify': '弹通知',
       'set.overlayNotifyHint': '完成、故障、等你确认、卡住都会叫你；窗口在前台时不打扰。',
       'set.overlaySound': '状态音效',
@@ -291,15 +287,11 @@ window.__ModuleLoader__.load({
       'set.runtimeInstallFail': 'Download failed: {error}. You can also unzip the win32 Electron build into {dir} (it must contain electron.exe).',
       'set.runtimeManualHint': 'Manual install: unzip the win32 Electron build into {dir} so that {exe} exists.',
       'set.overlayHint': 'Starts with the app and shows a washer in the corner of your desktop. Turning it off removes it immediately.',
-      'set.overlaySize': 'Overlay size',
-      'ov.normal': 'Normal',
+      'set.overlaySize': 'Size',
       'ov.tiny': 'Minimal',
-      'set.overlayScale': 'Scale',
-      'ov.compact': 'Compact',
-      'ov.standard': 'Standard',
-      'ov.large': 'Large',
-      'set.overlayScaleHint': 'Applies to Normal only. All three steps scale the screen text too.',
-      'set.overlaySizeHint': '"Minimal" keeps only the indicator light with no status text - the smallest footprint.',
+      'ov.standard': 'Standard · 100%',
+      'ov.large': 'Large · 130%',
+      'set.overlaySizeHint': 'Same steps as the overlay context menu. "Minimal" keeps only the indicator light - the smallest footprint.',
       'set.overlayThrough': 'Click-through',
       'set.overlayThroughHint': 'Let clicks fall through to the app underneath. Press {key} to turn it off.',
       'tool.command': 'Running a command',
@@ -415,9 +407,8 @@ window.__ModuleLoader__.load({
       // 它同时决定宿主要不要拉起 Electron，默认必须是关——装了不看的人
       // 不该莫名多一个后台进程和端口。
       desktopOverlay: false,
-      desktopOverlaySize: 'normal',
-      // 正常档的缩放倍数；极简档不受它影响（极简是独立形态，不是缩放）。
-      desktopOverlayScale: 'standard',
+      // 三档尺寸：tiny | standard | large，和浮窗右键菜单的「尺寸」同一组值
+      desktopOverlaySize: 'standard',
       /*
        * 鼠标穿透：开启后浮窗不再接收任何鼠标事件，点击直接落到底下的应用。
        * 以前这是浮窗上双击切换的，现在挪到设置页（理由见 OVERLAY_PREF_KEYS）。
@@ -1248,19 +1239,20 @@ window.__ModuleLoader__.load({
           h('h4', { key: 'ov-sub', className: 'dw-set-sub' }, tr('set.overlay')),
           h('p', { key: 'ov-hint', className: 'dw-set-hint' }, tr('set.overlayHint')),
           row('set.overlayOn', sw('desktopOverlay', cfg.desktopOverlay === true, tr('set.overlayOn'))),
+          /*
+           * 尺寸一行三档，和浮窗右键菜单的「尺寸」子菜单是同一组值。
+           * 这里原来是「大小（正常/极简）+ 缩放（80/100/120）」两行，
+           * 而宿主根本没写 scale 字段——那行怎么拨都没反应。合并成一项。
+           */
           row('set.overlaySize', seg(tr('set.overlaySize'), [
-            ['normal', tr('ov.normal')],
             ['tiny', tr('ov.tiny')],
-          ], cfg.desktopOverlaySize === undefined ? 'normal' : cfg.desktopOverlaySize,
-          (value) => setPref('desktopOverlaySize', value))),
-          h('p', { key: 'ov-size-hint', className: 'dw-set-hint' }, tr('set.overlaySizeHint')),
-          row('set.overlayScale', seg(tr('set.overlayScale'), [
-            ['compact', tr('ov.compact')],
             ['standard', tr('ov.standard')],
             ['large', tr('ov.large')],
-          ], cfg.desktopOverlayScale === undefined ? 'standard' : cfg.desktopOverlayScale,
-          (value) => setPref('desktopOverlayScale', value))),
-          h('p', { key: 'ov-scale-hint', className: 'dw-set-hint' }, tr('set.overlayScaleHint')),
+          ], cfg.desktopOverlaySize === 'tiny' || cfg.desktopOverlaySize === 'large'
+            ? cfg.desktopOverlaySize
+            : 'standard',
+          (value) => setPref('desktopOverlaySize', value))),
+          h('p', { key: 'ov-size-hint', className: 'dw-set-hint' }, tr('set.overlaySizeHint')),
           row('set.overlayThrough',
             sw('desktopOverlayClickThrough', cfg.desktopOverlayClickThrough === true, tr('set.overlayThrough'))),
           h('p', { key: 'ov-through-hint', className: 'dw-set-hint' },
@@ -1471,7 +1463,6 @@ window.__ModuleLoader__.load({
         const OVERLAY_PREF_KEYS = {
           desktopOverlay: 'show',
           desktopOverlaySize: 'size',
-          desktopOverlayScale: 'scale',
           /*
            * 鼠标穿透从浮窗的双击挪到设置页。
            * 双击进穿透原本是浮窗上唯一的鼠标入口，但用户要求"整个机器都能拖"——
@@ -1568,7 +1559,7 @@ window.__ModuleLoader__.load({
           if (remote === null || typeof remote !== 'object') return;
           // skin 从浮窗菜单改也要回灌到主界面皮肤，所以反向映射保留 skin → skin
           const REVERSE = {
-            show: 'desktopOverlay', size: 'desktopOverlaySize', scale: 'desktopOverlayScale',
+            show: 'desktopOverlay', size: 'desktopOverlaySize',
             skin: 'skin',
             clickThrough: 'desktopOverlayClickThrough',
             notify: 'desktopOverlayNotify',
@@ -1581,7 +1572,7 @@ window.__ModuleLoader__.load({
             const key = REVERSE[field];
             let value = remote[field];
             // 本地字段名和文件字段名眼瞅着一样，但类型不同：
-            // 文件里 size 是 'tiny'/'normal'，页面里是 desktopOverlaySize
+            // 文件里 size 是 'tiny'/'standard'/'large'，页面里是 desktopOverlaySize
             if ((key === 'desktopOverlay' || key === 'desktopOverlayClickThrough'
               || key === 'desktopOverlayNotify' || key === 'desktopOverlaySound'
               || key === 'desktopOverlayDnd') && typeof value !== 'boolean') continue;

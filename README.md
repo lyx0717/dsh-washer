@@ -261,8 +261,7 @@ dsh plugin --profile desktop remove @lyx0717/dsh-washer
 | `desktopOverlay` | `true` | 是否开本地 HTTP+WS 服务（浮窗的数据源） |
 | `desktopOverlayPort` | `0` | `0` = 系统分配，避免抢端口；日志里打印实际地址 |
 | `desktopOverlayAutoLaunch` | `true` | 宿主启动时是否自动拉起浮窗进程。关掉后端口还在，只是不自动开窗 |
-| `desktopOverlaySize` | `'normal'` | `'normal'` / `'tiny'`（极简：机器缩到 64px，正文不可读，只留灯与造型） |
-| `desktopOverlayScale` | `'standard'` | 正常档的缩放：`'compact'`(0.8) / `'standard'`(1.0) / `'large'`(1.2)；极简档不受影响 |
+| `desktopOverlaySize` | `'standard'` | 三档尺寸：`'tiny'`（极简：机器缩到 64px，正文不可读，只留灯与造型）/ `'standard'`（100%，基准宽 132px）/ `'large'`（130%，基准宽 172px）。设置页与右键菜单是同一组值 |
 | `desktopOverlayClickThrough` | `false` | 鼠标穿透，点穿到底下应用；`⌥⌘W` 恢复 |
 | `desktopOverlayNotify` | `false` | 弹系统通知（完成 / 故障 / 等你确认 / 卡住） |
 | `desktopOverlaySound` | `false` | 状态音效（完成 / 故障 / 等你确认） |
@@ -393,7 +392,7 @@ Web 端的 `deriveState` 吃的是宿主渲染进程里的投影，独立的桌�
 - 拖动可改位置，退出后记住
 - **鼠标穿透**在设置页或右键菜单里开关（穿透时半透明，点击落到下面应用）；
   原先的「双击切换」已不再有效——整机是拖拽区，dblclick 被拖拽吞掉
-- **右键**菜单：查看详情 / 打开 Harness 客户端 / 尺寸（紧凑·标准·大·极简）/ 皮肤（精密家电·复古奶油·工笔重彩·太空舱）/ 透明度 / 穿透开关 / 重连刷新 / 暂停监听 / 退出
+- **右键**菜单：查看详情 / 打开 Harness 客户端 / 尺寸（极简·标准 100%·大 130%）/ 皮肤（精密家电·复古奶油·工笔重彩·太空舱）/ 透明度 / 穿透开关 / 重连刷新 / 暂停监听 / 退出
 - **详情面板**（右键「查看详情」）：模型、速度、本轮耗时、token 与缓存命中、工具耗时排行，
   外加「最近几轮」回看（每轮成败 / 用时 / 工具数）和故障时一键复制错误码
 - 画面节奏跟着负载走：读单个文件慢悠悠，批量重构 / 跑命令转得更快、水花更旺
@@ -478,6 +477,15 @@ set ELECTRON_PATH=C:\path\to\electron.exe && electron\start.cmd
 > 调试别靠猜窗口坐标截图——用离屏 Electron 的 `capturePage()` 直接出图。
 
 ## 版本记录
+
+### 0.10.3
+
+**尺寸合并成三档：极简 / 标准 100% / 大 130%**
+- 设置页的「悬浮窗大小（正常·极简）」和「缩放（80/100/120）」合并成一行「尺寸」三档，
+  和浮窗右键菜单的「尺寸」子菜单完全对应
+- 设置页那行「缩放」此前拨了没反应：宿主 `writeOverlayPrefs` 只认 `size` 不认 `scale`，
+  值一直被丢掉；现在只剩一个 `desktopOverlaySize` 字段，三档都能真正生效
+- 旧的偏好文件自动迁移（`size:'normal'` + `scale:'large'` → `'large'`，其余 → `'standard'`）
 
 ### 0.10.2
 - 市场标题 / 描述 / 关键词补上「桌宠」「桌面宠物」「挂件」，搜这些词也能找到；npm `keywords` 同步

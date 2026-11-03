@@ -41,12 +41,19 @@ const ENDPOINT_FILE = process.env.DSH_WASHER_ENDPOINT_FILE
  * tiny 是「极简态」：只剩指示灯和一个角标，气泡整个不渲染。
  */
 /**
- * 尺寸档位。
+ * 尺寸档位：三档，设置页、右键菜单、偏好文件共用同一组值。
  *
- * normal = 基准宽度 × 缩放倍数；tiny 是独立的「极简态」（只留指示灯，不是
- * 缩放，所以不进 SCALES）。窗口高度由「机身宽 × 机身比例 + 上下留白」反算，
- * 机身比例必须和 client.template.js 里的 NATURAL.precision 一致，否则机器
- * 要么被窗口裁掉、要么浮在半空。
+ *   tiny      极简态，独立形态（只留指示灯），不是缩放
+ *   standard  基准宽度 132px（= 100%）
+ *   large     基准宽度 × 1.3（= 130%）
+ *
+ * 以前是「极简 + 三档缩放（0.8/1.0/1.2）」两套概念叠着：设置页有一行独立
+ * 的「缩放」，宿主却没把它写进偏好文件，于是那一行怎么拨都没反应。合并成
+ * 一个尺寸字段后，三处只剩一种说法。
+ *
+ * 窗口高度由「机身宽 × 机身比例 + 上下留白」反算，机身比例必须和
+ * client.template.js 里的 NATURAL.precision 一致，否则机器要么被窗口裁掉、
+ * 要么浮在半空。
  */
 const TINY_SIZE = { width: 76, height: 96 };
 const BASE_NORMAL_WIDTH = 132;
@@ -54,7 +61,8 @@ const BASE_NORMAL_WIDTH = 132;
 const PRECISION_ASPECT = 425 / 330;
 /** 机身左右各留 10px 给投影/状态光，贴着窗口边会被裁掉 */
 const BODY_INSET = 10;
-const SCALES = { compact: 0.8, standard: 1, large: 1.2 };
+/** 基准宽度之外的缩放倍数；没有 tiny——极简是独立形态，不进这张表 */
+const SCALES = { standard: 1, large: 1.3 };
 /**
  * 机身上方预留的「气泡通道」高度（CSS 像素）。
  * 通知气泡从机顶向上冒出，需要一块平时透明、不参与拖拽的顶部空间。
@@ -63,23 +71,37 @@ const SCALES = { compact: 0.8, standard: 1, large: 1.2 };
  */
 const BUBBLE_LANE = 74;
 
-let scalePref = 'standard';
-
 function normalSize() {
-  const k = SCALES[scalePref] === undefined ? 1 : SCALES[scalePref];
+  const k = SCALES[sizeMode] === undefined ? 1 : SCALES[sizeMode];
   const width = Math.max(80, Math.round(BASE_NORMAL_WIDTH * k));
   const height = Math.round((width - BODY_INSET * 2) * PRECISION_ASPECT + BODY_INSET * 2 + BUBBLE_LANE);
   return { width, height };
 }
 
 /*
- * 尺寸**不能**用一组常量。窗口会切档（normal × 缩放 / tiny 76x96），
+ * 尺寸**不能**用一组常量。窗口会切档（三档 / tiny 76x96），
  * 曾经这里固定写 SIZES.normal，结果极简态下贴边、详情面板定位全按
  * normal 算：贴边差 56px，详情面板在机身右侧错开一大截。
  * 一律用 winSize() 取当前档位，别再引回常量。
  */
 function winSize() {
   return sizeMode === 'tiny' ? TINY_SIZE : normalSize();
+}
+
+/**
+ * 页面只分「极简 / 正常」两态：缩放是靠窗口物理尺寸做的，
+ * 页面里的 330×425 机身会跟着窗口等比放大，不需要第三态。
+ */
+function pageSize() {
+  return sizeMode === 'tiny' ? 'tiny' : 'normal';
+}
+
+/** 尺寸值收敛：认识的直接过，旧文件里的 'normal'+scale 迁到三档 */
+function normalizeSize(value, legacyScale) {
+  if (value === 'tiny' || value === 'standard' || value === 'large') return value;
+  // 0.10.2 及以前的偏好文件是「size:'normal' + scale:'compact|standard|large'」
+  if (legacyScale === 'large') return 'large';
+  return 'standard';
 }
 /** 详情面板尺寸 */
 const DETAIL_WIDTH = 260;
@@ -101,8 +123,8 @@ let trayReady = false;
 /** 鼠标穿透状态：true 时点击直接穿到底下的应用 */
 /** 角落按钮的矩形（窗口内 CSS 像素）；穿透模式下只有这块接收鼠标 */
 let clickThrough = false;
-/** 当前尺寸档位：'normal' | 'tiny' */
-let sizeMode = 'normal';
+/** 当前尺寸档位：'tiny' | 'standard' | 'large'（三档，和设置页/菜单一致） */
+let sizeMode = 'standard';
 /** 当前皮肤 */
 let skin = 'precision';
 /**
@@ -942,7 +964,7 @@ function animateBounds(target) {
  */
 function applySizeToWindow() {
   if (win === null || win.isDestroyed()) return;
-  win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark, paused, opacity });
+  win.webContents.send('washer:prefs', { size: pageSize(), skin, dark: themeDark, paused, opacity });
   const size = winSize();
   // 宽度变了，贴边的窗口要跟着挪，否则会被屏幕边缘裁掉
   const [x, y] = win.getPosition();
@@ -957,8 +979,14 @@ function applySizeToWindow() {
   animateBounds({ x: Math.round(nx), y: Math.round(ny), width: size.width, height: size.height });
 }
 
-function setSizeMode(mode) {
-  const next = mode === 'tiny' ? 'tiny' : 'normal';
+/**
+ * 切换尺寸档（三档，和设置页/右键菜单同一组值）。
+ *
+ * 窗口/机身/留白一起等比缩放，黑条字号写在机身坐标系里会自动跟着缩，
+ * 所以三档不需要各自再调字号；从极简切回标准/大时也走这里。
+ */
+function setSize(name) {
+  const next = name === 'tiny' || name === 'large' ? name : 'standard';
   if (next === sizeMode) {
     if (win === null || win.isDestroyed()) return;
     const [w, h] = win.getSize();
@@ -968,26 +996,6 @@ function setSizeMode(mode) {
   sizeMode = next;
   writeFloatPrefs({ size: next });
   notifyHost({ size: next });
-  applySizeToWindow();
-}
-
-/**
- * 缩放档位。只作用于 normal 档；选了缩放就从极简切回正常档。
- * 窗口/机身/留白一起等比缩放，黑条字号写在机身坐标系里会自动跟着缩，
- * 所以三档不需要各自再调字号。
- */
-function setScale(name) {
-  const next = SCALES[name] === undefined ? 'standard' : name;
-  if (next === scalePref && sizeMode === 'normal') {
-    if (win === null || win.isDestroyed()) return;
-    const [w, h] = win.getSize();
-    const size = winSize();
-    if (w === size.width && h === size.height) return;
-  }
-  scalePref = next;
-  sizeMode = 'normal';
-  writeFloatPrefs({ size: 'normal', scale: next });
-  notifyHost({ size: 'normal', scale: next });
   applySizeToWindow();
 }
 
@@ -1023,7 +1031,7 @@ function setSkin(next) {
   writeFloatPrefs({ skin });
   notifyHost({ skin });
   if (win === null || win.isDestroyed()) return;
-  win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark });
+  win.webContents.send('washer:prefs', { size: pageSize(), skin, dark: themeDark });
 }
 
 /**
@@ -1036,7 +1044,7 @@ function setThemeDark(next) {
   if (nextDark === themeDark) return;
   themeDark = nextDark;
   if (win === null || win.isDestroyed()) return;
-  win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark });
+  win.webContents.send('washer:prefs', { size: pageSize(), skin, dark: themeDark });
 }
 
 /**
@@ -1160,7 +1168,7 @@ function setPaused(on) {
   writeFloatPrefs({ paused: next });
   notifyHost({ paused: next });
   if (win !== null && !win.isDestroyed()) {
-    win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark, paused, opacity });
+    win.webContents.send('washer:prefs', { size: pageSize(), skin, dark: themeDark, paused, opacity });
   }
 }
 
@@ -1196,7 +1204,7 @@ function setOpacity(next) {
   writeFloatPrefs({ opacity: v });
   notifyHost({ opacity: v });
   if (win !== null && !win.isDestroyed()) {
-    win.webContents.send('washer:prefs', { size: sizeMode, skin, dark: themeDark, paused, opacity });
+    win.webContents.send('washer:prefs', { size: pageSize(), skin, dark: themeDark, paused, opacity });
   }
 }
 
@@ -1219,11 +1227,9 @@ function showMenu() {
     {
       label: '尺寸',
       submenu: [
-        { label: (sizeMode !== 'tiny' && scalePref === 'compact' ? '✓ ' : '') + '紧凑（80%）', click: () => setScale('compact') },
-        { label: (sizeMode !== 'tiny' && scalePref === 'standard' ? '✓ ' : '') + '标准（100%）', click: () => setScale('standard') },
-        { label: (sizeMode !== 'tiny' && scalePref === 'large' ? '✓ ' : '') + '大（120%）', click: () => setScale('large') },
-        { type: 'separator' },
-        { label: (sizeMode === 'tiny' ? '✓ ' : '') + '极简（只留指示灯）', click: () => setSizeMode('tiny') },
+        { label: (sizeMode === 'tiny' ? '✓ ' : '') + '极简（只留指示灯）', click: () => setSize('tiny') },
+        { label: (sizeMode === 'standard' ? '✓ ' : '') + '标准（100%）', click: () => setSize('standard') },
+        { label: (sizeMode === 'large' ? '✓ ' : '') + '大（130%）', click: () => setSize('large') },
       ],
     },
     {
@@ -1284,8 +1290,10 @@ function watchPrefs() {
       const p = readFloatPrefs();
       if (p === null) return;
       const prefs = p === undefined ? {} : p;
-      const nextSize = prefs.size === 'tiny' || prefs.size === 'normal' ? prefs.size : sizeMode;
-      const nextScale = SCALES[prefs.scale] !== undefined ? prefs.scale : scalePref;
+      // 三档尺寸：旧文件是 size:'normal' + scale，normalizeSize 负责迁移
+      const nextSize = prefs.size === undefined && prefs.scale === undefined
+        ? sizeMode
+        : normalizeSize(prefs.size, prefs.scale);
       const nextSkin = typeof prefs.skin === 'string' ? prefs.skin : skin;
       /*
        * show 也要跟。宿主在启动时按设置决定拉不拉进程，但进程起来之后
@@ -1316,8 +1324,7 @@ function watchPrefs() {
       // 暂停监听 / 透明度同一条路：设置页或菜单改 → 写文件 → 这里读到就应用
       const nextPaused = typeof prefs.paused === 'boolean' ? prefs.paused : paused;
       const nextOpacity = typeof prefs.opacity === 'number' ? prefs.opacity : opacity;
-      if (nextSize !== sizeMode) setSizeMode(nextSize);
-      if (nextScale !== scalePref) setScale(nextScale);
+      if (nextSize !== sizeMode) setSize(nextSize);
       if (nextSkin !== skin) setSkin(nextSkin);
       if (nextShow !== visible) setVisible(nextShow);
       if (nextThrough !== clickThrough) setClickThrough(nextThrough);
@@ -1344,10 +1351,9 @@ app.whenReady().then(() => {
   const prefs = floatPrefsOrEmpty();
   const argSize = argValue('--size');
   const argSkin = argValue('--skin');
-  sizeMode = argSize === 'tiny' || argSize === 'normal'
+  sizeMode = argSize === 'tiny' || argSize === 'standard' || argSize === 'large'
     ? argSize
-    : (prefs.size === 'tiny' || prefs.size === 'normal' ? prefs.size : 'normal');
-  scalePref = SCALES[prefs.scale] !== undefined ? prefs.scale : 'standard';
+    : normalizeSize(prefs.size, prefs.scale);
   skin = SKINS.indexOf(prefs.skin) >= 0 ? prefs.skin : 'precision';
   if (typeof argSkin === 'string' && argSkin !== '') {
     skin = SKINS.indexOf(argSkin) >= 0 ? argSkin : skin;
@@ -1378,7 +1384,7 @@ app.whenReady().then(() => {
    *
    * 这一步必须排在 watchPrefs() **之前**。早先 watchPrefs 在前面，
    * 拿不到锁的那个副本在 app.quit() 之前已经挂上了偏好文件的轮询，
-   * 一旦这几十毫秒里文件有变动，它会抢着 setSizeMode/setSkin ——
+   * 一旦这几十毫秒里文件有变动，它会抢着 setSize/setSkin ——
    * 那些函数会把值写回文件并 notifyHost，等于让一个正在退出的副本
    * 去改主人的窗口配置。
    */
@@ -1439,8 +1445,7 @@ app.whenReady().then(() => {
     clickThrough,
     endpoint: await readEndpoint(),
     escapeAccelerator: ESCAPE_ACCELERATOR,
-    size: sizeMode,
-    scale: scalePref,
+    size: pageSize(),
     skin,
     dark: themeDark,
     visible,
@@ -1473,7 +1478,7 @@ app.whenReady().then(() => {
      */
     else if (kind === 'stalled') notify('咕噜咕噜…转不动了', text || '有一阵没进展了');
   });
-  ipcMain.on('washer:set-size', (_event, mode) => setSizeMode(mode));
+  ipcMain.on('washer:set-size', (_event, mode) => setSize(mode));
   ipcMain.on('washer:set-skin', (_event, name) => setSkin(name));
   ipcMain.on('washer:set-visible', (_event, on) => setVisible(on === true));
   ipcMain.on('washer:show-menu', () => showMenu());

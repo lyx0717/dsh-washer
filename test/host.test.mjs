@@ -947,13 +947,14 @@ test('偏好双向同步：非法值写不进去，读回来的仍是上一个�
   const api = apply(ctx, { desktopOverlay: true, desktopOverlayPort: 0 });
   await waitForPort(api);
 
+  // 旧客户端写的是 'normal'，宿主落成 'standard'（三档尺寸里的 100%）
   api.syncOverlayPrefs({ size: 'normal', skin: 'pixel' });
   // 塞一堆脏东西
   api.syncOverlayPrefs({ size: 'huge', skin: 'DROP TABLE', show: 'yes' });
 
   const { readOverlayPrefs } = await import('../index.js');
   const current = readOverlayPrefs();
-  assert.equal(current.size, 'normal', '非法 size 不该覆盖合法值');
+  assert.equal(current.size, 'standard', '非法 size 不该覆盖合法值（旧的 normal 迁成 standard）');
   assert.equal(current.skin, 'pixel', '非法 skin 不该覆盖合法值');
 
   ctx.dispose();

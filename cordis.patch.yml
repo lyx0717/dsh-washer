@@ -28,10 +28,9 @@
         desktopOverlayPort: 0
         # 悬浮窗跟着宿主一起启停：关掉的话端口还开着，但不会自动拉窗。
         desktopOverlayAutoLaunch: true
-        # 启动档位：normal / tiny（tiny 只留指示灯）
-        desktopOverlaySize: normal
-        # 正常档的缩放：compact(0.8) / standard(1.0) / large(1.2)；极简档不受影响
-        desktopOverlayScale: standard
+        # 悬浮窗尺寸三档：tiny（极简，只留指示灯）/ standard（100%）/ large（130%）
+        # 和设置页、浮窗右键菜单是同一组值；没有单独的「缩放」项
+        desktopOverlaySize: standard
         # 鼠标穿透。开着时点击落到下面的应用，⌥⌘W 恢复。
         desktopOverlayClickThrough: false
         # 洗完弹系统通知：只报「完成」「故障」「等你确认」「卡住」

@@ -1,6 +1,6 @@
 {
   "name": "@lyx0717/dsh-washer",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "滚筒洗衣机 · 常驻桌面的桌面宠物，用洗衣机运转状态显示 Agent 的工作状态（四套皮肤 / 多会话 / 桌面悬浮窗，macOS 与 Windows）",
   "type": "module",
   "icon": "./icon.svg",
