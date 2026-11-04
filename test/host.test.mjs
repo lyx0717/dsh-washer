@@ -56,7 +56,6 @@ function freshState() {
     running: false,
     usage: null,
     model: null,
-    lastUsage: null,
     tokenSamples: [],
     doneUntil: 0,
   };

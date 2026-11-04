@@ -38,27 +38,16 @@ contextBridge.exposeInMainWorld('washerHost', {
    * 页面只管在状态边沿上报一次，不关心具体响了什么。
    */
   notify: (kind, text) => ipcRenderer.send('washer:notify', { kind: kind, text: text }),
-  /** 切换尺寸档位：'normal' | 'tiny' */
-  setSize: (mode) => ipcRenderer.send('washer:set-size', mode),
-  /** 换肤 */
-  setSkin: (name) => ipcRenderer.send('washer:set-skin', name),
   /** 订阅偏好变化（尺寸 / 皮肤） */
   onPrefs: (fn) => {
     const handler = (_event, prefs) => fn(prefs);
     ipcRenderer.on('washer:prefs', handler);
     return () => ipcRenderer.removeListener('washer:prefs', handler);
   },
-  /** 打开/关闭详情面板 */
-  openDetail: () => ipcRenderer.send('washer:open-detail'),
   /** 详情面板点会话行：固定/切换宿主视图会话（null = 回到跟随） */
   pinSession: (sessionId) => ipcRenderer.send('washer:pin-session', sessionId || null),
+  /** 关闭详情面板 */
   closeDetail: () => ipcRenderer.send('washer:close-detail'),
-  /** 订阅"快捷键注册失败"的通知 */
-  onEscapeUnavailable: (fn) => {
-    const handler = (_event, accel) => fn(accel);
-    ipcRenderer.on('washer:escape-unavailable', handler);
-    return () => ipcRenderer.removeListener('washer:escape-unavailable', handler);
-  },
   /** 订阅穿透状态变化，返回取消订阅函数 */
   onClickThroughChange: (fn) => {
     const handler = (_event, on) => fn(on);

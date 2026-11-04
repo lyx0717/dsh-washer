@@ -98,8 +98,6 @@
   .row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
   .row .k { color: var(--dim); flex: none; }
   .row .v { font-variant-numeric: tabular-nums; text-align: right; min-width: 0; }
-  /* 模型名可能很长，截断 + 悬停看全名 */
-  .row .v.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /*
    * 模型名折两行：名字在上，provider 前缀在下。
    * 面板这行只装得下 17~18 个字符，而 group/deepseek-v4.1-flash 有 24 个，

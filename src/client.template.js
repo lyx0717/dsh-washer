@@ -786,7 +786,7 @@ window.__ModuleLoader__.load({
         if (typeof props.washerSetPref === 'function') props.washerSetPref(key, value);
       }, [props.washerSetPref]);
       // 注册 slot 时传了 locale: LOCALE_NS，渲染器给的 t 已是本命名空间内的裸 key
-      const { t, tr } = useTr(props);
+      const { tr } = useTr(props);
 
       // 宿主信号统一从 useDockSignals 取（契约集中点，见其定义处）
       const { running, removed, pending, runningCalls, partial, nodes, turnTimings, outline, trajectory } = useDockSignals(props);
@@ -1124,7 +1124,7 @@ window.__ModuleLoader__.load({
     }
 
     function WasherSettings(props) {
-      const { t, tr } = useTr(props);
+      const { tr } = useTr(props);
       const cfg = readConfig(props);
       usePrefRevision(props);
       const caps = useCapabilities();
@@ -1306,7 +1306,7 @@ window.__ModuleLoader__.load({
       const { useSessions, useSessionStatus } = props;
       const cfg = readConfig(props);
       usePrefRevision(props);
-      const { t, tr } = useTr(props);
+      const { tr } = useTr(props);
 
       // 与宿主 DocumentTitle 同一套取法：retainedBy.mainView > 0 的那个就是当前会话
       const sessionId = useSessions((state) => {

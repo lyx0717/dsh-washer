@@ -336,21 +336,6 @@
     max-height: 30px;
   }
   /*
-   * 悬停命中区扩大到紧贴气泡边缘，但不改布局。
-   *
-   * 气泡实际只有 ~24px 高（padding 3px 上下 + 11px 字号），鼠标稍微偏一点就
-   * 离开，展开的列表会一路闪。不能靠加 padding 撑大——那会直接撑宽气泡，
-   * 把圆点的空间吃掉。
-   *
-   * 只在**纵向**扩 10px、横向不扩：横向放宽会让本来落在气泡旁边的鼠标也算悬停，
-   * 那就不是"悬停区域只有气泡"了。
-   */
-  .bubble::after {
-    content: '';
-    position: absolute;
-    inset: -10px 0;
-  }
-  /*
    * 镜面高光层：上半部一道白色渐变，往下衰减到透明。
    *
    * 必须盖在文字底下（z-index 负 + 气泡自己 isolation），否则状态字被蒙上一层白。
@@ -908,7 +893,6 @@
     <span class="st" id="st" data-s="off">未连接</span>
     <span class="tm" id="tm">--:--</span>
     <span class="dots" id="dots" role="group" aria-label="会话"></span>
-    <!-- 悬停气泡后向下平铺的全部会话。挂在 .bubble 里是为了跟着气泡定位 -->
   </div>
   <!--
     本地完成横幅。

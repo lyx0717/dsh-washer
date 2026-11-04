@@ -16,17 +16,8 @@
    * 这里把自己的外边距吃掉并把自身靠左对齐，保证停靠条永远贴着这一行的最左侧。
    * 只对 dock 座位生效——header 座位在右上角、overlay 座位是浮层，各有各的位置。
    */
-  --dw-card: var(--dsw-alias-bg-layer-1, #ffffff);
-  --dw-line: var(--dsw-alias-border-l1, #d8dfe7);
   --dw-t1: var(--dsw-alias-label-primary, #1b2430);
   --dw-t2: var(--dsw-alias-label-secondary, #5b6674);
-  --dw-hover: var(--dsw-alias-interactive-bg-hover, rgba(40, 60, 84, 0.05));
-  --dw-shadow: var(--dsw-shadow-lv2, 0 1px 2px rgba(40, 60, 84, 0.06));
-  --dw-run: var(--dsw-alias-state-business-primary, #2f86d6);
-  --dw-wait: var(--dsw-alias-state-warn-primary, #d99a1f);
-  --dw-err: var(--dsw-alias-state-error-primary, #d94a4f);
-  --dw-ok: var(--dsw-alias-state-success-primary, #2f9e63);
-  --dw-off: var(--dsw-alias-label-tertiary, #9aa6b2);
 
   /* 洗衣机材质（精密家电皮肤，亮色） */
   --dw-body-1: #ffffff;
@@ -120,14 +111,6 @@
 .dsh-washer[data-state='off'] { --dw-sig: var(--dw-sig-off); }
 
 /* ---------- S 档：停靠条 322×52 ---------- */
-
-.dw-root {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
 
 /*
  * 停靠条三档（紧凑 / 迷你 / 极简），按窗口宽度自动切换。
@@ -256,10 +239,6 @@
 @keyframes dw-blink {
   0%, 60% { opacity: 1; }
   61%, 100% { opacity: 0.3; }
-}
-@keyframes dw-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.82); }
 }
 
 /* 降级：尊重系统「减少动态效果」
@@ -476,19 +455,6 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* 标题行：洗衣机 logo + 标题 */
-.dw-set-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.dw-set-logo {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  flex: none;
-}
-
 .dw-set-intro {
   margin: 2px 0 8px;
   font-size: 13px;
@@ -521,16 +487,6 @@
   font-size: 14px;
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
-}
-
-/* 控件那一栏不许被标签挤扁：胶囊多的时候可以换行，但不能压缩自身 */
-.dw-set-row > .dw-seg {
-  flex: none;
-  justify-content: flex-end;
-}
-
-.dw-set-row > [role='switch'] {
-  flex: none;
 }
 
 /* 说明文字：作为行下方的小字，左边对齐、不和控件抢位置 */

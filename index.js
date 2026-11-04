@@ -218,8 +218,6 @@ function createSessionState() {
     usage: null,
     /** 模型名，来自 assistant/message.data.message.source.model */
     model: null,
-    /** 上一份 usage 与对应时刻，用来算增量速度 */
-    lastUsage: null,
     /** 最近的 (时间, 累计输出 token) 采样，用于滑动窗口算速度 */
     tokenSamples: [],
   };
@@ -348,8 +346,8 @@ function pushNode(state, node) {
  */
 let doneHoldMs = DEFAULT_DONE_HOLD_MS;
 
-/** 测试和 apply 用：设定「洗完了」保持多久 */
-export function setDoneHoldMs(ms) {
+/** apply 用：设定「洗完了」保持多久 */
+function setDoneHoldMs(ms) {
   doneHoldMs = Number.isFinite(ms) && ms >= 0 ? ms : DEFAULT_DONE_HOLD_MS;
 }
 
@@ -578,7 +576,6 @@ export function foldEvent(state, event, now) {
       if (src && typeof src.model === 'string') state.model = src.model;
       const u = data.usage;
       if (u && typeof u.outputTokens === 'number') {
-        state.lastUsage = state.usage === null ? null : { usage: state.usage, at: now };
         state.usage = {
           input: num(u.inputTokens),
           output: num(u.outputTokens),
@@ -1095,7 +1092,7 @@ function overlayPrefsFile() {
  * 原子写：先写同目录临时文件，再 rename 覆盖。
  * 同目录是必须的——跨文件系统 rename 会退化成复制+删除，不再原子。
  */
-export function writeFileAtomic(file, content, mode = 0o600) {
+function writeFileAtomic(file, content, mode = 0o600) {
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     writeFileSync(tmp, content, { mode });
@@ -1139,6 +1136,12 @@ function readPrefsFile(file) {
   }
 }
 
+/**
+ * 读当前偏好。同步、纯读，失败返回空对象。
+ *
+ * 单独抽出来是因为它现在有两个消费者：设置页的初始状态、SSE 推送的载荷。
+ * 两边必须看到同一份数据，不能一边用文件、一边用内存副本。
+ */
 export function readOverlayPrefs() {
   const parsed = readPrefsFile(overlayPrefsFile());
   return parsed === undefined || parsed === null ? {} : parsed;
@@ -1195,13 +1198,7 @@ export function writeOverlayPrefs(patch) {
   return writeFileAtomic(file, JSON.stringify(next), 0o600) ? next : null;
 }
 
-/**
- * 读当前偏好。同步、纯读，失败返回空对象。
- *
- * 单独抽出来是因为它现在有两个消费者：设置页的初始状态、SSE 推送的载荷。
- * 两边必须看到同一份数据，不能一边用文件、一边用内存副本。
- */
-function spawnOverlay(ctx, opts) {
+function spawnOverlay(opts) {
   const binary = electronBinary();
   // 先判 null：existsSync(null) 在 Node 24 上会打 DEP0187 弃用警告（每次都刷一条日志）
   if (binary === null || !existsSync(binary)) return null;
@@ -1394,7 +1391,7 @@ export function apply(ctx, config) {
   function launchOverlay() {
     if (overlayChild !== null) return true;
     if (cfg.desktopOverlayAutoLaunch === false) return false;
-    overlayChild = spawnOverlay(ctx, {
+    overlayChild = spawnOverlay({
       // 三档尺寸；旧配置里可能是 'normal'（0.10.2 及以前），落成 standard
       size: cfg.desktopOverlaySize === 'tiny' || cfg.desktopOverlaySize === 'large'
         ? cfg.desktopOverlaySize

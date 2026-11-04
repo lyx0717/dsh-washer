@@ -9,9 +9,9 @@
  * 但 Electron 主进程入口必须是 CommonJS。改后缀是让两者共存最省事的办法。
  */
 const { app, BrowserWindow, globalShortcut, ipcMain, Menu, Notification, screen, session, shell } = require('electron');
-const { readFileSync, existsSync } = require('node:fs');
+const { readFileSync } = require('node:fs');
 const { homedir } = require('node:os');
-const { join, dirname } = require('node:path');
+const { join } = require('node:path');
 
 /*
  * Windows 分支。
@@ -555,7 +555,6 @@ function updateEscapeShortcut() {
           win.setIgnoreMouseEvents(false, { forward: true });
           win.setFocusable(true);
           win.webContents.send('washer:click-through', false);
-          win.webContents.send('washer:escape-unavailable', ESCAPE_ACCELERATOR);
         }
       }
     }
@@ -585,7 +584,7 @@ function createWindow() {
      * Windows：光 skipTaskbar 藏任务栏，Alt+Tab 列表里还会出现——
      * 用户切个窗口就看到一台洗衣机混在文档里。type:'toolbar' 会加上
      * WS_EX_TOOLWINDOW，Alt+Tab 与任务栏都排除；实测和 transparent /
-     * frame:false 共存没问题（见 docs/spike-windows.md）。
+     * frame:false 共存没问题（见 docs/windows.md）。
      */
     ...(IS_WIN ? { type: 'toolbar' } : {}),
     // 置顶但不抢焦点：悬浮窗抢焦点会打断用户正在打的字
@@ -1438,13 +1437,10 @@ app.whenReady().then(() => {
   screen.on('display-added', reclampWindow);
   screen.on('display-metrics-changed', reclampWindow);
 
-  ipcMain.on('washer:set-click-through', (_event, on) => setClickThrough(on));
   ipcMain.on('washer:reduce-motion', (_event, on) => { reduceMotion = on === true; });
-  ipcMain.on('washer:toggle-click-through', () => setClickThrough(!clickThrough));
   ipcMain.handle('washer:state', async () => ({
     clickThrough,
     endpoint: await readEndpoint(),
-    escapeAccelerator: ESCAPE_ACCELERATOR,
     size: pageSize(),
     skin,
     dark: themeDark,
@@ -1478,13 +1474,9 @@ app.whenReady().then(() => {
      */
     else if (kind === 'stalled') notify('咕噜咕噜…转不动了', text || '有一阵没进展了');
   });
-  ipcMain.on('washer:set-size', (_event, mode) => setSize(mode));
-  ipcMain.on('washer:set-skin', (_event, name) => setSkin(name));
-  ipcMain.on('washer:set-visible', (_event, on) => setVisible(on === true));
   ipcMain.on('washer:show-menu', () => showMenu());
   ipcMain.on('washer:show-session-menu', (_event, payload) => showSessionMenu(payload));
   ipcMain.on('washer:pin-session', (_event, id) => pinSessionAtHost(id || null));
-  ipcMain.on('washer:open-detail', () => openDetail());
   ipcMain.on('washer:close-detail', () => closeDetail());
   /*
    * 退出前先藏窗口，避免退出动画期间窗口还杵在那儿。

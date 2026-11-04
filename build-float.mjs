@@ -45,38 +45,6 @@ const SKIN_BODIES = MANIFEST.map(
   (s) => src(s.body).trimEnd() + '\n  SKIN_BODY_FNS.' + s.name + ' = ' + s.name + 'BodyHtml;',
 ).join('\n');
 /**
- * 从源码里抠一个对象字面量，靠**括号配平**找结尾。
- *
- * 不能用 /\{[\s\S]*?\};/ 这种非贪婪正则：碰到对象里有方法体
- * （`get pixel() { ... }`）就会在第一个 `};` 处提前截断——那是方法体的
- * 结尾，不是对象的。截断后生成的 float.machines.js 整段语法错误，
- * 浏览器里 window.WasherMachines 变 undefined，浮窗就画不出洗衣机。
- */
-function grabObject(body, marker, label) {
-  const start = body.indexOf(marker);
-  if (start < 0) throw new Error(`找不到 ${label}`);
-  const open = body.indexOf('{', start);
-  if (open < 0) throw new Error(`${label} 没有对象字面量`);
-  let depth = 0;
-  let inString = null;
-  for (let i = open; i < body.length; i += 1) {
-    const ch = body[i];
-    if (inString !== null) {
-      if (ch === '\\') { i += 1; continue; }
-      if (ch === inString) inString = null;
-      continue;
-    }
-    if (ch === '\'' || ch === '"' || ch === '`') { inString = ch; continue; }
-    if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return body.slice(open, i + 1);
-    }
-  }
-  throw new Error(`${label} 没有闭合`);
-}
-
-/**
  * 浮窗只用到 NATURAL[skin].w / .h 两个数。
  *
  * 源码里的 NATURAL 是**带 getter 的对象**，getter 读 SKIN_REGISTRY ——
@@ -219,12 +187,6 @@ const out = `/**
     return node;
   }
 
-  function text(tag, cls, str) {
-    var node = el(tag, cls);
-    node.textContent = str;
-    return node;
-  }
-
   /**
    * 定宽缩放：造型按原始尺寸画，整体 scale 到目标宽度。
    *
@@ -233,7 +195,7 @@ const out = `/**
    * 缩放会糊一点，但 132px 宽下看得清轮廓和颜色就够了——浮窗要的是
    * "一眼认出这是什么机器"，不是看清旋钮上的刻度。
    */
-  function frame(skin, state, width, inner) {
+  function frame(skin, width, inner) {
     var natural = NATURAL[skin];
     var scale = width / natural.w;
     var box = el('div', 'dw-frame');
@@ -258,7 +220,7 @@ const out = `/**
     var host = el('div', 'dw-px');
     host.innerHTML = MACHINE_SVG;
     host.style.lineHeight = '0';
-    return frame('pixel', state, width, host);
+    return frame('pixel', width, host);
   }
 
   /* 所有皮肤：机身是一份 HTML 字符串，直接灌进容器再套缩放框 */
@@ -274,7 +236,7 @@ const out = `/**
       clothesCount: Array.isArray(clothesIds) && clothesIds.length > 0 ? clothesIds.length : undefined,
       stateText: stateText,
     });
-    return frame(skin, state, width, host);
+    return frame(skin, width, host);
   }
 
   /**
