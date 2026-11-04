@@ -388,11 +388,11 @@ export const VISUAL = {
 /**
  * 一个时长。
  *
- * 默认 45 秒：低于这个数多半是模型在长思考或一个大工具（构建、测试、
- * 网络请求）正在跑，报"卡住"是误报；超过它，用户盯着转圈却看不到任何
- * 输出，就是真的需要一句真话的时候。
+ * 默认 90 秒：长思考（尤其带 reasoning 的模型）连续几十秒出不了字是常态，
+ * 45 秒那档几乎每轮都要响一次"转不动了"——误报一多，用户就不再信这个信号。
+ * 放到 90 秒，仍然能在真的没动静时给一句真话。
  */
-const STALL_AFTER_MS = 45000;
+const STALL_AFTER_MS = 90000;
 
 /**
  * 判断"看着在转、其实没动静"。
@@ -401,17 +401,19 @@ const STALL_AFTER_MS = 45000;
  * 洗衣机转得再好看，回答不了用户真正想问的那句"它是不是死了"。
  *
  * 口径（宁可漏报不误报）：
- *   1. 只在真的该有产出时才判——running 且状态是 washing/rinsing/spinning。
- *      starting 是新轮刚起，draining 是压缩（本来就不出字），都不算。
+ *   1. 只在真的该有产出时才判——washing / spinning。starting 是新轮刚起，
+ *      rinsing 是工具正在跑（副标题已经写着在跑哪个工具，跑得久不等于死了），
+ *      draining 是压缩（本来就不出字），都不算。
  *   2. 先要求"曾经有过产出"（samples 里至少两个点）。第一轮还没吐第一个字
- *      的长思考不该被叫卡住。
+ *      的长思考不该被叫卡住。宿主侧采样按轮清空，这条件同时挡住了"新一轮
+ *      刚起就把上一轮的静默时长算进来"的误报。
  *   3. 距最后一次采样（samples 按时间正序追加，末点即最新）已过超过
- *      STALL_AFTER_MS 才算。至少两点保证"曾经有过产出"，见第 2 条。
+ *      STALL_AFTER_MS 才算。
  *
  * @returns {number | null} 卡了多久（毫秒）；没卡返回 null。
  */
 export function stalledForOf(samples, state, now, thresholdMs = STALL_AFTER_MS) {
-  if (state !== 'washing' && state !== 'rinsing' && state !== 'spinning') return null;
+  if (state !== 'washing' && state !== 'spinning') return null;
   if (!Array.isArray(samples) || samples.length < 2) return null;
   const last = samples[samples.length - 1];
   // last.at 必须是有限数：采样点可能来自序列化/异常路径，若 at 缺失或是字符串，

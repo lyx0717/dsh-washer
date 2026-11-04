@@ -405,11 +405,11 @@ const VISUAL = {
 /**
  * 一个时长。
  *
- * 默认 45 秒：低于这个数多半是模型在长思考或一个大工具（构建、测试、
- * 网络请求）正在跑，报"卡住"是误报；超过它，用户盯着转圈却看不到任何
- * 输出，就是真的需要一句真话的时候。
+ * 默认 90 秒：长思考（尤其带 reasoning 的模型）连续几十秒出不了字是常态，
+ * 45 秒那档几乎每轮都要响一次"转不动了"——误报一多，用户就不再信这个信号。
+ * 放到 90 秒，仍然能在真的没动静时给一句真话。
  */
-const STALL_AFTER_MS = 45000;
+const STALL_AFTER_MS = 90000;
 
 /**
  * 判断"看着在转、其实没动静"。
@@ -418,17 +418,19 @@ const STALL_AFTER_MS = 45000;
  * 洗衣机转得再好看，回答不了用户真正想问的那句"它是不是死了"。
  *
  * 口径（宁可漏报不误报）：
- *   1. 只在真的该有产出时才判——running 且状态是 washing/rinsing/spinning。
- *      starting 是新轮刚起，draining 是压缩（本来就不出字），都不算。
+ *   1. 只在真的该有产出时才判——washing / spinning。starting 是新轮刚起，
+ *      rinsing 是工具正在跑（副标题已经写着在跑哪个工具，跑得久不等于死了），
+ *      draining 是压缩（本来就不出字），都不算。
  *   2. 先要求"曾经有过产出"（samples 里至少两个点）。第一轮还没吐第一个字
- *      的长思考不该被叫卡住。
+ *      的长思考不该被叫卡住。宿主侧采样按轮清空，这条件同时挡住了"新一轮
+ *      刚起就把上一轮的静默时长算进来"的误报。
  *   3. 距最后一次采样（samples 按时间正序追加，末点即最新）已过超过
- *      STALL_AFTER_MS 才算。至少两点保证"曾经有过产出"，见第 2 条。
+ *      STALL_AFTER_MS 才算。
  *
  * @returns {number | null} 卡了多久（毫秒）；没卡返回 null。
  */
 function stalledForOf(samples, state, now, thresholdMs = STALL_AFTER_MS) {
-  if (state !== 'washing' && state !== 'rinsing' && state !== 'spinning') return null;
+  if (state !== 'washing' && state !== 'spinning') return null;
   if (!Array.isArray(samples) || samples.length < 2) return null;
   const last = samples[samples.length - 1];
   // last.at 必须是有限数：采样点可能来自序列化/异常路径，若 at 缺失或是字符串，
@@ -1606,13 +1608,14 @@ SKIN_BODY_FNS.capsule = capsuleBodyHtml;
        * 浏览器端没有 token 采样（useChat 的 legacy 里只有 nodes/turnTimings/
        * partial/runningCalls，没有 usage），所以不能像宿主那样靠产出算速度。
        * 这里退一步用**可见动静**：本轮节点数、流式文本长度、在跑的工具数，
-       * 任一变化就认为它还在动。这三样之外的东西（长思考、一个卡住的工具）
-       * 本来也不会产生新的视觉反馈——用户看到的画面确实冻住了，报"卡住"不是撒谎。
+       * 任一变化就认为它还在动。这三样之外的东西（长思考）本来也不会产生
+       * 新的视觉反馈——用户看到的画面确实冻住了，报"卡住"不是撒谎。
        *
-       * 只在 washing/rinsing/spinning 计时：starting 是新轮刚起，长思考正常；
-       * draining 是压缩，本来就不出字。两者都不该被叫卡住。
+       * 只在 washing/spinning 计时：starting 是新轮刚起，长思考正常；
+       * rinsing 是工具有真在跑（副标题写着在跑哪个工具，慢不等于死了）；
+       * draining 是压缩，本来就不出字。都不该被叫卡住。
        */
-      const STALL_AFTER_MS = 45000;
+      const STALL_AFTER_MS = 90000;
       const motionSig = [
         nodes === undefined ? 0 : nodes.length,
         partial === undefined || partial === null ? -1 : (typeof partial.text === 'string' ? partial.text.length : -2),
@@ -1765,9 +1768,9 @@ SKIN_BODY_FNS.capsule = capsuleBodyHtml;
        * 用户真正想问的是"它是不是死了"，只报"已运行 3:20"等于没回答。
        */
       const motionIdleMs = now - lastMotion.current.at;
-      const stalled = (state === 'washing' || state === 'rinsing' || state === 'spinning')
+      const stalled = (state === 'washing' || state === 'spinning')
         && motionIdleMs >= STALL_AFTER_MS;
-      if (stalled) sub = (toolName ? toolName + ' · ' : '') + fill(tr('sub.stalled'), { stalled: formatDuration(motionIdleMs) });
+      if (stalled) sub = fill(tr('sub.stalled'), { stalled: formatDuration(motionIdleMs) });
 
       const tone = state === 'error' ? 'error' : (state === 'waiting' ? 'warn' : (state === 'done' ? 'ok' : undefined));
 

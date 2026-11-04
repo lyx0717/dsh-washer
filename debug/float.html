@@ -1141,7 +1141,7 @@
    */
   var lastNotifiedState = null;
   /*
-   * 卡住提醒单独用 turn 去重：卡住时状态不变（还是 washing/rinsing/spinning），
+   * 卡住提醒单独用 turn 去重：卡住时状态不变（还是 washing/spinning），
    * 光靠状态边沿检测不到。stalledMs 从 null 变成数字的那一刻才提醒，一轮一次。
    * 用 turn 而不是布尔，是为了下一轮真卡住时还能再提醒。
    */
@@ -1170,8 +1170,9 @@
     var stalled = typeof snap.stalledMs === 'number' && snap.stalledMs !== null;
     if (stalled && prev !== null && lastStalledTurn !== snap.turn) {
       lastStalledTurn = snap.turn;
-      var stext = (snap.activeTool && snap.activeTool.action ? snap.activeTool.action + ' ' : '')
-        + '好一会儿没动静';
+      /* 有工具在跑的时候宿主不会给 stalledMs（跑得慢不等于死了），
+         所以这里没有必要再拼"卡在哪个动作"。 */
+      var stext = '好一会儿没动静';
       if (host && typeof host.notify === 'function') host.notify('stalled', stext);
       showFlash('stalled', stext);
     }

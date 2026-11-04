@@ -850,13 +850,14 @@ window.__ModuleLoader__.load({
        * 浏览器端没有 token 采样（useChat 的 legacy 里只有 nodes/turnTimings/
        * partial/runningCalls，没有 usage），所以不能像宿主那样靠产出算速度。
        * 这里退一步用**可见动静**：本轮节点数、流式文本长度、在跑的工具数，
-       * 任一变化就认为它还在动。这三样之外的东西（长思考、一个卡住的工具）
-       * 本来也不会产生新的视觉反馈——用户看到的画面确实冻住了，报"卡住"不是撒谎。
+       * 任一变化就认为它还在动。这三样之外的东西（长思考）本来也不会产生
+       * 新的视觉反馈——用户看到的画面确实冻住了，报"卡住"不是撒谎。
        *
-       * 只在 washing/rinsing/spinning 计时：starting 是新轮刚起，长思考正常；
-       * draining 是压缩，本来就不出字。两者都不该被叫卡住。
+       * 只在 washing/spinning 计时：starting 是新轮刚起，长思考正常；
+       * rinsing 是工具有真在跑（副标题写着在跑哪个工具，慢不等于死了）；
+       * draining 是压缩，本来就不出字。都不该被叫卡住。
        */
-      const STALL_AFTER_MS = 45000;
+      const STALL_AFTER_MS = 90000;
       const motionSig = [
         nodes === undefined ? 0 : nodes.length,
         partial === undefined || partial === null ? -1 : (typeof partial.text === 'string' ? partial.text.length : -2),
@@ -1009,9 +1010,9 @@ window.__ModuleLoader__.load({
        * 用户真正想问的是"它是不是死了"，只报"已运行 3:20"等于没回答。
        */
       const motionIdleMs = now - lastMotion.current.at;
-      const stalled = (state === 'washing' || state === 'rinsing' || state === 'spinning')
+      const stalled = (state === 'washing' || state === 'spinning')
         && motionIdleMs >= STALL_AFTER_MS;
-      if (stalled) sub = (toolName ? toolName + ' · ' : '') + fill(tr('sub.stalled'), { stalled: formatDuration(motionIdleMs) });
+      if (stalled) sub = fill(tr('sub.stalled'), { stalled: formatDuration(motionIdleMs) });
 
       const tone = state === 'error' ? 'error' : (state === 'waiting' ? 'warn' : (state === 'done' ? 'ok' : undefined));
 

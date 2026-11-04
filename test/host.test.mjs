@@ -15,7 +15,7 @@ import {
   foldEvent, encodeWsText, apply, isOwnEndpoint, speedOf, rankTools,
   endFailureOf, isUserAbort, writeOverlayPrefs,
 } from '../index.js';
-import { deriveState } from '../src/core.js';
+import { deriveState, stalledForOf } from '../src/core.js';
 
 /**
  * 测试专用端点路径：绝不能碰 ~/.dsh 下的真实文件（宿主服务在用它）。
@@ -74,6 +74,26 @@ test('turn/start 开新轮：清空上一轮的节点与进行中的调用', () 
   assert.deepEqual(s.runningCalls, [], '新一轮不该继承上一轮的运行中调用');
   assert.deepEqual(s.nodes.map((n) => n.kind), ['turn-start'], '节点只留新一轮的');
   assert.equal(s.turnTimings.get(2).startTime, NOW + 100, '要记下起轮时间');
+});
+
+test('开新轮清空产出采样：上一轮的静默时长不会算到新一轮开局', () => {
+  /*
+   * 用户反馈「任务一开始就报 咕噜咕噜…转不动了」。
+   *
+   * 采样不按轮清空时：上一轮最后一次产出之后隔一分钟再提新问题，新一轮刚起
+   * 就是 washing，浮窗拿到的「距上次产出」其实还是上一轮的陈旧时长，
+   * 于是开局第一帧就报卡住。采样本来就是算**这一轮**的速度与静默的。
+   */
+  const s = freshState();
+  foldEvent(s, ev('assistant/message', { turn: 1, message: { source: { model: 'm' } }, usage: { outputTokens: 100 } }), NOW + 5_000);
+  foldEvent(s, ev('assistant/message', { turn: 1, message: { source: { model: 'm' } }, usage: { outputTokens: 200 } }), NOW + 10_000);
+  assert.equal(s.tokenSamples.length, 2, '同一轮里两次产出各记一个采样');
+
+  const later = NOW + 180_000; // 三分钟后才开始新任务
+  foldEvent(s, ev('step/start', { turn: 2 }), later);
+  assert.deepEqual(s.tokenSamples, [], '新一轮的采样必须从零开始');
+  assert.equal(stalledForOf(s.tokenSamples, 'washing', later), null,
+    '新一轮刚起不能被上一轮的静默时长判成卡住');
 });
 
 test('tool/call 后 tool/result 必须消账（否则永远卡在 rinsing）', () => {

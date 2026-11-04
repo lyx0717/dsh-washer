@@ -1987,7 +1987,7 @@ await test('停靠条三档：@media 规则要写在 .dw-t1 / .dw-t2 基础规�
 await test('无进展提示：正常出字时不误报（副标题还是时长/件数）', async () => {
   /*
    * 这条测的是**不误报**，不是"卡住能显示"。
-   * 45 秒阈值要真等 45 秒，不值得为它拖慢整个套件；
+   * 90 秒阈值要真等 90 秒，不值得为它拖慢整个套件；
    * 而"正常在动却被叫卡住"才是这个功能真正会翻车的地方
    * （用户一看到假警报就不信这台机器了）。
    * 阈值判定本身由 core.test.mjs 的 stalledForOf 用例覆盖。
@@ -2016,6 +2016,25 @@ await test('无进展提示：空闲/等待/压缩态都不报卡住', async () 
     }
     m.unmount();
   }
+});
+
+await test('无进展提示：工具在跑（rinsing）不算卡住，阈值 90 秒且两端一致', () => {
+  /*
+   * 用户反馈「通知彩蛋出的太频繁了，动不动就报 咕噜咕噜…转不动了」。
+   *
+   * 工具在跑就是真在干活，副标题已经写着在跑哪个工具；跑得久不等于死了，
+   * 再叠一句"卡住了"只会让这个信号贬值。阈值也从 45 秒放到 90 秒。
+   *
+   * 真等 90 秒不值得，这两处是纯粹的判定口径，直接锁源码：
+   * 浏览器端和宿主端各有一份 STALL_AFTER_MS，必须同值。
+   */
+  const client = readFileSync(join(root, 'src', 'client.template.js'), 'utf8');
+  const core = readFileSync(join(root, 'src', 'core.js'), 'utf8');
+  const m = client.match(/const stalled = \(([^)]*)\)/);
+  assert.ok(m, '停靠条要有一处 stalled 判定');
+  assert.ok(!/rinsing/.test(m[1]), '工具在跑的状态不许进卡住判定: ' + m[1]);
+  assert.ok(/const STALL_AFTER_MS = 90000;/.test(client), '停靠条阈值应是 90 秒');
+  assert.ok(/const STALL_AFTER_MS = 90000;/.test(core), '宿主阈值应是 90 秒（两端同值）');
 });
 
 await test('停靠条三档：渲染出的结构能让三档生效（无 dw-dot，t2 带 compact 标记）', async () => {

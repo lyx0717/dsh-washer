@@ -40,7 +40,6 @@ import {
   shouldSwitch,
   SWITCH_HOLD_MS,
   toolActionOf,
-  activeTool,
   RUNNING_STATES,
 } from './src/core.js';
 
@@ -458,6 +457,15 @@ export function foldEvent(state, event, now) {
     }
     // 新 turn 开始，旧节点不再参与「这一步走到哪」的判定
     state.nodes = [];
+    /*
+     * 采样也必须按轮清空。
+     *
+     * 不清的后果是：上一轮最后一次产出之后，用户隔了一分钟才提新问题，
+     * 新一轮刚起、模型还在想第一个字，浮窗拿到的"距上次产出"已经是上一轮
+     * 陈旧的时长，于是开局就报「已经 1:05 没动静，卡住了?」。
+     * 采样本来就是算**这一轮**的速度和静默时长的，跨轮混进来两头都不对。
+     */
+    state.tokenSamples = [];
     pushNode(state, { kind: 'turn-start', turn });
   }
 
@@ -1678,8 +1686,6 @@ export function apply(ctx, config) {
     const turn = latestTurnOf(outline);
     const elapsedMs = elapsedOf(s.turnTimings, turn, now) || 0;
     const speed = speedOf(s.tokenSamples, now);
-    // 当前正在跑的工具（没有就是 undefined）。卡住时浮窗要据此说「卡在哪个动作」。
-    const active = activeTool(s.runningCalls);
     /*
      * 负载强度：拿「最近几个工具的动作类型」估一个 0~1 的可解释信号，
      * 驱动浮窗画面节奏（读单个文件=轻、批量重构/跑命令=重）。
@@ -1714,10 +1720,6 @@ export function apply(ctx, config) {
       history: (Array.isArray(s.turnHistory) ? s.turnHistory : []).slice(-10).reverse(),
       // 看着在转、其实没动静。没卡是 null，前端据此决定要不要改副标题。
       stalledMs: stalledForOf(s.tokenSamples, derived, now),
-      // 卡住时"卡在哪个动作"：action 用户看得懂，name 留给诊断对日志。
-      activeTool: active === undefined
-        ? null
-        : { name: active.name, action: toolActionOf(active.name) },
       /*
        * action 是中文动作说明（toolActionOf），name 保留技术名。
        * 两个都给：状态条和浮窗显示 action（用户看得懂"跑命令"，
