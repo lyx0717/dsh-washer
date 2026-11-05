@@ -355,17 +355,18 @@
 /* 共享衣物：整块容器旋转，转速吃 --spin；.cp-ghost 只做拖影 */
 .dw-cp .cp-clothes{
   position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none;
-  filter:saturate(.84) brightness(.96) contrast(1.04) drop-shadow(0 0 3px rgba(101,241,230,.18));
+  /* 一个 filter 都不挂：这块布料一直在转，滤镜每帧都要离屏重算一遍
+     （实测吃掉忙态一半的 GPU），颜色在 SVG 里本来就画好了 */
   opacity:1;
-  transition:opacity .6s ease, filter .6s ease;
+  transition:opacity .6s ease;
   animation:cp-spin var(--spin,5.2s) linear infinite;
   animation-play-state:var(--play, running);
   will-change:transform;
 }
 .dw-cp .cp-clothes svg{ display:block; width:100%; height:100%; }
 .dw-cp .cp-clothes.cp-ghost{
+  /* 拖影靠低透明度叠出来，不用 filter:blur——旋转中的模糊层每帧都要重算滤镜 */
   z-index:2; opacity:0;
-  filter:blur(4.5px) saturate(.66) brightness(1.06);
   animation:cp-spin 1.12s linear infinite;
   animation-delay:-.55s;
 }
@@ -440,8 +441,9 @@
   opacity:.78;
 }
 .dw-cp .cp-panel::after{
-  content:""; position:absolute; top:0; bottom:0; width:42%; left:-50%; z-index:1; pointer-events:none;
+  content:""; position:absolute; top:0; bottom:0; width:42%; left:0; z-index:1; pointer-events:none;
   background:linear-gradient(90deg, transparent, rgba(109,255,242,.055) 48%, transparent);
+  will-change:transform;
   animation:cp-sweep 5.4s linear infinite;
 }
 .dw-cp .cp-st{
@@ -542,17 +544,14 @@
   opacity:0;
   animation:cp-spin var(--spin,2.2s) linear infinite, cp-in .55s ease .14s forwards;
 }
-/* 洗涤/漂洗：水位盖过衣物，滚筒在水下漫反射 */
-.dw-cp[data-state="washing"] .cp-water,
-.dw-cp[data-state="rinsing"] .cp-water{ filter:saturate(1.05); }
+/* 洗涤/漂洗：水位盖过衣物。曾经加 filter:saturate(1.05)，每帧离屏过滤太贵，去掉 */
 /* 脱水：高速抖动 + 双影拖尾，水位被甩薄 */
 .dw-cp[data-state="spinning"] .cp-clothes:not(.cp-ghost){
+  /* 曾经的 blur 拖影每帧重算滤镜，去掉；速度感靠转速与拖影层 */
   opacity:.86;
-  filter:blur(1.45px) saturate(.82) brightness(1.02) drop-shadow(0 0 4px rgba(94,247,236,.30));
 }
 .dw-cp[data-state="spinning"] .cp-clothes.cp-ghost{
   opacity:.34;
-  filter:blur(4px) saturate(.70) brightness(1.16) drop-shadow(0 0 7px rgba(91,246,235,.26));
 }
 .dw-cp[data-state="spinning"] .cp-drum{ animation:cp-shake .55s linear infinite; }
 .dw-cp[data-state="spinning"] .cp-water::before{ animation-duration:1.1s; }
@@ -614,7 +613,9 @@
   80% { opacity:1 }
   100% { transform:translateY(-20px); opacity:0 }
 }
-@keyframes cp-sweep { from { left:-50% } to { left:108% } }
+/* 扫光走 transform 不走 left：left 每帧都要重新排版并重绘整条屏，
+   而 transform 在合成器里平移，内容不重画。 */
+@keyframes cp-sweep { from { transform:translateX(-119%) } to { transform:translateX(257%) } }
 @keyframes cp-blink { 0%,100% { opacity:1 } 50% { opacity:.42 } }
 @keyframes cp-in { to { opacity:1 } }
 @keyframes cp-drain {
@@ -627,15 +628,11 @@
   50% { transform:translate(-.6px,.5px) }
   75% { transform:translate(.4px,.6px) }
 }
+/* 用透明度呼吸，不再 animate box-shadow：后者每帧都要重绘这颗灯的阴影，
+   透明度是纯合成。视觉上一样是"灯在呼吸"，代价差一个数量级。 */
 @keyframes cp-led {
-  0%,100% {
-    box-shadow:0 0 0 1px rgba(0,0,0,.85), inset 0 1px 1px rgba(255,255,255,.6),
-      0 0 7px var(--ledglow), 0 0 15px var(--ledglow);
-  }
-  50% {
-    box-shadow:0 0 0 1px rgba(0,0,0,.85), inset 0 1px 1px rgba(255,255,255,.6),
-      0 0 3px var(--ledglow), 0 0 6px var(--ledglow);
-  }
+  0%,100% { opacity:1; }
+  50%     { opacity:.45; }
 }
 
 /* 关掉所有装饰性动画，只保留状态本身的可读性 */

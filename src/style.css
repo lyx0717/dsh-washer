@@ -274,6 +274,24 @@
   animation: none !important;
 }
 
+/*
+ * 待机停帧：idle / off 时整台停靠条一个动画都不放。
+ *
+ * 停靠条常驻在宿主聊天页里，而这个页面自己的合成是按需出帧的；只要还有
+ * 一条无限循环的动画（水位波、气泡上浮、指示灯呼吸），整页就永远按
+ * 刷新率出帧。实测 1200×800 的页面里，一个 12px 元素的呼吸动画就能让
+ * GPU 进程从 0.5% 涨到 6% 上下——机器再小，代价也是整页的。
+ *
+ * 只停 idle/off：waiting 的闪烁是"等你确认"的唯一视觉信号，error 的红灯
+ * 是故障信号，done 的星星是一次性收尾，都该放完。一次性动画在 done→idle
+ * 时早已结束，直接暂停不会切一半。
+ */
+.dsh-washer[data-anim='still'] *,
+.dsh-washer[data-anim='still'] *::before,
+.dsh-washer[data-anim='still'] *::after {
+  animation-play-state: paused !important;
+}
+
 /* ---------- 32px 像素 sprite 的三个可动图层 ---------- */
 
 .dw-px {

@@ -1694,6 +1694,25 @@ test('拉悬浮窗时必须真的删掉 ELECTRON_RUN_AS_NODE，不能只设成�
     'spawnOverlay 的 stderr 要接到管道上，用来记失败原因');
 });
 
+test('关掉浮窗再打开：尺寸/造型按偏好文件重新读，不能拿插件启动时的旧 cfg', () => {
+  /*
+   * 0.10.5 用户报「每次退出浮窗再打开都变回太空舱 + 极简」。
+   * cfg.desktopOverlaySize / cfg.skin 只在插件 init 时种一次，之后设置页改的
+   * 只写偏好文件；重新拉窗还拿 cfg 就会用上一小时的旧值。
+   */
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const launch = /function launchOverlay\(\) \{([\s\S]*?)\n  \}/.exec(host);
+  assert.ok(launch !== null, '要有 launchOverlay()');
+  assert.ok(/readOverlayPrefs\(\)/.test(launch[1]),
+    'launchOverlay 每次都要重新读偏好文件，不能只读 cfg');
+  assert.ok(/size: overlaySizeOfPrefs\(launchPrefs\)/.test(launch[1]),
+    '尺寸要按刚读到的偏好算');
+  assert.ok(/skin: overlaySkinOfPrefs\(launchPrefs/.test(launch[1]),
+    '造型要按刚读到的偏好算');
+  assert.ok(!/size: cfg\.desktopOverlaySize/.test(launch[1]),
+    '不能再用 cfg 里的尺寸（那是插件启动时的快照）');
+});
+
 test('能力探测端点报出平台事实（音效 macOS 走 afplay，Windows 走页面 WebAudio）', async () => {
   /*
    * 客户端跑在浏览器里，拿不到 process.platform。音效在 macOS 上走系统自带的

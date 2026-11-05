@@ -1155,6 +1155,28 @@ export function readOverlayPrefs() {
   return parsed === undefined || parsed === null ? {} : parsed;
 }
 
+/**
+ * 偏好文件里的尺寸档 → 三档之一。
+ * 旧文件写的是 size:'normal' + scale:'compact|standard|large'（0.10.2 及以前），
+ * 认不出来的一律落 standard。
+ */
+function overlaySizeOfPrefs(prefs) {
+  if (prefs.size === 'tiny' || prefs.size === 'standard' || prefs.size === 'large') return prefs.size;
+  if (prefs.size === 'normal') return prefs.scale === 'large' ? 'large' : 'standard';
+  return 'standard';
+}
+
+/**
+ * 偏好文件里的造型 → 合法皮肤名。
+ * 'auto' 是主界面「按尺寸自动挑」的策略，浮窗没有这个概念，得落成具体造型；
+ * 不认识的也落 precision，别把非法值传给子进程。
+ */
+function overlaySkinOfPrefs(prefs, fallback = 'precision') {
+  const name = prefs.skin;
+  if (typeof name !== 'string' || name === 'auto' || !/^[a-z]{3,12}$/.test(name)) return fallback;
+  return name;
+}
+
 export function writeOverlayPrefs(patch) {
   if (patch === null || typeof patch !== 'object') return null;
   const file = overlayPrefsFile();
@@ -1317,13 +1339,8 @@ export function apply(ctx, config) {
   setDoneHoldMs(Number(cfg.doneHoldMs));
 
   const savedPrefs = readOverlayPrefs();
-  // 三档尺寸；旧偏好文件写的是 size:'normal' + scale:'compact|standard|large'，这里迁一次
-  if (savedPrefs.size === 'tiny' || savedPrefs.size === 'standard' || savedPrefs.size === 'large') {
-    cfg.desktopOverlaySize = savedPrefs.size;
-  } else if (savedPrefs.size === 'normal') {
-    cfg.desktopOverlaySize = savedPrefs.scale === 'large' ? 'large' : 'standard';
-  }
-  if (typeof savedPrefs.skin === 'string' && /^[a-z]{3,12}$/.test(savedPrefs.skin)) cfg.skin = savedPrefs.skin;
+  cfg.desktopOverlaySize = overlaySizeOfPrefs(savedPrefs);
+  cfg.skin = overlaySkinOfPrefs(savedPrefs);
 
   /*
    * 桌面悬浮窗默认关着——装了不看的人不该莫名多一个后台端口。
@@ -1399,11 +1416,17 @@ export function apply(ctx, config) {
   function launchOverlay() {
     if (overlayChild !== null) return true;
     if (cfg.desktopOverlayAutoLaunch === false) return false;
+    /*
+     * 尺寸和造型**每次拉窗都重新读偏好文件**，不能用 cfg。
+     *
+     * cfg 在插件 init 时从偏好文件种进去一次就不再更新；用户在设置页或浮窗
+     * 右键菜单改了造型/尺寸，只写偏好文件。于是「关掉浮窗再打开」拿到的是
+     * 上一次宿主启动时的旧值——用户看到的就是「每次重开都变回太空舱 + 极简」
+     * （0.10.5 报过）。
+     */
+    const launchPrefs = readOverlayPrefs();
     overlayChild = spawnOverlay({
-      // 三档尺寸；旧配置里可能是 'normal'（0.10.2 及以前），落成 standard
-      size: cfg.desktopOverlaySize === 'tiny' || cfg.desktopOverlaySize === 'large'
-        ? cfg.desktopOverlaySize
-        : 'standard',
+      size: overlaySizeOfPrefs(launchPrefs),
       /*
        * skin 可能是 'auto'——那是主界面的"按尺寸自动挑"策略，浮窗没有这个
        * 概念（它只有一个固定尺寸）。这里落成具体造型，避免把 'auto'
@@ -1412,9 +1435,7 @@ export function apply(ctx, config) {
       // 透传任意合法 skin 名，别在这里写死列表——每加一套皮肤都得改，
       // 漏改就会把新皮肤回落成 precision，和设置页显示的不一致。
       // 只挡掉 'auto' 和非法值；真正不认识的造型由 Electron 侧兜底。
-      skin: typeof cfg.skin === 'string' && cfg.skin !== 'auto' && /^[a-z]{3,12}$/.test(cfg.skin)
-        ? cfg.skin
-        : 'precision',
+      skin: overlaySkinOfPrefs(launchPrefs, overlaySkinOfPrefs(cfg)),
     });
     if (overlayChild === null) {
       /*

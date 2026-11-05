@@ -91,6 +91,14 @@
   /* 甩干时整台机器会抖，这是它看起来"在工作"的关键 */
   .machine[data-shake="1"] { animation: shake .18s steps(2, end) infinite; }
   .machine[data-shake="2"] { animation: shake .09s steps(2, end) infinite; }
+  /* 别的会话还在跑、但跟随的会话已经洗完（idle / done）：
+     筒里还挂着衣物，用一次很慢、幅度极小的起伏表示「还有活」，
+     不是洗涤那种抖——幅度只 0.6px，1.6s 一个来回。 */
+  .machine[data-shake="3"] { animation: shake-soft 1.6s ease-in-out infinite; }
+  @keyframes shake-soft {
+    0%, 100% { transform: translate(0, 0); }
+    50%      { transform: translate(.6px, -.6px); }
+  }
   @keyframes shake {
     0%   { transform: translate(0, 0); }
     50%  { transform: translate(1px, -1px); }
@@ -783,6 +791,10 @@
    */
   .machine > .skin-host {
     --glow: transparent;
+    /* 光晕必须用 drop-shadow：它贴的是机器真实剪影（圆角跟着走）。
+       试过换 box-shadow，省下几个点的 GPU，但阴影贴的是元素矩形框——
+       机器的四个圆角外面、右下角空出来的地方都会多出一圈方形光/阴影，
+       用户一眼就看出来了（「一圈白边」「四个圆角超出背景」）。 */
     transition: filter .5s ease;
     filter: drop-shadow(0 0 0 transparent);
   }
@@ -844,8 +856,10 @@
    */
   /* ---- 彩蛋层：打盹变暗 / 空闲轻抖 ----
      纯装饰，不依赖新数据源，只在静息态触发；减弱动效时由上面的
-     @media 统一关掉动画（变暗是颜色过渡不算动效，仍然保留）。 */
-  body[data-doze="1"] .machine { opacity: .4; filter: saturate(.5) brightness(.85); }
+     @media 统一关掉动画（变暗是颜色过渡不算动效，仍然保留）。
+     只降透明度、不叠 filter：打盹时机器本来就在动，再盖一层整机滤镜
+     等于每帧多做一次离屏合成，越打盹越费电。 */
+  body[data-doze="1"] .machine { opacity: .55; }
   .machine[data-idle-shake="1"] { animation: idle-shake .65s ease-in-out; }
   @keyframes idle-shake {
     0%, 100% { transform: translateX(0); }
@@ -869,9 +883,27 @@
    * 透明置顶窗口被完全遮住时 Chromium 不一定停合成器，动画照跑、白烧电。
    * visibilitychange 是这里唯一可靠的信号（见脚本里的监听）。
    */
-  html[data-hidden="1"] .machine,
-  html[data-hidden="1"] .props > *,
-  html[data-hidden="1"] .px-wheel { animation-play-state: paused !important; }
+  html[data-hidden="1"] *,
+  html[data-hidden="1"] *::before,
+  html[data-hidden="1"] *::after { animation-play-state: paused !important; }
+
+  /*
+   * 静止即停（body[data-anim] 由脚本的 runAnimations 控制）。
+   *
+   * 皮肤里的循环动画都是 infinite：窗口开着就按刷新率一直重绘。可机器没在
+   * 洗东西时，灯呼吸、水面波纹、扫光这些不表达任何新信息——实测静止待机
+   * 和洗涤时一样贵（GPU 30~40% / 渲染 15%）。
+   *
+   * 忙碌态照常跑；状态切换后留 1.2s 宽限窗口，让「洗完了闪星星」
+   * 「故障抖一下」这类一次性动画播完再停。
+   *
+   * 这里必须用 `*` 而不是只写 .machine：animation-play-state 不会从容器
+   * 继承给皮肤内部元素，上面那条 hidden 的老写法就是栽在这上面——
+   * 只暂停了容器，里面的灯和水面照样在跑。
+   */
+  body[data-anim="still"] *,
+  body[data-anim="still"] *::before,
+  body[data-anim="still"] *::after { animation-play-state: paused !important; }
 
 </style>
 </head>
@@ -966,6 +998,91 @@
     machine.style.setProperty('--led', v.led);
   }
 
+  /*
+   * ---------------- 静止即停 ----------------
+   *
+   * 浮窗是常驻的，皮肤里几十条 animation 都是 infinite：窗口一开着就按
+   * 刷新率一直重绘。实测（0.10.4，132×238 窗口）静止待机与洗涤时一样贵，
+   * GPU 进程 30~40%、渲染 15%，60 分钟吃掉 34 分钟 CPU。
+   *
+   * 忙碌态（真的在洗东西）照常跑；其余状态挂起，但状态切换后留 1.2s
+   * 宽限窗口——「洗完闪星星」「故障抖一下」是一次性动画，暂停选择器是 `*`，
+   * 不看动画类型，只能靠这个窗口把它们放完。
+   *
+   * 指针进窗时也临时放开：悬停反馈是用户主动要的，不能冻住。
+   */
+  /* 除了「真在洗」的四个状态，waiting / error / done 也不能停：
+     waiting 的 blink 是"等你确认"的唯一信号，error 的红灯闪是故障信号，
+     done 的星星是一次性收尾；这些一停，用户就看不到该抬头的信息了。
+     真正可以停的只有 idle / off——机器闲着，画面就该是静的。 */
+  var ANIMATED_STATES = {
+    starting: 1, washing: 1, rinsing: 1, spinning: 1, draining: 1,
+    waiting: 1, error: 1, done: 1,
+  };
+  var STILL_GRACE_MS = 1200;
+  var stillTimer = null;
+  /* 还有别的会话在跑：这台机器虽然跟着的那个已经洗完了，
+     但筒里还挂着正在跑的衣物，水波/指示灯得继续动，不然看着像死机。
+     数字来自快照的 counts.running（宿主按全部会话汇总）。 */
+  var curOtherRunning = 0;
+  function animationBusy() { return curOtherRunning > 0 || ANIMATED_STATES[curState] === 1; }
+  /*
+   * 低帧率播放器（忙态用）。
+   *
+   * Chromium 只要页面上有一条动画在跑，就按屏幕刷新率（60/120Hz）出帧；
+   * 这窗口虽小，每帧重新合成整窗也要 2.5~3ms，忙态 GPU 三十多个点全是这么烧的
+   * （实测把动画全暂停立刻掉到 1%）。所以忙态我们不当「被动刷新」的页面，自己
+   * 当驱动器：把所有 CSS 动画 pause 掉，再用 20fps 的定时器手动推 currentTime。
+   * 30fps 画面基本看不出跳，但每秒出的帧少一半，GPU 大约从 38% 掉到 15% 上下。
+   *
+   * 只碰 CSSAnimation。CSSTransition 是状态切换的一次性过渡，pause 掉会卡在半路。
+   */
+  var PLAY_FPS = 30;
+  var PLAY_INTERVAL = 1000 / PLAY_FPS;
+  var playTimer = null;
+  function isCssAnimation(a) { return a && a.constructor && a.constructor.name === 'CSSAnimation'; }
+  function playAnimationsStep() {
+    var list = document.getAnimations ? document.getAnimations() : [];
+    var now = performance.now();
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (!isCssAnimation(a)) continue;
+      if (a.playState === 'running') a.pause();
+      if (a.playState !== 'paused') continue;
+      if (typeof a.__dwT0 !== 'number') {
+        a.__dwT0 = now - (typeof a.currentTime === 'number' ? a.currentTime : 0);
+      }
+      try { a.currentTime = now - a.__dwT0; } catch (e) {}
+    }
+  }
+  function startPlayback() {
+    if (playTimer !== null) return;
+    playAnimationsStep();
+    playTimer = setInterval(playAnimationsStep, PLAY_INTERVAL);
+  }
+  function stopPlayback() {
+    if (playTimer === null) return;
+    clearInterval(playTimer);
+    playTimer = null;
+    // 交还给浏览器：把被我们暂停的动画放回 running（静止态由 CSS 的 !important 再压住）
+    var list = document.getAnimations ? document.getAnimations() : [];
+    for (var i = 0; i < list.length; i++) {
+      if (isCssAnimation(list[i]) && list[i].playState === 'paused') {
+        try { list[i].play(); } catch (e) {}
+      }
+    }
+  }
+  function runAnimations(graceMs) {
+    document.body.dataset.anim = 'run';
+    if (stillTimer !== null) { clearTimeout(stillTimer); stillTimer = null; }
+    if (animationBusy()) { if (!document.hidden) startPlayback(); return; }
+    stopPlayback();
+    stillTimer = setTimeout(function () {
+      stillTimer = null;
+      if (!animationBusy()) document.body.dataset.anim = 'still';
+    }, graceMs || STILL_GRACE_MS);
+  }
+
   var curPanelSig = '';
   function buildMachine(snap) {
     var connLost = el('wrap').dataset.conn === 'lost';
@@ -1008,6 +1125,8 @@
       fb.style.bottom = (mh + 14) + 'px';
     }
     curState = s;
+    // 重建会重新启动所有 CSS 动画，刚换上的造型要把入场动画放完再停
+    runAnimations();
   }
 
   /* 计时每秒都在变，但不能每秒重建整台机器：只改机身黑条里的那一格文字。 */
@@ -1353,6 +1472,9 @@
 
   function render(snap) {
     var s = snap.state || 'off';
+    // 先更新"别的会话还在跑"的计数：buildMachine 末尾会调 runAnimations，
+    // 那里读的就是这个值，晚一行设就会先按 idle 把动画停掉。
+    curOtherRunning = snap.counts && typeof snap.counts.running === 'number' ? snap.counts.running : 0;
     var v = VISUAL[s] || VISUAL.idle;
     var prev = machine.dataset.state;
 
@@ -1391,6 +1513,19 @@
 
     // 状态落到 .machine 上，门外道具层靠它选表情（问号/闪电/星星/呼吸光）
     machine.dataset.state = s;
+
+    /*
+     * 跟随的会话洗完了、别的会话还在跑：文字仍跟着跟随会话（不撒谎），
+     * 但筒里的衣物得慢慢转、机器轻微起伏——否则一台装着衣服却纹丝不动的
+     * 机器看着就像死机了（0.10.5 用户报过「滚筒不动了」）。
+     */
+    if (curOtherRunning > 0 && (s === 'idle' || s === 'done')) {
+      machine.style.setProperty('--play', 'running');
+      machine.style.setProperty('--speed', '7s');
+      machine.dataset.shake = '3';
+    }
+    // 状态变了就重新开一次宽限窗口：一次性动画要先播完，忙态则一直跑
+    if (prev !== s) runAnimations();
 
     /*
      * 切状态的"预备动作"。
@@ -1513,6 +1648,8 @@
    */
   function syncHidden() {
     document.documentElement.dataset.hidden = document.hidden ? '1' : '0';
+    if (document.hidden) stopPlayback();
+    else runAnimations(0);
   }
   document.addEventListener('visibilitychange', syncHidden);
   syncHidden();
@@ -1558,12 +1695,22 @@
       if (nextShakeAt === 0) nextShakeAt = idleSince + IDLE_SHAKE_AFTER_MS;
       if (now >= nextShakeAt) {
         nextShakeAt = now + 20000 + Math.random() * 20000;
+        // 静止即停会把动画挂起，摇之前先放开一小会儿，摇完自动收回
+        runAnimations(900);
         machine.dataset.idleShake = '1';
         setTimeout(function () { delete machine.dataset.idleShake; }, 650);
       }
     }
   }
   setInterval(eggTick, 1000);
+
+  /* 悬停：静息态动画是挂起的，指针进来先放开——悬停反馈是用户主动要的，
+     不能因为"省电"把交互也冻住。移开后很快收回。 */
+  var wrapEl = el('wrap');
+  if (wrapEl) {
+    wrapEl.addEventListener('pointerenter', function () { runAnimations(2600); });
+    wrapEl.addEventListener('pointerleave', function () { runAnimations(300); });
+  }
 
   if (host) reconnect();
 })();

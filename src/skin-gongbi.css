@@ -350,7 +350,7 @@
   inset: 0;
   z-index: 3;
   pointer-events: none;
-  filter: saturate(.90) contrast(.98);
+  /* 不挂 filter：这块布料一直在转，滤镜每帧离屏重算太贵 */
   opacity: 1;
   transition: opacity .6s ease;
   animation: gb-cspin var(--spin, 5.2s) linear infinite;
@@ -543,7 +543,7 @@
   opacity: 0;
   animation: gb-cspin var(--spin, 14s) linear infinite, gb-clothin .9s ease forwards;
 }
-.dw-gb[data-state="spinning"] .gb-clothes { filter: blur(1.5px) saturate(.9) contrast(.98); }
+.dw-gb[data-state="spinning"] .gb-clothes { opacity: .86; }
 .dw-gb[data-state="draining"] .gb-clothes { opacity: .80; }
 
 /* 等待/故障：状态字闪烁 */

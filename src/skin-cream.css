@@ -241,7 +241,7 @@
 .dw-cr[data-state="done"] .clothes-c{ opacity:0; }
 .dw-cr[data-state="idle"] .clothes-c{ opacity:.20; }
 .dw-cr[data-state="starting"] .clothes-c{ opacity:0; animation: cr-clothIn .6s ease forwards, cr-cspin var(--speed,5.2s) linear infinite; }
-.dw-cr[data-state="spinning"] .clothes-c{ filter: blur(1.5px); }
+.dw-cr[data-state="spinning"] .clothes-c{ opacity:.86; }
 .dw-cr[data-state="draining"] .clothes-c{ opacity:.80; }
 .dw-cr[data-state="waiting"] .st{ animation: cr-softblink 1.5s ease-in-out infinite; }
 .dw-cr[data-state="error"] .st{ animation: cr-softblink .9s ease-in-out infinite; }

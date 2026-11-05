@@ -1,4 +1,15 @@
+/* 宽度语义钉成 border-box：机身按 300 设计、左右各 15 内边距，靠 zoom 1.1
+   放大到 330 填满缩放框。另外三套皮肤都显式写了 border-box，这里漏了：
+   没有全局 `*{box-sizing:border-box}` 的宿主页面（停靠条）里 width 会算成
+   "内容宽"，实际 330×1.1=363 宽，右边 33px 被 .dw-frame 的 overflow:hidden
+   裁掉——浮窗里因为 debug/float.html 自带全局重置，看不出来。 */
+.dw-pw,.dw-pw *{box-sizing:border-box;}
 .dw-pw{position:relative;width:300px;padding:15px 15px 11px;
+  /* 按比例放大到 330：其它皮肤的机身都是满框宽（330），只有这台是 300 宽，
+     缩到浮窗里会比别的皮肤小一圈，右下还会露出一截缩放框的投影。
+     zoom 让排版整体乘 1.1（长度、圆角、字号、投影一起放大），
+     机身正好落到 330×417，和缩放框同宽，不用逐条改二百多个长度值。 */
+  zoom:1.1;
   border-radius:24px;
   background:
     linear-gradient(168deg,var(--dw-body-1) 0%,var(--dw-body-2) 38%,var(--dw-body-3) 78%,var(--dw-body-4) 100%);
@@ -96,8 +107,10 @@
   transform:rotate(-8deg);}
 .dw-pw .glass::after{content:"";position:absolute;left:11%;top:5%;width:48%;height:31%;border-radius:50%;
   z-index:5;pointer-events:none;
-  background:radial-gradient(ellipse at 42% 38%, rgba(255,255,255,.92), rgba(255,255,255,.35) 46%, transparent 72%);
-  filter:blur(4px);opacity:.85;}
+  /* 高光的柔边靠渐变台阶做，不用 filter:blur——窗口里所有东西都在动，
+     滤镜每帧离屏重算，实测是忙态 GPU 的大头之一 */
+  background:radial-gradient(ellipse at 42% 38%, rgba(255,255,255,.92), rgba(255,255,255,.40) 34%, rgba(255,255,255,.16) 55%, transparent 78%);
+  opacity:.85;}
 .dw-pw .drum{position:absolute;inset:-5%;border-radius:50%;z-index:1;
   background:
     repeating-conic-gradient(from 0deg,
@@ -112,21 +125,22 @@
     rgba(255,255,255,.30) 0deg 3.4deg, rgba(255,255,255,0) 3.4deg 120deg);
   mix-blend-mode:screen;opacity:.75;}
 .dw-pw[data-state="rinsing"] .drum{animation-direction:reverse}
-.dw-pw[data-state="spinning"] .drum{filter:blur(.7px)}
-.dw-pw[data-state="spinning"] .clothes{filter:blur(1.1px)}
+.dw-pw[data-state="spinning"] .clothes{opacity:.86}
 .dw-pw .water{position:absolute;left:-24%;right:-24%;bottom:0;height:var(--water-lvl,0%);z-index:2;
   background:linear-gradient(180deg,var(--dw-water-1) 0%,var(--dw-water-2) 46%,var(--dw-water-3) 100%);
   opacity:var(--water-opacity,.78);
   transition:height 1s cubic-bezier(.32,.86,.3,1);
   box-shadow:inset 0 2px 3px rgba(255,255,255,.35);}
-.dw-pw .water::before{content:"";position:absolute;left:-8%;right:-8%;top:-9px;height:18px;
+.dw-pw .water::before{content:"";position:absolute;left:-40%;right:-40%;top:-9px;height:18px;
   background:radial-gradient(ellipse at 50% 100%, var(--dw-water-1) 0 58%, transparent 62%);
   background-size:46px 18px;background-repeat:repeat-x;
+  will-change:transform;
   animation:wave 3.6s linear infinite;}
-.dw-pw .water::after{content:"";position:absolute;left:-8%;right:-8%;top:-5px;height:14px;
+.dw-pw .water::after{content:"";position:absolute;left:-40%;right:-40%;top:-5px;height:14px;
   background:radial-gradient(ellipse at 50% 100%, rgba(255,255,255,.5) 0 50%, transparent 56%);
   background-size:34px 14px;background-repeat:repeat-x;
-  animation:wave 2.4s linear infinite reverse;
+  will-change:transform;
+  animation:wave-2 2.4s linear infinite reverse;
   opacity:.6;}
 .dw-pw .clothes{position:absolute;inset:0;z-index:3;
   animation:spin var(--speed,0s) linear infinite;
@@ -209,8 +223,8 @@
 .dw-pw[data-state="waiting"] .state-text{color:#ffcf6b;text-shadow:0 0 9px rgba(240,183,58,.55)}
 .dw-pw[data-state="done"] .state-text{color:#8ef0c6}
 .dw-pw .feet{position:absolute;left:8%;right:8%;bottom:-7px;height:12px;border-radius:50%;
-  background:radial-gradient(ellipse at 50% 50%,var(--dw-body-shade),transparent 70%);
-  filter:blur(3px);z-index:1;opacity:.85}
+  background:radial-gradient(ellipse at 50% 50%,var(--dw-body-shade),transparent 82%);
+  z-index:1;opacity:.85}
 
 /* ------------------------------------------------------------------ *
  * 关键帧定义
@@ -229,18 +243,22 @@
  * 不动布局属性；且都在 .dsh-washer 子树内，宿主样式不受影响。
  * ------------------------------------------------------------------ */
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-@keyframes wave{from{background-position:0 0}to{background-position:46px 0}}
+/* 水纹滚动改用 transform 平移整层：background-position 每帧都要重绘整片水。
+   平移距离正好等于贴图一格（46px / ::after 的 34px），所以循环处无缝。 */
+@keyframes wave{from{transform:translateX(0)}to{transform:translateX(46px)}}
+@keyframes wave-2{from{transform:translateX(0)}to{transform:translateX(34px)}}
 @keyframes float{
   0%{transform:translateY(0) scale(1);opacity:.28}
   20%{opacity:1}
   80%{opacity:1}
   100%{transform:translateY(-18px) scale(.82);opacity:.28}}
+/* 呼吸用透明度，不动 box-shadow：阴影每帧重绘，透明度走合成器 */
 @keyframes breathe{
-  0%,100%{box-shadow:0 0 0 1px rgba(70,92,116,.2),0 0 5px var(--dw-sig-ok)}
-  50%{box-shadow:0 0 0 1px rgba(70,92,116,.2),0 0 11px var(--dw-sig-ok)}}
+  0%,100%{opacity:1}
+  50%{opacity:.45}}
 @keyframes blink{
-  0%,55%{box-shadow:0 0 0 1px rgba(70,92,116,.2),0 0 9px var(--dw-sig,var(--dw-sig-wait))}
-  56%,100%{box-shadow:0 0 0 1px rgba(70,92,116,.2),0 0 2px var(--dw-sig,var(--dw-sig-wait))}}
+  0%,55%{opacity:1}
+  56%,100%{opacity:.32}}
 /* 整机抖动：用独立的 translate3d 而不是 rotate，避免和 .dw-pw 上的 transform transition 打架 */
 @keyframes walk{
   0%{transform:translate3d(0,0,0)}
@@ -261,17 +279,16 @@
  * 不限定皮肤：像素造型同样被缩到 32px，那条深色描边也是按 256px 画的，
  * 缩完一样虚。两套造型都吃这层，谁也躲不开"和背景同色"。
  *
- * 只用 filter: drop-shadow，不在框上画内描边：
- * 试过用 ::after + inset box-shadow 做「倒角」，不行——机身 .dw-pw 不是
- * 跟着缩放框走的盒子（浮窗里它只占框的左上部分，右边空 9.09%、底部空
- * 9.58%；dock 里又是另一套），照框画一圈线，右边和底部那两条就悬在机器
- * 外面，看着像外头多套了一个边框。drop-shadow 用的是元素真实轮廓，
- * 没有这个对齐问题。
+ * 这里必须用 drop-shadow，不能换成 box-shadow（0.10.5 试过又退回来了）：
+ * 机身 .dw-pw 不是跟着缩放框走的盒子（浮窗里它只占框的左上部分，右边空
+ * 9.09%、底部空 9.58%），box-shadow 贴的是缩放框的矩形边，阴影就从"贴着
+ * 机身剪影"挪到"贴着外框"，机身和阴影之间空出一圈浅色——用户一眼看到
+ * "多了一圈白边"。drop-shadow 贴的是真实剪影，才有原来那个贴合感。
+ * 代价是这层滤镜每帧都要重算；省电靠状态光晕改走 box-shadow、以及静止即停。
  * ------------------------------------------------------------------ */
 .dw-frame {
-  /* 两层：贴边那圈跟着轮廓走，把剪影从底色里勾出来；
-     下面那层是接地投影，让机器看着是坐在台面上而不是浮着。 */
-  filter:
-    drop-shadow(0 0 2px var(--dw-frame-halo))
-    drop-shadow(0 2px 5px var(--dw-frame-drop));
+  /* 两层：贴边那圈把剪影从底色里勾出来；下面那层是接地投影，
+     让机器看着是坐在台面上而不是浮着。 */
+  filter: drop-shadow(0 0 2px var(--dw-frame-halo))
+          drop-shadow(0 2px 5px var(--dw-frame-drop));
 }

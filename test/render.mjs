@@ -2755,6 +2755,160 @@ await test('悬浮窗：气泡有描边和投影，白底上分得清边界', ()
   assert.ok(!/\b(1[0-9]|[2-9][0-9])px rgba\(0, 0, 0/.test(body), '投影模糊半径不许超过一位数，否则糊成灰雾');
 });
 
+await test('精密家电：机身按比例放大到满框，不再缩在缩放框左上角', () => {
+  /*
+   * 用户报「精密家电比其他皮肤小一圈，右下还有一截阴影」。
+   * 机身的贴图是按 300px 画的，其他皮肤都是满框 330，只有这台缩在左上角，
+   * 右边空 30px、下边空 45.6px，缩放框的投影就从空处露出来，看着像一条边款。
+   * 修法：.dw-pw 加 zoom:1.1（排版整体 ×1.1，300 → 330），不改 skins.json 的
+   * 画布尺寸——画布一改，窗口比例、停靠条缩放、测试图的基准全跟着动。
+   */
+  const precisionCss = readFileSync(join(root, 'src', 'skin-precision.css'), 'utf8');
+  const pw = cssRuleList(precisionCss).find((r) => r.selector === '.dw-pw');
+  assert.ok(pw !== undefined, '精密家电要有机身规则');
+  const zoom = /zoom:\s*([\d.]+)/.exec(pw.body);
+  assert.ok(zoom !== null, '机身要写 zoom 放大到满框');
+  const z = Number(zoom[1]);
+  assert.ok(Math.abs(z - 330 / 300) < 0.001, '放大倍数必须是 330/300，实际 ' + z);
+  const width = /width:\s*(\d+)px/.exec(pw.body);
+  assert.ok(width !== null && Number(width[1]) === 300, '画布宽度仍是 300，靠 zoom 放大而不是改设计宽度');
+  /*
+   * 宽度语义必须钉死：另外三套皮肤都显式写 border-box，这台漏了就会在
+   * 没有全局重置的宿主页面（停靠条）里把 width 当内容宽，300+30 内边距
+   * 再 ×1.1 = 363，右边一截被 .dw-frame 的 overflow:hidden 裁掉。
+   */
+  const boxRule = cssRuleList(precisionCss).find((r) => r.selector === '.dw-pw,.dw-pw *');
+  assert.ok(boxRule !== undefined, '机身的盒模型要自成一套，不依赖宿主页面的全局重置');
+  assert.match(boxRule.body, /box-sizing:\s*border-box/, '机身与内部元素必须是 border-box');
+});
+
+await test('省电：忙态按 30fps 自己驱动动画，不跟着屏幕刷新率出帧', () => {
+  /*
+   * 忙态（洗涤/漂洗/脱水）不能让浏览器按 60/120Hz 一直出帧：这个 132×238 的
+   * 透明窗每帧重新合成要 2.5~3ms，实测忙态 GPU 三十多个点、渲染十几个点。
+   * 现在把 CSS 动画全部 pause，用 30fps 定时器手动推 currentTime——帧数少一半。
+   * 隔离页实测 GPU 38% → 15%、渲染 16% → 5%。
+   *
+   * 护栏：只驱动 CSSAnimation（CSSTransition 是状态切换的一次性过渡，pause 会卡住），
+   * 隐藏时停掉定时器，别在没人看的时候白白 seek。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(/var PLAY_FPS = 30;/.test(html), '忙态播放器要锁 30fps');
+  assert.ok(/var PLAY_INTERVAL = 1000 \/ PLAY_FPS;/.test(html), '定时器间隔要用 1000/PLAY_FPS');
+  assert.ok(/constructor\.name === 'CSSAnimation'/.test(html), '只能驱动 CSSAnimation，别碰 transition');
+  assert.ok(
+    /if \(animationBusy\(\)\) \{ if \(!document\.hidden\) startPlayback\(\); return; \}/.test(html),
+    '忙态要启动播放器（隐藏时除外）',
+  );
+  assert.ok(/clearInterval\(playTimer\)/.test(html), '停播放器要清定时器');
+  assert.ok(
+    /if \(document\.hidden\) stopPlayback\(\);\s*\n\s*else runAnimations\(0\);/.test(html),
+    '窗口被遮住时要停播放器',
+  );
+});
+
+await test('省电：静止即停 + 只用合成属性动画 + hidden 兜住伪元素', () => {
+  /*
+   * 用户报「这个插件有点耗性能」。实测（132×238 窗口、0.10.4 页面）静止待机
+   * GPU 进程 30~40%、渲染 15%，开着一小时烧掉 34 分钟 CPU——机器根本没在洗
+   * 东西，皮肤里几十条 infinite 动画却按刷新率一直重绘。
+   *
+   * 三层修法，这里是它们的护栏：
+   *   1. 非忙碌态统一挂起动画（body[data-anim="still"]），并留宽限窗口，
+   *      否则「洗完闪星星」「故障抖一下」这类一次性动画会被一起冻死；
+   *   2. hidden / still 选择器必须落到伪元素上，否则皮肤内部的 ::before /
+   *      ::after 照跑（animation-play-state 不从容器继承）；
+   *   3. 关键帧只用 opacity / transform：动 box-shadow、left、
+   *      background-position 每帧都要重绘，等于把省下的又还回去。
+   */
+  const html = readFileSync(join(root, 'debug', 'float.html'), 'utf8');
+  assert.ok(/body\[data-anim="still"\] \*::before/.test(html), '静止即停要覆盖伪元素');
+  assert.ok(/html\[data-hidden="1"\] \*::before/.test(html), 'hidden 也要覆盖伪元素');
+  assert.ok(
+    /ANIMATED_STATES = \{\s*starting: 1, washing: 1, rinsing: 1, spinning: 1, draining: 1,\s*waiting: 1, error: 1, done: 1,\s*\}/.test(html),
+    '忙碌态清单要含在跑的态、等你确认的 blink、故障红灯和收尾星星',
+  );
+  // 跟随的会话洗完了、别的会话还在跑：这时候停动画，机器看着像死机（0.10.5 用户报过）。
+  assert.ok(/curOtherRunning > 0 \|\| ANIMATED_STATES\[curState\] === 1/.test(html), '别的会话在跑时不许冻结');
+  assert.ok(
+    /curOtherRunning = snap\.counts && typeof snap\.counts\.running === 'number'/.test(html),
+    '别的会话在跑的计数要在 buildMachine 之前更新',
+  );
+  // 光不停还不够：滚筒得慢慢转、机器得轻微起伏，否则一台装着衣服的机器看着像死机。
+  assert.ok(/data-shake="3"\] \{ animation: shake-soft/.test(html), '别的会话在跑时要有一档轻微的抖');
+  assert.ok(
+    /curOtherRunning > 0 && \(s === 'idle' \|\| s === 'done'\)/.test(html) &&
+      /setProperty\('--speed', '7s'\)/.test(html) &&
+      /setProperty\('--play', 'running'\)/.test(html),
+    '别的会话在跑时滚筒要慢转（7s 一圈）',
+  );
+  assert.ok(/STILL_GRACE_MS = 1200/.test(html), '停之前要留宽限窗口，否则一次性动画播不完');
+
+  const doze = /body\[data-doze="1"\] \.machine \{([^}]*)\}/.exec(html);
+  assert.ok(doze !== null && !/filter/.test(doze[1]), '打盹不许再叠整机滤镜（每帧离屏合成）');
+
+  const capsule = readFileSync(join(root, 'src', 'skin-capsule.css'), 'utf8');
+  const led = /@keyframes cp-led \{([\s\S]*?)\n\}/.exec(capsule);
+  assert.ok(led !== null && /opacity/.test(led[1]), '指示灯要动 opacity');
+  assert.ok(led !== null && !/box-shadow/.test(led[1]), '指示灯不许动 box-shadow（每帧重绘）');
+  const sweep = /@keyframes cp-sweep \{([^}]*)\}/.exec(capsule);
+  assert.ok(sweep !== null && /transform/.test(sweep[1]) && !/\bleft\b/.test(sweep[1]),
+    '扫光要用 transform 平移');
+
+  const precision = readFileSync(join(root, 'src', 'skin-precision.css'), 'utf8');
+  const wave = /@keyframes wave\{([^}]*)\}/.exec(precision);
+  assert.ok(wave !== null && /transform/.test(wave[1]) && !/background-position/.test(wave[1]),
+    '水纹要用 transform 平移，不动 background-position');
+  for (const name of ['breathe', 'blink']) {
+    const kf = new RegExp('@keyframes ' + name + '\\{([\\s\\S]*?)\\n\\n').exec(precision + '\n\n');
+    assert.ok(kf !== null && /opacity/.test(kf[1]) && !/box-shadow/.test(kf[1]),
+      name + ' 只许动 opacity');
+  }
+
+  /*
+   * 停靠条（常驻在宿主聊天页里的座位）之前没有这条闸门：待机时水位波、
+   * 气泡上浮、指示灯呼吸还在按刷新率跑，整个宿主页面就一直出帧
+   * （隔离页实测：大页面里一个小元素呼吸 6.7% GPU，暂停后 0.5%）。
+   */
+  const styleCss = readFileSync(join(root, 'src', 'style.css'), 'utf8');
+  assert.ok(
+    /\.dsh-washer\[data-anim='still'\] \*::before/.test(styleCss) &&
+      /animation-play-state: paused !important/.test(styleCss),
+    '停靠条待机也要把动画挂起，且要覆盖伪元素',
+  );
+  const tpl = readFileSync(join(root, 'src', 'client.template.js'), 'utf8');
+  assert.ok(
+    /state === 'idle' \|\| state === 'off' \? 'still' : 'run'/.test(tpl),
+    '停靠条只有 idle / off 才算静止（waiting/error/done 都有必须动的信号）',
+  );
+  assert.ok(/'data-anim': anim/.test(tpl), '静止标记要落到停靠条根节点上');
+});
+
+await test('省电：停靠条忙态也按 30fps 自己驱动动画', () => {
+  /*
+   * 忙态（以及覆盖层）在宿主聊天页里也是常驻的：机器一动，整页就按刷新率
+   * 出帧，1200×800 的页面每帧都要重新合成一遍——隔离页实测一台 32px 的
+   * 机器能把 GPU 进程顶到 20% 以上，限到 30fps 后回到十几。
+   *
+   * 只驱动 .dsh-washer 子树里的 CSSAnimation：宿主别处的动画、状态切换的
+   * transition 都不归我们管。
+   */
+  const tpl = readFileSync(join(root, 'src', 'client.template.js'), 'utf8');
+  assert.ok(/const PLAY_FPS = 30;/.test(tpl), '停靠条忙态要锁 30fps');
+  assert.ok(/const PLAY_INTERVAL = 1000 \/ PLAY_FPS;/.test(tpl), '定时器间隔要用 1000/PLAY_FPS');
+  assert.ok(/constructor\.name === 'CSSAnimation'/.test(tpl), '只驱动 CSSAnimation，别碰 transition');
+  assert.ok(
+    /querySelectorAll\('\.dsh-washer'\)/.test(tpl),
+    '只扫我们自己的子树，别把宿主页面的动画一起接管',
+  );
+  assert.ok(/dataset\.anim !== 'still'/.test(tpl), '静止态不算忙，别开播放器');
+  assert.ok(
+    /document\.addEventListener\('visibilitychange', syncWasherPlayback\)/.test(tpl),
+    '页面被切走时要停播放器',
+  );
+  assert.ok(/syncWasherPlayback\(\); \}\);/.test(tpl), '每次渲染后要对一次播放器状态');
+});
+
 /* 把一段 CSS 拆成 {selector, body} 规则表。
    只用在没有嵌套的花括号（不含 @media / @keyframes 的片段）上，
    所以这里不实现完整解析器——够用就停。 */
@@ -2794,7 +2948,7 @@ await test('极简窗：状态光晕按机器尺寸缩小，不是整层关掉',
 
   // 八个需要人看一眼的状态，各自都要有光
   for (const s of ['starting', 'washing', 'rinsing', 'spinning', 'draining', 'waiting', 'error', 'done']) {
-    const rule = tinyRules.find((r) => r.selector.includes('data-state="' + s + '"') && /filter: drop-shadow/.test(r.body));
+    const rule = tinyRules.find((r) => r.selector.includes('data-state="' + s + '"') && /filter:\s*drop-shadow\(0 0 /.test(r.body));
     assert.ok(rule !== undefined, '极简档 ' + s + ' 必须有状态光晕');
   }
 
@@ -2829,6 +2983,25 @@ await test('极简窗：状态光晕按机器尺寸缩小，不是整层关掉',
   );
   assert.ok(wrapRule !== undefined, '极简档要单独给 .wrap 收底部留白');
   assert.ok(/padding-bottom: 2px/.test(wrapRule.body), '极简档底部只留 2px，其余让给头顶');
+
+  /*
+   * 光晕必须用 filter: drop-shadow，不能换 box-shadow。
+   * drop-shadow 贴的是机器真实剪影（圆角跟着走）；box-shadow 贴的是元素
+   * 矩形框——机器的四个圆角外、右下角空出来的地方都会多出一圈方形光/影。
+   * 0.10.5 试过换成 box-shadow 省 GPU，用户当天就报「多了一圈白边」
+   * 「四个圆角超出背景」，只能退回来。省电靠静止即停与合成型关键帧。
+   */
+  // 同名规则有两条（另一条只管 transform-origin），挑光晕那条
+  const hostRule = cssRuleList(html)
+    .filter((r) => r.selector === '.machine > .skin-host')
+    .find((r) => /box-shadow|filter/.test(r.body));
+  assert.ok(hostRule !== undefined, '要有机器光晕的基础规则');
+  assert.ok(/filter:\s*drop-shadow/.test(hostRule.body), '状态光晕要用 filter: drop-shadow');
+  assert.ok(!/box-shadow/.test(hostRule.body), '状态光晕不许用 box-shadow（贴矩形框，四角漏光）');
+  assert.ok(
+    !/data-state="[a-z]+"\] > \.skin-host \{[^}]*box-shadow/.test(html.replace(/\s+/g, ' ')),
+    '各状态的光晕规则也不许用 box-shadow',
+  );
 });
 
 await test('极简窗：洗完绿光晕闪两下，减弱动态时不许漏', () => {
@@ -2890,15 +3063,22 @@ await test('极简窗：洗完绿光晕闪两下，减弱动态时不许漏', ()
  * 会跟着缩到零点几像素——白机身贴在白底上就只剩一个玻璃圆（用户原话
  * 「和背景色太相近了，看着不明显」）。所以投影必须挂在缩放框 .dw-frame
  * 上，那里的 px 就是屏幕 px。
+ *
+ * 这里必须用 filter: drop-shadow，不能用 box-shadow（0.10.5 换过，用户当天
+ * 就报「改完多了一圈白边」）：机身 .dw-pw 不跟着缩放框走，浮窗里只占框的
+ * 左上部分（右边空 9.09%、底部空 9.58%），box-shadow 贴着框的矩形边画，
+ * 机身和阴影之间就空出一圈浅色。drop-shadow 贴的是真实剪影。
  */
 await test('立体感：投影挂在缩放框上，不进被缩放的内层', () => {
   const skin = readFileSync(join(root, 'src', 'skin-precision.css'), 'utf8');
   const frame = skin.slice(skin.indexOf('.dw-frame {'));
   const frameBody = frame.slice(0, frame.indexOf('}'));
-  assert.ok(/drop-shadow\(0 0 2px var\(--dw-frame-halo\)\)/.test(frameBody),
+  assert.ok(/filter:\s*drop-shadow\([\s\S]*0 0 2px var\(--dw-frame-halo\)/.test(frameBody),
     '缩放框上要有一圈贴边的投影，把剪影从底色里勾出来');
   assert.ok(/drop-shadow\(0 2px 5px var\(--dw-frame-drop\)\)/.test(frameBody),
     '缩放框上要有接地投影，让机器看着是坐在台面上');
+  assert.ok(!/box-shadow/.test(frameBody),
+    '缩放框投影不许用 box-shadow（贴的是矩形框，机身与阴影之间会空出一圈白边）');
   /* 反例：影子写进机身就等于没写——机身被 scale(0.097) 缩到 32px，影子跟着缩没。
      先剥掉注释再查：上面那段解释里就写着 .dw-pw 和 drop-shadow 两个词。 */
   const code = skin.replace(/\/\*[\s\S]*?\*\//g, '');

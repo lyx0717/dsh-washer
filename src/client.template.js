@@ -33,6 +33,82 @@ window.__ModuleLoader__.load({
     const ENTRY_ID = 'washer';
 
     /* ------------------------------------------------------------------ *
+     * 忙态限帧（停靠条 / 覆盖层）
+     *
+     * 宿主聊天页里只要我们的机器在动，整页就按屏幕刷新率出帧——1200×800 的
+     * 页面每帧要重新合成一遍，实测一台 32px 的机器就能把 GPU 进程顶到 20%。
+     * 所以忙碌态不让浏览器被动刷新：把 .dsh-washer 子树里的 CSS 动画 pause 掉，
+     * 用 30fps 的定时器自己推 currentTime，帧数少一半。
+     *
+     * 只碰我们子树里的 CSSAnimation：宿主页面别处的动画、状态切换用的一次性
+     * CSSTransition 都不归我们管（pause 掉 transition 会卡在半路）。
+     * ------------------------------------------------------------------ */
+    const PLAY_FPS = 30;
+    const PLAY_INTERVAL = 1000 / PLAY_FPS;
+    let playTimer = null;
+
+    function isCssAnimation(a) {
+      return Boolean(a) && a.constructor !== undefined && a.constructor.name === 'CSSAnimation';
+    }
+
+    /* 忙态的根：data-anim 只有 idle/off 才是 'still'，缺省（覆盖层）也算忙 */
+    function busyWasherRoots() {
+      if (!document.querySelectorAll) return [];
+      const all = document.querySelectorAll('.dsh-washer');
+      const out = [];
+      for (let i = 0; i < all.length; i++) {
+        if (all[i].dataset === undefined || all[i].dataset.anim !== 'still') out.push(all[i]);
+      }
+      return out;
+    }
+
+    function stopWasherPlayback() {
+      if (playTimer === null) return;
+      clearInterval(playTimer);
+      playTimer = null;
+      /* 交还给浏览器；静止态由 style.css 的 !important 再压住 */
+      const all = document.querySelectorAll ? document.querySelectorAll('.dsh-washer') : [];
+      for (let r = 0; r < all.length; r++) {
+        const list = all[r].getAnimations ? all[r].getAnimations({ subtree: true }) : [];
+        for (let i = 0; i < list.length; i++) {
+          if (isCssAnimation(list[i]) && list[i].playState === 'paused') {
+            try { list[i].play(); } catch (e) {}
+          }
+        }
+      }
+    }
+
+    function playStep() {
+      const roots = busyWasherRoots();
+      if (roots.length === 0 || document.hidden) { stopWasherPlayback(); return; }
+      const now = performance.now();
+      for (let r = 0; r < roots.length; r++) {
+        const list = roots[r].getAnimations ? roots[r].getAnimations({ subtree: true }) : [];
+        for (let i = 0; i < list.length; i++) {
+          const a = list[i];
+          if (!isCssAnimation(a)) continue;
+          if (a.playState === 'running') a.pause();
+          if (a.playState !== 'paused') continue;
+          if (typeof a.__dwT0 !== 'number') {
+            a.__dwT0 = now - (typeof a.currentTime === 'number' ? a.currentTime : 0);
+          }
+          try { a.currentTime = now - a.__dwT0; } catch (e) {}
+        }
+      }
+    }
+
+    function syncWasherPlayback() {
+      if (document.hidden || busyWasherRoots().length === 0) { stopWasherPlayback(); return; }
+      if (playTimer !== null) return;
+      playStep();
+      playTimer = setInterval(playStep, PLAY_INTERVAL);
+    }
+
+    if (document.addEventListener) {
+      document.addEventListener('visibilitychange', syncWasherPlayback);
+    }
+
+    /* ------------------------------------------------------------------ *
      * 把「在不在等人」报给宿主
      *
      * 悬浮窗是独立 Electron 进程，只能从宿主事件自己推断 pending；
@@ -942,6 +1018,9 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(id);
       }, [sticky]);
 
+      /* 每次渲染后对一次：忙了就开 30fps 播放器，闲了/卸载了就交还浏览器 */
+      React.useEffect(() => { syncWasherPlayback(); });
+
       // 根节点 ref：不再用于键盘处理（没有可收起的档位了），但保留它，
       // 供测试和宿主定位"这台洗衣机的 DOM 根"，也便于将来做点击穿透之类的判断。
       const washerRootRef = React.useRef(null);
@@ -1025,10 +1104,18 @@ window.__ModuleLoader__.load({
       const strip = StripBar(
         mergedCfg.skin, state, dur, title, sub, tone, tr('label.washer'), true);
 
+      /*
+       * 待机（idle / off）时把整条停靠条的动画全停掉，见 style.css 的
+       * [data-anim='still'] 规则：宿主聊天页里只要有一条无限动画，整页
+       * 就一直在出帧。其余状态都要动（waiting 闪烁=等你确认、error 红灯=
+       * 故障、done 星星=收尾）。
+       */
+      const anim = state === 'idle' || state === 'off' ? 'still' : 'run';
       return h('div', {
         className: 'dsh-washer',
         ref: washerRootRef,
         'data-state': state,
+        'data-anim': anim,
         'data-level': 'S',
         'data-variant': variant,
         'data-reduce-motion': reduceMotionFlag(),
