@@ -2,9 +2,10 @@ name: test
 
 # 实测背景（gh run list + 逐 job 步骤时间，2026-11 最近 30 次运行）：
 #   一次成功运行墙钟 42~57s，其中 windows 腿最长：排队 3s + 准备 7s（checkout 5 + node 6）
-#   + 构建 1s + 测试 22s + 收尾 4s。测试只占一半，其余是 runner/checkout/装 node 的固定开销；
-#   三条腿已经并行，墙钟由最慢那条腿决定，所以「把测试拆细」收益很小，不做。
-# 本文件只做四件确定有收益的事：取消过期运行、跳过纯文档提交、跳过同 SHA 的 tag 重复运行、超时兜底。
+#   + 构建 1s + 测试 22s + 收尾 4s。测试里真正烧 CPU 的只有 unit 那 5s；render 的 15s 全是
+#   真实定时器在等状态机走完（本机 15.5s 墙钟 / 0.19s CPU）。三条腿已并行、墙钟由最慢那条腿
+#   决定，所以不做「把测试拆成更多 job」这类收益很小的改动。
+# 本文件做的事：取消过期运行、跳过纯文档提交、跳过同 SHA 的 tag 重复运行、render 只跑一份、超时兜底。
 on:
   push:
     branches: ['**']
@@ -37,8 +38,21 @@ jobs:
     strategy:
       # 三条腿都跑到头：历史上确实出现过「只有 windows 红」的情况（.gitattributes 的 eol 问题）。
       fail-fast: false
+      # render 那套（test/render.mjs，91 条断言）只在 ubuntu 跑一份：
+      # 它跑的是 client.js 的行为时间轴和对源码文本的断言，跟操作系统无关；实测这 15.5s
+      # 里 CPU 只有 0.19s，其余全是真实定时器在等状态机走完。同一份空等在三个系统上
+      # 重复三遍是纯浪费。windows / macos 腿守的是它们真正会变的东西——产物逐字节重建、
+      # 路径与换行（.gitattributes eol=lf）——都在 unit 那一半里。
+      # 若某天 render 里出现平台相关断言，把它也发到另两条腿上（把 full 改成 true）。
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            full: true
+          - os: macos-latest
+            full: false
+          - os: windows-latest
+            full: false
+    name: test (${{ matrix.os }}${{ matrix.full && ', unit + render' || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -52,5 +66,12 @@ jobs:
       # 比对保证，比「本地连跑两次比时间」更严格。
       - name: Build
         run: npm run build
-      - name: Test
+      # unit：148 条 node 测试，三条腿都跑。glob 交给 node 自己展开（不依赖 shell），
+      # 和 package.json 里那份文件列表等价，且以后新增 *.test.mjs 不会漏。
+      - name: Test (unit)
+        if: ${{ !matrix.full }}
+        run: node --test --test-force-exit "test/*.test.mjs"
+      # full：148 条 node 测试 + 91 条 render 断言，只在 ubuntu 跑。
+      - name: Test (unit + render)
+        if: ${{ matrix.full }}
         run: npm test
