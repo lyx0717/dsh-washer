@@ -1,23 +1,55 @@
 name: test
 
+# 实测背景（gh run list + 逐 job 步骤时间，2026-11 最近 30 次运行）：
+#   一次成功运行墙钟 42~57s，其中 windows 腿最长：排队 3s + 准备 7s（checkout 5 + node 6）
+#   + 构建 1s + 测试 22s + 收尾 4s。测试只占一半，其余是 runner/checkout/装 node 的固定开销；
+#   三条腿已经并行，墙钟由最慢那条腿决定，所以「把测试拆细」收益很小，不做。
+# 本文件只做四件确定有收益的事：取消过期运行、跳过纯文档提交、跳过同 SHA 的 tag 重复运行、超时兜底。
 on:
   push:
+    branches: ['**']
+    # 发版 tag 指向的提交必然已被 main 上的运行完整覆盖，同一个 SHA 再跑一遍是纯浪费。
+    # 想让 tag 保留自己的 CI 记录，删掉这一行即可。
+    tags-ignore: ['**']
+    # 纯文档提交不可能影响构建/测试。
+    # 注意 docs/index.json 不能排除：市场索引由 test/market.test.mjs 校验，所以按文件名排，
+    # 不整目录排。
+    # 以后若要给 main 加 required check：纯文档 PR 会因为没有检查而一直挂着，
+    # 那时要改成 job 级 if，或补一个 no-op job 来满足必需检查。
+    paths-ignore:
+      - '**.md'
+      - 'docs/*.md'
+      - 'docs/*.png'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/*.md'
+      - 'docs/*.png'
+  workflow_dispatch:
+
+# 同一分支/PR 连推多次只留最新一次；main 例外——每个提交都要完整跑过一遍（发版证据）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
     strategy:
+      # 三条腿都跑到头：历史上确实出现过「只有 windows 红」的情况（.gitattributes 的 eol 问题）。
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      # 零第三方依赖：不需要 npm install。build 生成 client.js / float.machines.js，
-      # 随后 npm test 里的 freshness 用构建产物做比对。
+      # 零第三方依赖、没有 lockfile：没有任何东西值得进 actions 缓存，setup-node 的 cache
+      # 打开只会因为「找不到依赖锁文件」报错，10 GB 额度也不该用来塞并不存在的 node_modules。
+      # 同理 build 只花 1s，不值得包一层缓存；产物新鲜度已由 test/freshness.test.mjs 逐字节
+      # 比对保证，比「本地连跑两次比时间」更严格。
       - name: Build
         run: npm run build
       - name: Test
